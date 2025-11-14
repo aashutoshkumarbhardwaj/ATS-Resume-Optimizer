@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Fixer</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="../assets/icons/icon-48.png" alt="Resume Fixer Logo" class="logo">
+            <h1>ATS Resume Optimizer</h1>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="optimize">Optimize</button>
+            <button class="tab-btn" data-tab="history">History</button>
+        </div>
+
+        <div class="main-content">
+            <!-- Optimize Tab -->
+            <div id="optimizeTab" class="tab-content active">
+                <!-- Job Detection Panel -->
+                <div id="jobDetectionPanel" class="panel">
+                    <h3>📄 Job Description</h3>
+                    <div id="detectedJobInfo" class="detected-job hidden">
+                        <div class="job-badge">✓ Job Detected</div>
+                        <div class="job-details">
+                            <strong id="detectedJobTitle"></strong>
+                            <span id="detectedCompany"></span>
+                        </div>
+                    </div>
+                    <div class="input-section">
+                        <textarea 
+                            id="jobDescription" 
+                            placeholder="Paste job description here or it will be auto-detected..."
+                            class="textarea-field"
+                            rows="4"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <!-- Resume Upload Panel -->
+                <div id="resumeUploadPanel" class="panel">
+                    <h3>📝 Your Resume</h3>
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="resumeFile" accept=".pdf,.docx,.txt" hidden>
+                        <div class="upload-content">
+                            <span class="upload-icon">📎</span>
+                            <p>Drop resume here or click to upload</p>
+                            <small>Supports PDF, DOCX, TXT (Max 5MB)</small>
+                        </div>
+                    </div>
+                    <div id="uploadedFileInfo" class="file-info hidden">
+                        <span id="fileName"></span>
+                        <button id="removeFile" class="btn-icon">✕</button>
+                    </div>
+                    <div class="input-section">
+                        <textarea 
+                            id="resumeText" 
+                            placeholder="Or paste your resume text here..."
+                            class="textarea-field"
+                            rows="4"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <button id="analyzeBtn" class="btn btn-primary">🔍 Analyze Resume</button>
+
+                <!-- Analysis Results Panel -->
+                <div id="analysisPanel" class="panel hidden">
+                    <h3>📊 ATS Score</h3>
+                    <div class="score-display">
+                        <div class="score-circle">
+                            <span id="atsScore" class="score-number">0</span>
+                            <span class="score-label">/100</span>
+                        </div>
+                        <div class="score-breakdown">
+                            <div class="breakdown-item">
+                                <span>Keywords</span>
+                                <div class="progress-bar">
+                                    <div id="keywordBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                            <div class="breakdown-item">
+                                <span>Experience</span>
+                                <div class="progress-bar">
+                                    <div id="experienceBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                            <div class="breakdown-item">
+                                <span>Skills</span>
+                                <div class="progress-bar">
+                                    <div id="skillsBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="keywords-section">
+                        <div class="keyword-group">
+                            <h4>✓ Matched Keywords</h4>
+                            <div id="matchedKeywords" class="keyword-list"></div>
+                        </div>
+                        <div class="keyword-group">
+                            <h4>✗ Missing Keywords</h4>
+                            <div id="missingKeywords" class="keyword-list"></div>
+                        </div>
+                    </div>
+
+                    <div class="suggestions-section">
+                        <h4>💡 Suggestions</h4>
+                        <div id="suggestionsList"></div>
+                    </div>
+
+                    <button id="optimizeBtn" class="btn btn-primary">✨ Optimize Resume</button>
+                </div>
+
+                <!-- Optimization Results Panel -->
+                <div id="optimizationPanel" class="panel hidden">
+                    <h3>✨ Optimized Resume</h3>
+                    <div class="score-comparison">
+                        <div class="score-item">
+                            <span class="score-label">Original</span>
+                            <span id="originalScore" class="score-value">0</span>
+                        </div>
+                        <span class="arrow">→</span>
+                        <div class="score-item">
+                            <span class="score-label">Optimized</span>
+                            <span id="optimizedScore" class="score-value improved">0</span>
+                        </div>
+                        <div class="score-improvement">
+                            <span id="scoreImprovement">+0</span>
+                        </div>
+                    </div>
+
+                    <div class="changes-section">
+                        <h4>📝 Changes Made</h4>
+                        <div id="changesList"></div>
+                    </div>
+
+                    <div class="download-section">
+                        <h4>💾 Get Your Optimized Resume</h4>
+                        
+                        <!-- Option 1: Copy to edit your original file -->
+                        <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #4caf50;">
+                            <div style="display: flex; align-items: start; gap: 8px;">
+                                <span style="font-size: 20px;">💡</span>
+                                <div style="flex: 1;">
+                                    <strong style="color: #2e7d32; font-size: 13px;">Recommended: Keep Your Original Formatting</strong>
+                                    <p style="font-size: 11px; color: #555; margin: 6px 0 8px 0; line-height: 1.4;">
+                                        <strong>How it works:</strong><br>
+                                        1. Click "Copy Optimized Text" below<br>
+                                        2. Open your original resume file (Word/Google Docs)<br>
+                                        3. Select all (Ctrl+A) and paste (Ctrl+V)<br>
+                                        4. Your formatting stays, content is optimized! ✨
+                                    </p>
+                                    <button id="copyOptimizedBtn" class="btn btn-secondary" style="width: 100%;">
+                                        📋 Copy Optimized Text
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Option 2: Download new file -->
+                        <div style="border-top: 1px solid #e0e0e0; padding-top: 12px;">
+                            <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                                Or download as a new file (will use standard template):
+                            </p>
+                            <div class="download-options">
+                                <button class="btn btn-download" data-format="pdf">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📄</span>
+                                    PDF
+                                </button>
+                                <button class="btn btn-download" data-format="docx">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📝</span>
+                                    DOCX
+                                </button>
+                                <button class="btn btn-download" data-format="txt">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📋</span>
+                                    TXT
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="loadingSpinner" class="loading-spinner hidden">
+                    <div class="spinner"></div>
+                    <p id="loadingText">Processing...</p>
+                </div>
+
+                <div id="errorMessage" class="error-message hidden"></div>
+            </div>
+
+            <!-- History Tab -->
+            <div id="historyTab" class="tab-content">
+                <div class="panel">
+                    <h3>📜 Optimization History</h3>
+                    <div id="historyList" class="history-list"></div>
+                    <button id="clearHistoryBtn" class="btn btn-secondary">Clear All History</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span>ATS Resume Optimizer v1.0.0</span>
+        </div>
+    </div>
+
+    <script src="../utils/storage.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+.settings {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.settings-form {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.settings-group label {
+  font-weight: 600;
+  color: #333;
+}
+
+.settings-group select,
+.settings-group input[type="checkbox"] {
+  padding: 10px 12px;
+  border: 2px solid #e0e0e0;
+  border-radius: 6px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.settings-group input[type="checkbox"] {
+  width: auto;
+  padding: 5px;
+}
