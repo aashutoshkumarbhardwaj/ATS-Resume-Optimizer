@@ -6,6 +6,10 @@
 // Store detected job data
 let currentDetectedJob = null;
 
+// API Configuration
+// TODO: Replace 'http://localhost:5000/api' with your AWS backend URL when deploying
+const API_BASE_URL = 'http://localhost:5000/api';
+
 // Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'GET_RESUME_TEXT') {
@@ -92,7 +96,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  */
 async function analyzeResume(payload, sendResponse) {
     try {
-        const response = await fetch('http://localhost:5000/api/resume/analyze', {
+        const response = await fetch(`${API_BASE_URL}/resume/analyze`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
