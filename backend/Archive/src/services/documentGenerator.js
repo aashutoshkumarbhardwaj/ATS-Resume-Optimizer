@@ -12,12 +12,21 @@ class DocumentGenerator {
     /**
      * Generate document in specified format
      */
-    static async generate(resumeData, format, template = 'professional', jobTitle = 'Position') {
+    static async generate(resumeData, format, template = 'professional', jobTitle = 'Position', resumeText = '') {
         const timestamp = Date.now();
         const filename = `Resume_Optimized_${jobTitle.replace(/\s+/g, '_')}_${timestamp}`;
         
         let filePath;
         
+        if (resumeText && typeof resumeText === 'string') {
+            filePath = await this.generateFromText(resumeText, format, filename);
+            return {
+                filePath,
+                filename: path.basename(filePath),
+                format: format.toUpperCase()
+            };
+        }
+
         switch (format.toLowerCase()) {
             case 'pdf':
                 filePath = await this.generatePDF(resumeData, template, filename);
@@ -37,6 +46,22 @@ class DocumentGenerator {
             filename: path.basename(filePath),
             format: format.toUpperCase()
         };
+    }
+
+    /**
+     * Generate document from raw resume text to preserve formatting
+     */
+    static async generateFromText(resumeText, format, filename) {
+        switch (format.toLowerCase()) {
+            case 'pdf':
+                return this.generatePDFFromText(resumeText, filename);
+            case 'docx':
+                return this.generateDOCXFromText(resumeText, filename);
+            case 'txt':
+                return this.generateTXTFromText(resumeText, filename);
+            default:
+                throw new Error('Unsupported format. Use PDF, DOCX, or TXT.');
+        }
     }
 
     /**
@@ -493,6 +518,96 @@ class DocumentGenerator {
         }
 
         await fs.writeFile(filePath, text.trim(), 'utf-8');
+
+        return filePath;
+    }
+
+    /**
+     * Generate PDF from raw resume text
+     */
+    static async generatePDFFromText(resumeText, filename) {
+        const outputDir = path.join(__dirname, '../../temp');
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const filePath = path.join(outputDir, `${filename}.pdf`);
+        const lines = resumeText.split(/\r?\n/);
+
+        return new Promise((resolve, reject) => {
+            const doc = new PDFDocument({
+                size: 'LETTER',
+                margins: { top: 36, bottom: 36, left: 54, right: 54 }
+            });
+
+            const stream = require('fs').createWriteStream(filePath);
+            doc.pipe(stream);
+
+            doc.font('Courier').fontSize(10);
+
+            const lineHeight = doc.currentLineHeight(true);
+            const maxY = doc.page.height - doc.page.margins.bottom;
+
+            lines.forEach((line) => {
+                if (doc.y + lineHeight > maxY) {
+                    doc.addPage();
+                }
+
+                doc.text(line, doc.x, doc.y, { lineBreak: false, lineGap: 0 });
+                doc.y += lineHeight;
+            });
+
+            doc.end();
+
+            stream.on('finish', () => resolve(filePath));
+            stream.on('error', reject);
+        });
+    }
+
+    /**
+     * Generate DOCX from raw resume text
+     */
+    static async generateDOCXFromText(resumeText, filename) {
+        const outputDir = path.join(__dirname, '../../temp');
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const filePath = path.join(outputDir, `${filename}.docx`);
+        const lines = resumeText.split(/\r?\n/);
+
+        const sections = lines.map((line) => {
+            return new Paragraph({
+                children: [
+                    new TextRun({
+                        text: line,
+                        font: 'Courier New',
+                        size: 22,
+                        preserve: true
+                    })
+                ],
+                spacing: { after: 0 }
+            });
+        });
+
+        const doc = new Document({
+            sections: [{
+                properties: {},
+                children: sections
+            }]
+        });
+
+        const buffer = await Packer.toBuffer(doc);
+        await fs.writeFile(filePath, buffer);
+
+        return filePath;
+    }
+
+    /**
+     * Generate TXT from raw resume text
+     */
+    static async generateTXTFromText(resumeText, filename) {
+        const outputDir = path.join(__dirname, '../../temp');
+        await fs.mkdir(outputDir, { recursive: true });
+
+        const filePath = path.join(outputDir, `${filename}.txt`);
+        await fs.writeFile(filePath, resumeText, 'utf-8');
 
         return filePath;
     }

@@ -75,11 +75,11 @@ router.post('/upload', upload.single('file'), async (req, res) => {
  */
 router.post('/generate', async (req, res) => {
     try {
-        const { resumeData, format, template, jobTitle } = req.body;
+        const { resumeData, format, template, jobTitle, optimizedText, resumeText } = req.body;
 
-        if (!resumeData || !format) {
+        if (!format) {
             return res.status(400).json({
-                error: 'Resume data and format are required'
+                error: 'Format is required'
             });
         }
 
@@ -87,7 +87,8 @@ router.post('/generate', async (req, res) => {
             resumeData,
             format,
             template || 'professional',
-            jobTitle || 'Position'
+            jobTitle || 'Position',
+            optimizedText || resumeText || ''
         );
 
         // Send file

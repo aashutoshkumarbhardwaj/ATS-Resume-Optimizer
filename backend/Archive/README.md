@@ -10,7 +10,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Server runs on `http://localhost:5000`
+Server runs on `http://localhost:3000`
 
 ## API Endpoints
 
@@ -92,7 +92,7 @@ Create `.env` file:
 
 ```env
 NODE_ENV=development
-PORT=5000
+PORT=3000
 JWT_SECRET=your-secret-key-here
 DB_HOST=localhost
 DB_PORT=27017

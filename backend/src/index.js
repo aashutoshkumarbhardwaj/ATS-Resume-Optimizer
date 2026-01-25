@@ -17,7 +17,7 @@ const errorHandler = require('./middleware/errorHandler');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 
 // Ensure temp directory exists
 const tempDir = path.join(__dirname, '../temp');

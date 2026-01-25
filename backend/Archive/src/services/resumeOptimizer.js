@@ -34,25 +34,9 @@ class ResumeOptimizer {
             changes
         );
 
-        optimizedData = this.reorderContent(
-            optimizedData,
-            analysisResult,
-            changes
-        );
-
-        optimizedData = this.enhanceActionVerbs(
-            optimizedData,
-            changes
-        );
-
-        optimizedData = this.optimizeSections(
-            optimizedData,
-            analysisResult,
-            changes
-        );
-
-        // Generate optimized text
-        const optimizedText = this.generateResumeText(optimizedData, preserveFormatting);
+        // Mutation-only rule: never reorder, rewrite, or modify sections.
+        // Apply changes directly to the original text to preserve formatting.
+        const optimizedText = this.applyChangesToOriginalText(resumeText, changes);
 
         // Calculate new ATS score
         const newAnalysis = await ResumeAnalyzer.analyze(optimizedText, jobDescription);
@@ -72,7 +56,6 @@ class ResumeOptimizer {
      */
     static integrateKeywords(resumeData, analysisResult, aggressiveness, changes) {
         const missingKeywords = analysisResult.missingKeywords || [];
-        const missingSkills = analysisResult.missingSkills || [];
 
         // Determine how many keywords to add based on aggressiveness
         const keywordLimit = {
@@ -82,21 +65,6 @@ class ResumeOptimizer {
         }[aggressiveness];
 
         const topMissingKeywords = missingKeywords.slice(0, keywordLimit);
-
-        // Add keywords to skills section
-        for (const keyword of topMissingKeywords) {
-            if (!resumeData.skills.some(s => s.toLowerCase().includes(keyword.toLowerCase()))) {
-                resumeData.skills.push(keyword);
-                changes.push({
-                    type: 'keyword_added',
-                    location: 'skills',
-                    original: '',
-                    modified: keyword,
-                    reason: `Added missing keyword "${keyword}" from job requirements`,
-                    impact: 'high'
-                });
-            }
-        }
 
         // Integrate keywords into experience bullets (more natural)
         if (resumeData.experience.length > 0 && topMissingKeywords.length > 0) {
@@ -142,21 +110,42 @@ class ResumeOptimizer {
      * Integrate keyword naturally into a bullet point
      */
     static integrateKeywordNaturally(bullet, keyword) {
-        // Try to add keyword in a natural way
         const lowerBullet = bullet.toLowerCase();
-        
-        // If bullet mentions technology/tools, add keyword there
-        if (lowerBullet.includes('using') || lowerBullet.includes('with') || lowerBullet.includes('technologies')) {
-            return bullet.replace(/using ([^,\.]+)/i, `using $1, ${keyword}`);
+        const lowerKeyword = keyword.toLowerCase();
+
+        if (lowerBullet.includes(lowerKeyword)) {
+            return bullet;
         }
-        
-        // If bullet is about development/implementation, add keyword
-        if (lowerBullet.includes('developed') || lowerBullet.includes('implemented') || lowerBullet.includes('built')) {
-            return bullet.replace(/\.$/, ` using ${keyword}.`);
+
+        const tryInsert = (regex) => {
+            const updated = bullet.replace(regex, `$1$2, ${keyword}`);
+            return updated === bullet ? bullet : updated;
+        };
+
+        let updatedBullet = bullet;
+
+        // Insert into existing tool/tech lists without changing sentence flow
+        updatedBullet = tryInsert(/(\busing\b\s+)([^.,;]+)/i);
+        if (updatedBullet === bullet) {
+            updatedBullet = tryInsert(/(\bwith\b\s+)([^.,;]+)/i);
         }
-        
-        // Default: append at end
-        return bullet.replace(/\.$/, ` leveraging ${keyword}.`);
+        if (updatedBullet === bullet) {
+            updatedBullet = tryInsert(/(\bin\b\s+)([^.,;]+)/i);
+        }
+
+        if (updatedBullet === bullet) {
+            return bullet;
+        }
+
+        const originalWords = bullet.split(/\s+/).filter(Boolean).length;
+        const updatedWords = updatedBullet.split(/\s+/).filter(Boolean).length;
+        const maxWords = Math.floor(originalWords * 1.15);
+
+        if (updatedWords > maxWords) {
+            return bullet;
+        }
+
+        return updatedBullet;
     }
 
     /**
@@ -439,6 +428,29 @@ class ResumeOptimizer {
         }
 
         return text.trim();
+    }
+
+    /**
+     * Apply bullet-level changes to original text to preserve formatting
+     */
+    static applyChangesToOriginalText(resumeText, changes) {
+        if (!changes || changes.length === 0) {
+            return resumeText;
+        }
+
+        let updatedText = resumeText;
+
+        for (const change of changes) {
+            if (change.type !== 'keyword_added') continue;
+            if (!change.location.includes('bullets')) continue;
+            if (!change.original || change.original === change.modified) continue;
+
+            if (updatedText.includes(change.original)) {
+                updatedText = updatedText.replace(change.original, change.modified);
+            }
+        }
+
+        return updatedText;
     }
 }
 

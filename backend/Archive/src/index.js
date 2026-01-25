@@ -17,7 +17,7 @@ const errorHandler = require('./middleware/errorHandler');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT || 3000;
 
 // Ensure temp directory exists
 const tempDir = path.join(__dirname, '../temp');
@@ -41,6 +41,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.get('/health', (req, res) => {
     res.json({ status: 'Server is running' });
 });
+app.get("/", (req, res) => {
+    res.json({
+      status: "ok",
+      service: "ATS Resume Optimizer API",
+      version: "1.0.0"
+    });
+  });
+  
 
 // Routes
 app.use('/api/resume', resumeRoutes);
