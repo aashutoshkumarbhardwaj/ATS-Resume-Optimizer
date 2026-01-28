@@ -5,12 +5,25 @@
 
 const ResumeParser = require('./resumeParser');
 const JobDescriptionParser = require('./jobDescriptionParser');
+const EnhancedKeywordMatcher = require('./enhancedKeywordMatcher');
 
 class ResumeAnalyzer {
+    constructor() {
+        this.keywordMatcher = new EnhancedKeywordMatcher();
+    }
+
     /**
      * Analyze resume against job description
      */
     static async analyze(resumeText, jobDescription) {
+        const analyzer = new ResumeAnalyzer();
+        return analyzer.performAnalysis(resumeText, jobDescription);
+    }
+
+    /**
+     * Perform the analysis
+     */
+    async performAnalysis(resumeText, jobDescription) {
         if (!resumeText || !jobDescription) {
             throw new Error('Resume text and job description are required');
         }
@@ -19,14 +32,14 @@ class ResumeAnalyzer {
         const resumeData = ResumeParser.parse(resumeText);
         const jobData = JobDescriptionParser.parse(jobDescription);
 
-        // Perform keyword matching
-        const keywordMatch = this.matchKeywords(resumeData, jobData);
+        // Perform enhanced keyword matching
+        const keywordMatch = this.keywordMatcher.matchKeywords(resumeText, jobDescription);
 
         // Calculate ATS score components
         const scoreBreakdown = {
             keywordMatch: this.calculateKeywordMatchScore(keywordMatch),
-            experienceRelevance: this.calculateExperienceRelevance(resumeData, jobData),
-            skillsAlignment: this.calculateSkillsAlignment(resumeData, jobData),
+            experienceRelevance: this.calculateExperienceRelevance(resumeData, jobData, keywordMatch),
+            skillsAlignment: this.calculateSkillsAlignment(resumeData, jobData, keywordMatch),
             formatting: this.calculateFormattingScore(resumeText, resumeData),
             completeness: this.calculateCompletenessScore(resumeData)
         };
@@ -34,8 +47,8 @@ class ResumeAnalyzer {
         // Calculate final ATS score
         const atsScore = this.calculateATSScore(scoreBreakdown);
 
-        // Generate suggestions
-        const suggestions = this.generateSuggestions(resumeData, jobData, keywordMatch, scoreBreakdown);
+        // Generate enhanced suggestions
+        const suggestions = this.generateEnhancedSuggestions(resumeData, jobData, keywordMatch, scoreBreakdown);
 
         return {
             atsScore: Math.round(atsScore),
@@ -46,149 +59,41 @@ class ResumeAnalyzer {
             suggestions,
             breakdown: scoreBreakdown,
             resumeData,
-            jobData
+            jobData,
+            keywordDetails: keywordMatch.details,
+            matchingConfidence: keywordMatch.confidence
         };
     }
 
     /**
-     * Match keywords between resume and job description
+     * Calculate keyword match score (0-1) using enhanced matching confidence
      */
-    static matchKeywords(resumeData, jobData) {
-        const resumeText = JSON.stringify(resumeData).toLowerCase();
-        const matched = [];
-        const missing = [];
-        const matchedSkills = [];
-        const missingSkills = [];
-
-        // Create synonym map for better matching
-        const synonyms = {
-            'javascript': ['js', 'javascript', 'ecmascript'],
-            'typescript': ['ts', 'typescript'],
-            'node.js': ['node', 'nodejs', 'node.js'],
-            'react': ['react', 'reactjs', 'react.js'],
-            'angular': ['angular', 'angularjs'],
-            'vue': ['vue', 'vuejs', 'vue.js'],
-            'python': ['python', 'py'],
-            'c++': ['c++', 'cpp'],
-            'c#': ['c#', 'csharp'],
-            'aws': ['aws', 'amazon web services'],
-            'gcp': ['gcp', 'google cloud', 'google cloud platform'],
-            'azure': ['azure', 'microsoft azure']
-        };
-
-        // Check technical keywords
-        const allJobKeywords = [
-            ...jobData.keywords.technical,
-            ...jobData.keywords.tools
-        ];
-
-        for (const keyword of allJobKeywords) {
-            const keywordLower = keyword.toLowerCase();
-            let found = false;
-
-            // Check exact match
-            if (resumeText.includes(keywordLower)) {
-                found = true;
-            } else {
-                // Check synonyms
-                for (const [key, syns] of Object.entries(synonyms)) {
-                    if (syns.includes(keywordLower)) {
-                        // Check if any synonym is in resume
-                        for (const syn of syns) {
-                            if (resumeText.includes(syn)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (found) break;
-                }
-            }
-
-            if (found) {
-                matched.push(keyword);
-            } else {
-                missing.push(keyword);
-            }
-        }
-
-        // Check skills specifically
-        const resumeSkills = resumeData.skills.map(s => s.toLowerCase());
-        const jobSkills = [
-            ...jobData.keywords.technical,
-            ...jobData.keywords.soft,
-            ...jobData.keywords.tools
-        ];
-
-        for (const skill of jobSkills) {
-            const skillLower = skill.toLowerCase();
-            let found = false;
-
-            // Check in skills section
-            if (resumeSkills.some(rs => rs.includes(skillLower) || skillLower.includes(rs))) {
-                found = true;
-            }
-
-            // Check in experience bullets
-            if (!found) {
-                for (const exp of resumeData.experience) {
-                    const expText = exp.bullets.join(' ').toLowerCase();
-                    if (expText.includes(skillLower)) {
-                        found = true;
-                        break;
-                    }
-                }
-            }
-
-            if (found) {
-                matchedSkills.push(skill);
-            } else {
-                missingSkills.push(skill);
-            }
-        }
-
-        return {
-            matched,
-            missing,
-            matchedSkills,
-            missingSkills
-        };
+    calculateKeywordMatchScore(keywordMatch) {
+        // Use the confidence from enhanced matching
+        return keywordMatch.confidence / 100;
     }
 
     /**
-     * Calculate keyword match score (0-1)
+     * Calculate experience relevance score (0-1) with enhanced keyword matching
      */
-    static calculateKeywordMatchScore(keywordMatch) {
-        const totalKeywords = keywordMatch.matched.length + keywordMatch.missing.length;
-        if (totalKeywords === 0) return 0;
-
-        return keywordMatch.matched.length / totalKeywords;
-    }
-
-    /**
-     * Calculate experience relevance score (0-1)
-     */
-    static calculateExperienceRelevance(resumeData, jobData) {
+    calculateExperienceRelevance(resumeData, jobData, keywordMatch) {
         if (resumeData.experience.length === 0) return 0;
 
         let relevanceScore = 0;
-        const jobKeywords = [
-            ...jobData.keywords.technical,
-            ...jobData.keywords.tools
-        ].map(k => k.toLowerCase());
+        const matchedKeywords = keywordMatch.matched.map(k => k.toLowerCase());
 
-        // Check how many job keywords appear in experience
+        // Check how many matched keywords appear in experience
         for (const exp of resumeData.experience) {
             const expText = (exp.title + ' ' + exp.bullets.join(' ')).toLowerCase();
             let matchCount = 0;
 
-            for (const keyword of jobKeywords) {
-                if (expText.includes(keyword)) {
+            for (const keyword of matchedKeywords) {
+                if (expText.includes(keyword.toLowerCase())) {
                     matchCount++;
                 }
             }
 
-            const expRelevance = jobKeywords.length > 0 ? matchCount / jobKeywords.length : 0;
+            const expRelevance = matchedKeywords.length > 0 ? matchCount / matchedKeywords.length : 0;
             relevanceScore = Math.max(relevanceScore, expRelevance);
         }
 
@@ -201,32 +106,20 @@ class ResumeAnalyzer {
     }
 
     /**
-     * Calculate skills alignment score (0-1)
+     * Calculate skills alignment score (0-1) using enhanced matching
      */
-    static calculateSkillsAlignment(resumeData, jobData) {
-        const resumeSkills = resumeData.skills.map(s => s.toLowerCase());
-        const jobSkills = [
-            ...jobData.keywords.technical,
-            ...jobData.keywords.soft,
-            ...jobData.keywords.tools
-        ].map(s => s.toLowerCase());
+    calculateSkillsAlignment(resumeData, jobData, keywordMatch) {
+        // Use the enhanced matching results
+        const totalJobSkills = keywordMatch.matched.length + keywordMatch.missing.length;
+        if (totalJobSkills === 0) return 0.5;
 
-        if (jobSkills.length === 0) return 0.5;
-
-        let matchCount = 0;
-        for (const jobSkill of jobSkills) {
-            if (resumeSkills.some(rs => rs.includes(jobSkill) || jobSkill.includes(rs))) {
-                matchCount++;
-            }
-        }
-
-        return matchCount / jobSkills.length;
+        return keywordMatch.matched.length / totalJobSkills;
     }
 
     /**
      * Calculate formatting score (0-1)
      */
-    static calculateFormattingScore(resumeText, resumeData) {
+    calculateFormattingScore(resumeText, resumeData) {
         let score = 1.0;
 
         // Check for proper sections
@@ -251,7 +144,7 @@ class ResumeAnalyzer {
     /**
      * Calculate completeness score (0-1)
      */
-    static calculateCompletenessScore(resumeData) {
+    calculateCompletenessScore(resumeData) {
         let score = 0;
 
         // Check for essential sections
@@ -268,7 +161,7 @@ class ResumeAnalyzer {
     /**
      * Calculate final ATS score using weighted formula
      */
-    static calculateATSScore(breakdown) {
+    calculateATSScore(breakdown) {
         const score = (
             breakdown.keywordMatch * 0.40 +
             breakdown.experienceRelevance * 0.25 +
@@ -281,40 +174,77 @@ class ResumeAnalyzer {
     }
 
     /**
-     * Generate improvement suggestions
+     * Generate enhanced improvement suggestions
      */
-    static generateSuggestions(resumeData, jobData, keywordMatch, scoreBreakdown) {
+    generateEnhancedSuggestions(resumeData, jobData, keywordMatch, scoreBreakdown) {
         const suggestions = [];
 
-        // Keyword suggestions
+        // Enhanced keyword suggestions with prioritization
         if (keywordMatch.missing.length > 0) {
-            const topMissing = keywordMatch.missing.slice(0, 5);
+            // Prioritize missing keywords by type and importance
+            const prioritizedMissing = this.prioritizeMissingKeywords(keywordMatch.missing);
+            const topMissing = prioritizedMissing.slice(0, 5);
+            
             suggestions.push({
                 type: 'keywords',
                 priority: 'high',
-                message: `Add these key skills to your resume: ${topMissing.join(', ')}`,
-                impact: 'Increases keyword match score by up to 20 points'
+                message: `Add these high-priority skills to your resume: ${topMissing.join(', ')}`,
+                impact: `Could increase your ATS score by up to ${Math.min(20, topMissing.length * 4)} points`,
+                keywords: topMissing
             });
         }
 
-        // Skills suggestions
-        if (keywordMatch.missingSkills.length > 0) {
-            const topMissingSkills = keywordMatch.missingSkills.slice(0, 3);
+        // Synonym-based suggestions
+        const synonymSuggestions = this.generateSynonymSuggestions(keywordMatch);
+        if (synonymSuggestions.length > 0) {
             suggestions.push({
-                type: 'skills',
-                priority: 'high',
-                message: `Highlight experience with: ${topMissingSkills.join(', ')}`,
-                impact: 'Improves skills alignment score'
+                type: 'synonyms',
+                priority: 'medium',
+                message: `Consider using these alternative terms: ${synonymSuggestions.join(', ')}`,
+                impact: 'Improves keyword matching and ATS compatibility',
+                keywords: synonymSuggestions
             });
         }
 
-        // Experience suggestions
-        if (scoreBreakdown.experienceRelevance < 0.5) {
+        // Skills gap analysis
+        if (keywordMatch.missingSkills.length > 0) {
+            const criticalSkills = keywordMatch.missingSkills.filter(skill => 
+                this.keywordMatcher.skillPriorities[skill.toLowerCase()] > 70
+            ).slice(0, 3);
+            
+            if (criticalSkills.length > 0) {
+                suggestions.push({
+                    type: 'skills_gap',
+                    priority: 'high',
+                    message: `Critical skills missing: ${criticalSkills.join(', ')}`,
+                    impact: 'These are high-demand skills for this role',
+                    keywords: criticalSkills
+                });
+            }
+        }
+
+        // Experience optimization suggestions
+        if (scoreBreakdown.experienceRelevance < 0.6) {
+            const matchedKeywords = keywordMatch.matched.slice(0, 5);
             suggestions.push({
                 type: 'experience',
                 priority: 'high',
-                message: 'Emphasize relevant experience by adding job-specific keywords to your bullet points',
-                impact: 'Increases experience relevance score'
+                message: `Incorporate these keywords into your experience bullets: ${matchedKeywords.join(', ')}`,
+                impact: 'Increases experience relevance score and keyword density',
+                keywords: matchedKeywords
+            });
+        }
+
+        // Context-aware suggestions based on matching details
+        const lowConfidenceMatches = keywordMatch.details.filter(d => d.confidence < 80);
+        if (lowConfidenceMatches.length > 0) {
+            const improvableKeywords = lowConfidenceMatches.map(d => d.jobKeyword).slice(0, 3);
+            suggestions.push({
+                type: 'keyword_clarity',
+                priority: 'medium',
+                message: `Use exact terminology for better matching: ${improvableKeywords.join(', ')}`,
+                impact: 'Improves keyword matching confidence',
+                keywords: improvableKeywords
             });
         }
 
@@ -353,30 +283,82 @@ class ResumeAnalyzer {
             });
         }
 
-        // Completeness suggestions
-        if (!resumeData.contact.linkedin) {
+        // Industry-specific suggestions
+        const industryKeywords = this.identifyIndustryKeywords(jobData);
+        if (industryKeywords.length > 0) {
             suggestions.push({
-                type: 'contact',
-                priority: 'low',
-                message: 'Add your LinkedIn profile URL to increase credibility',
-                impact: 'Provides additional context for recruiters'
-            });
-        }
-
-        if (resumeData.certifications.length === 0 && jobData.keywords.certifications.length > 0) {
-            suggestions.push({
-                type: 'certifications',
+                type: 'industry_alignment',
                 priority: 'medium',
-                message: `Consider adding relevant certifications: ${jobData.keywords.certifications.slice(0, 2).join(', ')}`,
-                impact: 'Demonstrates commitment to professional development'
+                message: `Consider adding industry-specific terms: ${industryKeywords.slice(0, 3).join(', ')}`,
+                impact: 'Better alignment with industry expectations',
+                keywords: industryKeywords.slice(0, 3)
             });
         }
 
-        // Sort by priority
+        // Sort by priority and impact
         const priorityOrder = { high: 0, medium: 1, low: 2 };
         suggestions.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
 
-        return suggestions;
+        return suggestions.slice(0, 8); // Limit to top 8 suggestions
+    }
+
+    /**
+     * Prioritize missing keywords based on importance and type
+     */
+    prioritizeMissingKeywords(missingKeywords) {
+        return missingKeywords.sort((a, b) => {
+            const priorityA = this.keywordMatcher.skillPriorities[a.toLowerCase()] || 50;
+            const priorityB = this.keywordMatcher.skillPriorities[b.toLowerCase()] || 50;
+            return priorityB - priorityA;
+        });
+    }
+
+    /**
+     * Generate synonym-based suggestions
+     */
+    generateSynonymSuggestions(keywordMatch) {
+        const suggestions = [];
+        
+        // Look for opportunities to use more common/preferred terms
+        for (const detail of keywordMatch.details) {
+            if (detail.matchType === 'synonym' && detail.confidence < 95) {
+                const synonyms = this.keywordMatcher.getSynonyms(detail.jobKeyword);
+                if (synonyms.length > 0) {
+                    suggestions.push(detail.jobKeyword);
+                }
+            }
+        }
+        
+        return [...new Set(suggestions)].slice(0, 3);
+    }
+
+    /**
+     * Identify industry-specific keywords
+     */
+    identifyIndustryKeywords(jobData) {
+        const industryKeywords = [];
+        
+        // This could be enhanced with ML or industry classification
+        // For now, use simple heuristics
+        const allKeywords = [
+            ...jobData.keywords.technical,
+            ...jobData.keywords.tools,
+            ...jobData.keywords.soft
+        ];
+        
+        // Look for industry indicators
+        const techIndicators = ['api', 'cloud', 'agile', 'scrum', 'devops'];
+        const financeIndicators = ['compliance', 'risk', 'audit', 'regulatory'];
+        const healthcareIndicators = ['hipaa', 'clinical', 'patient', 'medical'];
+        
+        for (const keyword of allKeywords) {
+            const keywordLower = keyword.toLowerCase();
+            if (techIndicators.some(indicator => keywordLower.includes(indicator))) {
+                industryKeywords.push(keyword);
+            }
+        }
+        
+        return [...new Set(industryKeywords)];
     }
 }
 
