@@ -3,9 +3,9 @@
  * Extension-wide constants and configurations
  */
 
-// API Configuration
+// API Configuration - Update this with your Render URL
 export const API_CONFIG = {
-    BASE_URL: 'http://localhost:5000/api',
+    BASE_URL: 'https://your-app-name.onrender.com/api', // Replace 'your-app-name' with your actual Render service name
     TIMEOUT: 30000,
 };
 

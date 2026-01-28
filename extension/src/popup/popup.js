@@ -3,8 +3,10 @@
  * Main UI logic for the extension popup
  */
 
-// Configuration
-const API_BASE_URL = 'http://localhost:8080/api';
+// Configuration - REPLACE WITH YOUR RENDER URL
+// Find your Render service URL in your Render dashboard
+// It should look like: https://your-service-name.onrender.com
+const API_BASE_URL = 'https://your-app-name.onrender.com/api';
 
 // State
 let currentJob = null;
