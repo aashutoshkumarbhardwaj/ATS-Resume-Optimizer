@@ -12,13 +12,18 @@ class ResumeParser {
             throw new Error('Invalid resume text');
         }
 
+        const experience = this.extractExperience(resumeText);
+        const contact = this.extractContact(resumeText);
+
         const parsedData = {
-            contact: this.extractContact(resumeText),
+            contact: contact,
             summary: this.extractSummary(resumeText),
-            experience: this.extractExperience(resumeText),
+            experience: experience,
             education: this.extractEducation(resumeText),
             skills: this.extractSkills(resumeText),
-            certifications: this.extractCertifications(resumeText)
+            certifications: this.extractCertifications(resumeText),
+            current_title: experience[0]?.title || '',
+            years_of_experience: this.estimateYearsOfExperience(resumeText, experience)
         };
 
         return parsedData;
@@ -30,10 +35,16 @@ class ResumeParser {
     static extractContact(text) {
         const contact = {
             name: '',
+            first_name: '',
+            last_name: '',
             email: '',
             phone: '',
             location: '',
-            linkedin: ''
+            city: '',
+            country: '',
+            linkedin: '',
+            github: '',
+            portfolio: ''
         };
 
         // Extract email
@@ -54,17 +65,52 @@ class ResumeParser {
         const linkedinRegex = /(linkedin\.com\/in\/[\w-]+)/i;
         const linkedinMatch = text.match(linkedinRegex);
         if (linkedinMatch) {
-            contact.linkedin = linkedinMatch[0];
+            contact.linkedin = linkedinMatch[0].startsWith('http') ? linkedinMatch[0] : 'https://' + linkedinMatch[0];
+        }
+
+        // Extract GitHub
+        const githubRegex = /(github\.com\/[\w-]+)/i;
+        const githubMatch = text.match(githubRegex);
+        if (githubMatch) {
+            contact.github = githubMatch[0].startsWith('http') ? githubMatch[0] : 'https://' + githubMatch[0];
+        }
+
+        // Extract portfolio / personal website
+        const portfolioRegex = /(?:portfolio|website|blog|personal\s*site)[:\s]+(https?:\/\/[^\s]+)/i;
+        const portfolioMatch = text.match(portfolioRegex);
+        if (portfolioMatch) {
+            contact.portfolio = portfolioMatch[1].replace(/[.,;:)\]]+$/, '');
+        } else {
+            const allLinks = text.match(/https?:\/\/[^\s]+/g);
+            if (allLinks) {
+                const portfolioLink = allLinks.find(link => !link.includes('linkedin.com') && !link.includes('github.com'));
+                if (portfolioLink) {
+                    contact.portfolio = portfolioLink.replace(/[.,;:)\]]+$/, '');
+                }
+            }
         }
 
         // Extract name (usually first line or near contact info)
         const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         if (lines.length > 0) {
-            // Name is typically the first line, should be 2-4 words, capitalized
-            const firstLine = lines[0];
-            if (firstLine.length < 50 && firstLine.match(/^[A-Z][a-z]+(\s[A-Z][a-z]+){1,3}$/)) {
-                contact.name = firstLine;
+            // Check first few lines for a name
+            for (let i = 0; i < Math.min(3, lines.length); i++) {
+                const line = lines[i];
+                if (line.length > 3 && line.length < 40 && !line.includes('@') && !line.includes(':') && !line.match(/\d/) && !line.toLowerCase().includes('resume') && !line.toLowerCase().includes('curriculum')) {
+                    if (line === line.toUpperCase()) {
+                        contact.name = line.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+                    } else {
+                        contact.name = line;
+                    }
+                    break;
+                }
             }
+        }
+
+        if (contact.name) {
+            const parts = contact.name.split(/\s+/);
+            contact.first_name = parts[0] || '';
+            contact.last_name = parts.slice(1).join(' ') || '';
         }
 
         // Extract location (city, state or city, country)
@@ -72,9 +118,89 @@ class ResumeParser {
         const locationMatch = text.match(locationRegex);
         if (locationMatch) {
             contact.location = locationMatch[0];
+            const parts = locationMatch[0].split(',');
+            contact.city = parts[0] ? parts[0].trim() : '';
+            contact.country = parts[1] ? parts[1].trim() : '';
         }
 
         return contact;
+    }
+
+    /**
+     * Estimate total years of experience
+     */
+    static estimateYearsOfExperience(text, experience) {
+        // Try to match patterns like "X+ years of experience"
+        const yoeRegex = /(\d+)\+?\s*years?\s+of\s+experience/i;
+        const yoeMatch = text.match(yoeRegex);
+        if (yoeMatch) {
+            return yoeMatch[1];
+        }
+
+        // Otherwise sum up job durations
+        let totalMonths = 0;
+        if (experience && experience.length > 0) {
+            experience.forEach(job => {
+                const start = job.startDate;
+                const end = job.endDate;
+                if (start && end) {
+                    const months = this.calculateMonthsBetween(start, end);
+                    if (months > 0) {
+                        totalMonths += months;
+                    }
+                }
+            });
+        }
+
+        if (totalMonths > 0) {
+            return Math.max(1, Math.round(totalMonths / 12)).toString();
+        }
+
+        return '';
+    }
+
+    /**
+     * Calculate difference in months between dates
+     */
+    static calculateMonthsBetween(startStr, endStr) {
+        try {
+            const parseDate = (str) => {
+                const clean = str.trim().toLowerCase();
+                if (clean === 'present' || clean === 'current') {
+                    return new Date();
+                }
+                
+                const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+                const parts = clean.split(/\s+/);
+                
+                let year = new Date().getFullYear();
+                let month = 0;
+                
+                if (parts.length === 1) {
+                    const y = parseInt(parts[0]);
+                    if (!isNaN(y)) year = y;
+                } else if (parts.length >= 2) {
+                    const mIdx = months.findIndex(m => parts[0].startsWith(m));
+                    if (mIdx !== -1) {
+                        month = mIdx;
+                    }
+                    const y = parseInt(parts[1]);
+                    if (!isNaN(y)) year = y;
+                }
+                
+                return new Date(year, month, 1);
+            };
+
+            const startDate = parseDate(startStr);
+            const endDate = parseDate(endStr);
+            
+            const diffYears = endDate.getFullYear() - startDate.getFullYear();
+            const diffMonths = endDate.getMonth() - startDate.getMonth();
+            
+            return diffYears * 12 + diffMonths;
+        } catch (e) {
+            return 0;
+        }
     }
 
     /**

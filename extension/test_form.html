@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Career Portal - Apply to Software Engineer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f7fafc;
+            color: #2d3748;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }
+        .form-container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05), 0 10px 15px rgba(0,0,0,0.1);
+            max-width: 600px;
+            width: 100%;
+        }
+        h2 {
+            margin-top: 0;
+            color: #1a202c;
+            border-bottom: 2px solid #edf2f7;
+            padding-bottom: 12px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #4a5568;
+            margin-top: 24px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 6px;
+        }
+        .form-row {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .form-row .form-group {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: #4a5568;
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 10px 12px;
+            font-size: 14px;
+            border: 1px solid #cbd5e0;
+            border-radius: 6px;
+            box-sizing: border-box;
+            background-color: #fff;
+            transition: all 0.2s;
+        }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: #3182ce;
+            box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.5);
+        }
+        .btn-submit {
+            background-color: #3182ce;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 16px;
+            transition: background-color 0.2s;
+        }
+        .btn-submit:hover {
+            background-color: #2b6cb0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="form-container">
+    <h2>Apply for Software Engineer</h2>
+    <p style="color: #718096; font-size: 14px; margin-top: -8px; margin-bottom: 24px;">
+        Please complete the application form below.
+    </p>
+
+    <form id="jobAppForm" onsubmit="event.preventDefault(); alert('Application Submitted!');">
+        <div class="section-title">Personal Information</div>
+        
+        <div class="form-row">
+            <div class="form-group">
+                <label for="first-name-input">First Name *</label>
+                <input type="text" id="first-name-input" name="first_name" placeholder="Given name" required>
+            </div>
+            <div class="form-group">
+                <label for="last-name-input">Last Name *</label>
+                <input type="text" id="last-name-input" name="last_name" placeholder="Surname" required>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="email-address">Email *</label>
+            <input type="email" id="email-address" name="email" placeholder="you@example.com" required>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="phone-number">Phone *</label>
+                <input type="tel" id="phone-number" name="phone" placeholder="Phone number" required>
+            </div>
+            <div class="form-group">
+                <label for="city-location">Location (City, State) *</label>
+                <input type="text" id="city-location" name="location" placeholder="e.g. New York, NY" required>
+            </div>
+        </div>
+
+        <div class="section-title">Links & Profile</div>
+        
+        <div class="form-group">
+            <label for="linkedin-field">LinkedIn Profile *</label>
+            <input type="url" id="linkedin-field" name="linkedin_url" placeholder="https://linkedin.com/in/username" required>
+        </div>
+
+        <div class="form-group">
+            <label for="github-field">GitHub URL</label>
+            <input type="url" id="github-field" name="github_url" placeholder="https://github.com/username">
+        </div>
+
+        <div class="form-group">
+            <label for="portfolio-field">Portfolio Website</label>
+            <input type="url" id="portfolio-field" name="portfolio" placeholder="https://mywebsite.com">
+        </div>
+
+        <div class="section-title">Professional Details</div>
+        
+        <div class="form-row">
+            <div class="form-group">
+                <label for="job-title-field">Current Job Title</label>
+                <input type="text" id="job-title-field" name="current_title" placeholder="e.g. Software Engineer">
+            </div>
+            <div class="form-group">
+                <label for="yoe-field">Years of Experience</label>
+                <input type="number" id="yoe-field" name="yoe" placeholder="Years of experience" min="0">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="notice-period-field">Notice Period</label>
+            <input type="text" id="notice-period-field" name="notice_period" placeholder="e.g. 1 month">
+        </div>
+
+        <div class="form-group">
+            <label for="desired-salary-field">Desired Salary</label>
+            <input type="text" id="desired-salary-field" name="desired_salary" placeholder="e.g. $120,000">
+        </div>
+
+        <button type="submit" class="btn-submit">Submit Application</button>
+    </form>
+</div>
+
+</body>
+</html>

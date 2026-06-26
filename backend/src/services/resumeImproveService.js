@@ -6,8 +6,8 @@
 const fs = require('fs').promises;
 const path = require('path');
 const FileUploadService = require('./fileUploadService');
-const DocumentGenerator = require('./documentGenerator');
-const PdfInPlaceEditor = require('./pdfInPlaceEditor');
+// DocumentGenerator and PdfInPlaceEditor are lazy-loaded to avoid pdfkit/pdfjs startup hang
+
 
 class ResumeImproveService {
     static downloads = new Map();
@@ -60,6 +60,7 @@ class ResumeImproveService {
         const fileBuffer = await fs.readFile(file.path);
 
         if (format === 'PDF') {
+            const PdfInPlaceEditor = require('./pdfInPlaceEditor'); // lazy load
             const linesByPage = await PdfInPlaceEditor.extractLines(fileBuffer);
             const originalLines = linesByPage.flatMap(lines => lines.map(line => line.text));
             const improvedLines = optimizedText.split(/\r?\n/);
@@ -103,6 +104,7 @@ class ResumeImproveService {
         }
 
         if (format === 'DOCX') {
+            const DocumentGenerator = require('./documentGenerator'); // lazy load
             const outputPath = await DocumentGenerator.generateDOCXFromText(
                 optimizedText,
                 `Resume_Improved_${Date.now()}`

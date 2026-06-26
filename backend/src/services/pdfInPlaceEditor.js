@@ -3,7 +3,8 @@
  * Applies minimal text mutations at original positions
  */
 
-const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
+// pdf-lib is lazy-loaded inside applyChanges to avoid blocking startup
+
 
 let pdfjsLibPromise = null;
 
@@ -94,10 +95,12 @@ class PdfInPlaceEditor {
      * Apply text changes to a PDF buffer
      */
     static async applyChanges(pdfBytes, changes, options = {}) {
+        const { PDFDocument, StandardFonts, rgb } = require('pdf-lib'); // lazy load
         const { allowShrinkFont = true } = options;
         const pdfDoc = await PDFDocument.load(pdfBytes);
         const pages = pdfDoc.getPages();
         const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
 
         for (const change of changes) {
             const page = pages[change.page];

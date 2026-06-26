@@ -8,7 +8,7 @@ let currentDetectedJob = null;
 
 // API Configuration
 // TODO: Replace 'http://localhost:5000/api' with your AWS backend URL when deploying
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 // Listen for messages from content scripts and popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -116,24 +116,6 @@ async function analyzeResume(payload, sendResponse) {
     }
 }
 
-// Listen for tab updates to inject content script
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete') {
-        // Optionally inject content script
-        injectContentScript(tabId);
-    }
-});
-
-/**
- * Inject content script into a tab
- */
-function injectContentScript(tabId) {
-    chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        files: ['src/contentScript/content-script.js']
-    }).catch(err => console.log('Script already injected or injection failed:', err));
-}
-
 // Listen for extension installation/update
 chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'install') {
@@ -144,6 +126,18 @@ chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === 'update') {
         console.log('Extension updated!');
     }
+
+    // Inject content script into existing tabs once upon installation or update
+    chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] }, (tabs) => {
+        for (const tab of tabs) {
+            if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+                chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['src/contentScript/content-script.js']
+                }).catch(err => console.log('Could not inject script into existing tab:', tab.id, err));
+            }
+        }
+    });
 });
 
 // Store extension data

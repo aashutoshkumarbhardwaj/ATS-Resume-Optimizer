@@ -5,8 +5,8 @@
 
 const fs = require('fs').promises;
 const path = require('path');
-const PDFDocument = require('pdfkit');
-const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx');
+// NOTE: pdfkit and docx are lazy-loaded inside methods to avoid blocking startup
+
 
 class DocumentGenerator {
     /**
@@ -68,6 +68,7 @@ class DocumentGenerator {
      * Generate PDF document
      */
     static async generatePDF(resumeData, template, filename) {
+        const PDFDocument = require('pdfkit'); // lazy load to avoid startup hang
         const templates = this.getTemplates();
         const templateConfig = templates[template] || templates.professional;
 
@@ -246,6 +247,7 @@ class DocumentGenerator {
      * Generate DOCX document
      */
     static async generateDOCX(resumeData, template, filename) {
+        const { Document, Packer, Paragraph, TextRun, HeadingLevel } = require('docx'); // lazy load
         const outputDir = path.join(__dirname, '../../temp');
         await fs.mkdir(outputDir, { recursive: true });
         
@@ -526,6 +528,7 @@ class DocumentGenerator {
      * Generate PDF from raw resume text
      */
     static async generatePDFFromText(resumeText, filename) {
+        const PDFDocument = require('pdfkit'); // lazy load
         const outputDir = path.join(__dirname, '../../temp');
         await fs.mkdir(outputDir, { recursive: true });
 
@@ -566,6 +569,7 @@ class DocumentGenerator {
      * Generate DOCX from raw resume text
      */
     static async generateDOCXFromText(resumeText, filename) {
+        const { Document, Packer, Paragraph, TextRun } = require('docx'); // lazy load
         const outputDir = path.join(__dirname, '../../temp');
         await fs.mkdir(outputDir, { recursive: true });
 

@@ -672,3 +672,195 @@ body {
         box-shadow: 0 0 0 10px rgba(76, 175, 80, 0);
     }
 }
+
+/* Autofill Profile Styles */
+.form-section-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #4b6cb7;
+    margin-top: 14px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 4px;
+}
+
+.form-row-2 {
+    display: flex;
+    gap: 10px;
+}
+
+.form-row-2 .form-group {
+    flex: 1;
+}
+
+.form-group {
+    margin-bottom: 10px;
+    text-align: left;
+}
+
+.form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #4a5568;
+    margin-bottom: 4px;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 12px;
+    border: 1px solid #cbd5e0;
+    border-radius: 6px;
+    background-color: #fff;
+    transition: all 0.2s ease;
+    color: #2d3748;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+}
+
+.btn-text-action {
+    background: none;
+    border: none;
+    color: #667eea;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+
+.btn-text-action:hover {
+    background: #f0f4ff;
+    text-decoration: underline;
+}
+
+.custom-fields-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+}
+
+.custom-field-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.custom-field-row .custom-key,
+.custom-field-row .custom-val {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 11px;
+    border: 1px solid #cbd5e0;
+    border-radius: 6px;
+}
+
+.custom-field-row .custom-key:focus,
+.custom-field-row .custom-val:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.btn-remove-custom {
+    background: none;
+    border: none;
+    color: #e53e3e;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.btn-remove-custom:hover {
+    background: #fff5f5;
+}
+
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+.checkbox-group input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+}
+
+.checkbox-group label {
+    font-size: 11px;
+    color: #4a5568;
+    user-select: none;
+}
+
+.autofill-status-message {
+    margin-top: 12px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    text-align: center;
+    transition: all 0.3s;
+}
+
+.autofill-status-message.success {
+    background-color: #e6fffa;
+    border: 1px solid #319795;
+    color: #234e52;
+}
+
+.autofill-status-message.error {
+    background-color: #fff5f5;
+    border: 1px solid #e53e3e;
+    color: #742a2a;
+}
+
+/* Missed Fields Tags */
+.missed-field-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: #4a5568;
+    font-weight: 500;
+}
+
+.btn-add-missed {
+    background: #667eea;
+    border: none;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    line-height: 1;
+    transition: all 0.2s;
+}
+
+.btn-add-missed:hover {
+    background: #764ba2;
+    transform: scale(1.1);
+}

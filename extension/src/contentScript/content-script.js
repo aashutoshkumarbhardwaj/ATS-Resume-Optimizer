@@ -3,6 +3,10 @@
  * Runs on web pages and can interact with the DOM
  */
 
+(function() {
+if (window.resumeFixerScriptInjected) return;
+window.resumeFixerScriptInjected = true;
+
 console.log('Resume Fixer content script loaded');
 
 // Adaptive job description extraction using semantic analysis
@@ -65,6 +69,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true, job: detectedJob });
     }
 
+    if (request.type === 'PERFORM_AUTOFILL') {
+        try {
+            const count = performAutofill(request.profile);
+            sendResponse({ success: true, filledCount: count });
+        } catch (err) {
+            console.error('Autofill error:', err);
+            sendResponse({ success: false, message: err.message });
+        }
+    }
+
+    if (request.type === 'SETTINGS_UPDATED') {
+        if (request.settings && request.settings.showAutofillBadge === false) {
+            removeAutofillBadge();
+        } else {
+            initAutofillBadge();
+        }
+        sendResponse({ success: true });
+    }
+
     return true;
 });
 
@@ -81,7 +104,9 @@ function detectJobDescription() {
         // Calculate confidence score
         const confidence = calculateConfidence(jobData);
         
-        if (confidence >= 70) { // Lowered threshold for adaptive approach
+        const hasMinDescription = jobData.description && jobData.description.trim().length > 50;
+        
+        if (confidence >= 35 || hasMinDescription) { // Lowered threshold for adaptive approach
             // Extract requirements and skills from description
             const extracted = extractRequirementsAndSkills(jobData.description);
             jobData.requirements = extracted.requirements;
@@ -159,10 +184,10 @@ function extractJobDataAdaptively() {
 }
 
 /**
- * Fallback description extraction for edge cases
+ * Fallback description extraction - avoids form pages and raw body dump
  */
 function extractFallbackDescription() {
-    // Try to find the main content area
+    // Try to find the main content area (skip forms)
     const mainSelectors = [
         'main', 'article', '[role="main"]', '.main-content', 
         '#main-content', '.content', '#content'
@@ -171,8 +196,8 @@ function extractFallbackDescription() {
     for (const selector of mainSelectors) {
         try {
             const element = document.querySelector(selector);
-            if (element) {
-                const text = element.textContent.trim();
+            if (element && !isFormElement(element)) {
+                const text = getCleanText(element);
                 if (text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
                     return text;
                 }
@@ -182,10 +207,15 @@ function extractFallbackDescription() {
         }
     }
     
-    // Last resort: get the largest text block from body
-    const bodyText = document.body.textContent.trim();
-    if (bodyText.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
-        return bodyText;
+    // Last resort: get largest non-form text block
+    const allBlocks = Array.from(document.querySelectorAll('div, section, article'))
+        .filter(el => !isFormElement(el))
+        .map(el => ({ el, text: getCleanText(el) }))
+        .filter(({ text }) => text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength)
+        .sort((a, b) => b.text.length - a.text.length);
+    
+    if (allBlocks.length > 0) {
+        return allBlocks[0].text.substring(0, JD_EXTRACTION_CONFIG.maxDescriptionLength);
     }
     
     return '';
@@ -435,6 +465,31 @@ function calculateCompanyScore(text, element) {
 }
 
 /**
+ * Check if an element is a form/registration area (to skip it)
+ */
+function isFormElement(el) {
+    // Skip if it IS a form
+    if (el.tagName === 'FORM') return true;
+    // Skip if it contains several inputs (registration form, not JD)
+    const inputs = el.querySelectorAll('input, select, textarea');
+    if (inputs.length >= 3) return true;
+    // Skip if it's inside a form
+    if (el.closest('form')) return true;
+    return false;
+}
+
+/**
+ * Get clean text from element, stripping out style/script tags content
+ */
+function getCleanText(el) {
+    // Clone to avoid mutating DOM
+    const clone = el.cloneNode(true);
+    // Remove style, script, noscript, input, select, textarea, label, button elements
+    clone.querySelectorAll('style, script, noscript, input, select, textarea, button, label, .helpPopup').forEach(e => e.remove());
+    return clone.textContent.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Extract job description using multiple strategies and text density analysis
  */
 function extractJobDescription() {
@@ -442,15 +497,17 @@ function extractJobDescription() {
     
     // Strategy 1: Look for elements with description-related attributes or classes
     const descriptionSelectors = [
-        '[class*="description"]', '[class*="content"]', '[class*="detail"]',
-        '[id*="description"]', '[id*="content"]', '[data-*="description"]'
+        '[class*="description"]', '[class*="job-detail"]', '[class*="jobDetail"]',
+        '[class*="posting"]', '[class*="vacancy"]', '[class*="job-content"]',
+        '[id*="description"]', '[id*="job-detail"]', '[id*="jobDescription"]'
     ];
     
     descriptionSelectors.forEach(selector => {
         try {
             const elements = document.querySelectorAll(selector);
             elements.forEach(el => {
-                const text = el.textContent.trim();
+                if (isFormElement(el)) return;
+                const text = getCleanText(el);
                 if (text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
                     candidates.push({
                         text: text,
@@ -467,6 +524,7 @@ function extractJobDescription() {
     // Strategy 2: Look for sections with job-related headings
     const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
     headings.forEach(heading => {
+        if (isFormElement(heading)) return;
         const headingText = heading.textContent.trim().toLowerCase();
         
         // Check if heading matches job description patterns
@@ -478,9 +536,11 @@ function extractJobDescription() {
             // Find content after this heading
             const content = getContentAfterHeading(heading);
             if (content && content.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
+                // Clean CSS from heading content
+                const cleanContent = content.replace(/\.helpPopup\s*\{[^}]*\}/g, '').replace(/\s+/g, ' ').trim();
                 candidates.push({
-                    text: content,
-                    score: calculateDescriptionScore(content, heading) + 20, // Bonus for semantic heading
+                    text: cleanContent,
+                    score: calculateDescriptionScore(cleanContent, heading) + 20, // Bonus for semantic heading
                     element: heading
                 });
             }
@@ -490,6 +550,7 @@ function extractJobDescription() {
     // Strategy 3: Text density analysis - find the largest block of meaningful text
     const textBlocks = findLargeTextBlocks();
     textBlocks.forEach(block => {
+        if (isFormElement(block.element)) return;
         if (block.text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
             candidates.push({
                 text: block.text,
@@ -574,7 +635,29 @@ function calculateDescriptionScore(text, element) {
     let score = 0;
     const lowerText = text.toLowerCase();
     
-    // Bonus for job-related keywords
+    // ❌ Heavily penalize CSS/style content (from .helpPopup etc.)
+    if (/\.helpPopup\s*\{/.test(text) || /background-color\s*:/.test(text) || /z-index\s*:/.test(text)) {
+        score -= 100;
+    }
+    
+    // ❌ Penalize registration form patterns
+    const formLabelPatterns = [
+        /First Name/i, /Last Name/i, /Surname/i, /Home Street/i, /Home City/i,
+        /Home Country/i, /Home Post Code/i, /Mobile Phone/i, /Current Employer/i,
+        /privacy policy/i, /How did you hear/i, /Preferred First Name/i
+    ];
+    const formHits = formLabelPatterns.filter(p => p.test(text)).length;
+    if (formHits >= 3) {
+        score -= 60; // This is a registration form, not a job description
+    }
+    
+    // ❌ Penalize if element contains inputs
+    if (element && element.querySelectorAll) {
+        const inputCount = element.querySelectorAll('input, select, textarea').length;
+        if (inputCount >= 3) score -= 50;
+    }
+    
+    // ✅ Bonus for job-related keywords
     let keywordCount = 0;
     JD_EXTRACTION_CONFIG.jobKeywords.forEach(keyword => {
         const regex = new RegExp('\\b' + keyword + '\\b', 'gi');
@@ -585,12 +668,12 @@ function calculateDescriptionScore(text, element) {
     });
     score += Math.min(keywordCount * 5, 50); // Cap at 50 points
     
-    // Bonus for length (longer descriptions are usually better)
+    // ✅ Bonus for length (longer descriptions are usually better)
     if (text.length > 500) score += 10;
     if (text.length > 1000) score += 10;
     if (text.length > 2000) score += 10;
     
-    // Penalty for very long descriptions (might be entire page content)
+    // ❌ Penalty for very long descriptions (might be entire page content)
     if (text.length > 8000) score -= 20;
     
     // Bonus for structured content (bullet points, paragraphs)
@@ -1285,7 +1368,8 @@ function isJobPostingPage() {
         /\/vacancy/,
         /\/hiring/,
         /job[-_]?id/,
-        /position[-_]?id/
+        /position[-_]?id/,
+        /test[-_]?form/
     ];
     
     const hasJobUrl = jobUrlPatterns.some(pattern => pattern.test(url));
@@ -1293,7 +1377,7 @@ function isJobPostingPage() {
     // Title-based indicators
     const jobTitleKeywords = [
         'job', 'career', 'position', 'opening', 'vacancy', 'hiring',
-        'engineer', 'developer', 'manager', 'analyst', 'specialist'
+        'engineer', 'developer', 'manager', 'analyst', 'specialist', 'portal', 'apply'
     ];
     
     const hasJobTitle = jobTitleKeywords.some(keyword => title.includes(keyword));
@@ -1302,7 +1386,7 @@ function isJobPostingPage() {
     const jobContentKeywords = [
         'job description', 'responsibilities', 'requirements', 'qualifications',
         'apply now', 'submit application', 'years of experience', 'bachelor',
-        'skills required', 'we are looking for', 'join our team'
+        'skills required', 'we are looking for', 'join our team', 'personal information'
     ];
     
     let contentKeywordCount = 0;
@@ -1336,7 +1420,7 @@ function isJobPostingPage() {
     if (hasJobStructure) score += 20;
     
     console.log('Resume Fixer: Job page detection score:', score);
-    return score >= 50; // Threshold for considering it a job posting
+    return score >= 25; // Threshold for considering it a job posting
 }
 
 /**
@@ -1374,13 +1458,13 @@ function checkJobPostingStructure() {
     
     applyElements.forEach(el => {
         const text = el.textContent.toLowerCase();
-        const applyKeywords = ['apply', 'submit application', 'apply now', 'quick apply'];
+        const applyKeywords = ['apply', 'submit application', 'apply now', 'quick apply', 'submit'];
         if (applyKeywords.some(keyword => text.includes(keyword))) {
             structureScore += 15;
         }
     });
     
-    return structureScore >= 20;
+    return structureScore >= 10;
 }
 
 // Add debugging and validation functions
@@ -1497,5 +1581,439 @@ new MutationObserver(() => {
     if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
         autoDetectJob();
+        // Retry badge injection on URL changes for SPA career sites
+        setTimeout(initAutofillBadge, 1000);
     }
 }).observe(document, { subtree: true, childList: true });
+
+/**
+ * ============================================================================
+ * Autofill Content Script Implementation
+ * ============================================================================
+ */
+
+const FIELD_MAP = {
+  full_name:   ['\\bfull\\s*name\\b', '^name$', 'complete\\s*name', 'applicant\\s*name', 'your\\s*name'],
+  first_name:  ['\\bfirst\\s*name\\b', '^fname$', 'given\\s*name', 'forename'],
+  last_name:   ['\\blast\\s*name\\b', '^lname$', 'surname', 'family\\s*name'],
+  email:       ['email', 'e\\.?mail', 'email\\s*address'],
+  phone:       ['phone', 'mobile', 'telephone', 'cell', 'contact\\s*no', 'ph\\.?no'],
+  linkedin:    ['linkedin', 'linked\\.?in', 'profile\\s*url'],
+  city:        ['city', 'town', 'location'],
+  country:     ['country', 'nation'],
+  github:      ['github', 'git-hub'],
+  portfolio:   ['portfolio', 'website', 'homepage', 'personal\\s*(?:site|page|web)'],
+  years_of_experience: ['years?\\s*of?\\s*(?:work\\s*)?experience', 'yoe', 'experience\\s*years'],
+  current_title: ['current\\s*(?:job\\s*)?title', 'current\\s*role', 'designation', 'job\\s*title']
+};
+
+function detectFieldType(input) {
+  const signals = [
+    input.name,
+    input.id,
+    input.placeholder,
+    input.getAttribute('aria-label'),
+    input.getAttribute('autocomplete'),
+    input.closest('label')?.textContent,
+    document.querySelector(`label[for="${input.id}"]`)?.textContent,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  for (const [fieldType, patterns] of Object.entries(FIELD_MAP)) {
+    if (patterns.some(p => new RegExp(p, 'i').test(signals))) {
+      return fieldType;
+    }
+  }
+  return null;
+}
+
+function fillField(input, value) {
+  if (!value) return false;
+  input.focus();
+
+  // For React/Vue/Angular-controlled inputs, use the prototype property descriptor
+  let prototype = HTMLInputElement.prototype;
+  if (input.tagName === 'TEXTAREA') {
+    prototype = HTMLTextAreaElement.prototype;
+  } else if (input.tagName === 'SELECT') {
+    prototype = HTMLSelectElement.prototype;
+  }
+
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+  if (descriptor && descriptor.set) {
+    descriptor.set.call(input, value);
+  } else {
+    input.value = value;
+  }
+
+  // Trigger all the events React/Angular/Vue listen to
+  ['input', 'change', 'blur'].forEach(eventType => {
+    input.dispatchEvent(new Event(eventType, { bubbles: true }));
+  });
+
+  animateFilledField(input);
+  input.blur();
+  return true;
+}
+
+function performAutofill(profile) {
+    if (!profile) return { success: false, filledCount: 0, missedFields: [] };
+    
+    const inputs = document.querySelectorAll('input, textarea, select');
+    let filledCount = 0;
+    const missedFields = [];
+    
+    inputs.forEach(input => {
+        // Skip hidden inputs, buttons, submits, search, etc.
+        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button' || input.type === 'image' || input.type === 'search') {
+            return;
+        }
+        
+        const fieldType = detectFieldType(input);
+        let valueToFill = null;
+        
+        // 1. Check standard fields
+        if (fieldType && profile[fieldType]) {
+            valueToFill = profile[fieldType];
+        }
+        
+        // 2. Check custom fields if not filled
+        if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
+            const contextText = getFieldContext(input);
+            const matchedCustom = profile.custom_fields.find(field => {
+                const cleanKey = field.key.trim().toLowerCase();
+                return cleanKey && contextText.toLowerCase().includes(cleanKey);
+            });
+            if (matchedCustom) {
+                valueToFill = matchedCustom.value;
+            }
+        }
+        
+        // Fill field if match found
+        if (valueToFill) {
+            const filled = fillField(input, valueToFill);
+            if (filled) {
+                filledCount++;
+            }
+        } else {
+            // Track unfilled/missed fields
+            // Only report text-based inputs that are currently empty
+            if (!input.value && (input.tagName === 'TEXTAREA' || input.tagName === 'SELECT' || ['text', 'email', 'tel', 'url', 'number'].includes(input.type))) {
+                const label = getCleanLabel(input);
+                if (label && !missedFields.includes(label)) {
+                    missedFields.push(label);
+                }
+            }
+        }
+    });
+    
+    return { success: true, filledCount, missedFields };
+}
+
+function getFieldContext(input) {
+    let contextParts = [];
+    
+    if (input.id) {
+        const label = document.querySelector(`label[for="${input.id}"]`);
+        if (label) contextParts.push(label.textContent);
+    }
+    const parentLabel = input.closest('label');
+    if (parentLabel) contextParts.push(parentLabel.textContent);
+    
+    if (input.placeholder) contextParts.push(input.placeholder);
+    if (input.name) contextParts.push(input.name);
+    if (input.id) contextParts.push(input.id);
+    
+    const ariaLabel = input.getAttribute('aria-label');
+    if (ariaLabel) contextParts.push(ariaLabel);
+    
+    const ariaLabelledby = input.getAttribute('aria-labelledby');
+    if (ariaLabelledby) {
+        const labelledByEl = document.getElementById(ariaLabelledby);
+        if (labelledByEl) contextParts.push(labelledByEl.textContent);
+    }
+    
+    let sibling = input.previousSibling;
+    while (sibling) {
+        if (sibling.nodeType === Node.ELEMENT_NODE && (sibling.tagName === 'LABEL' || sibling.classList.contains('label'))) {
+            contextParts.push(sibling.textContent);
+            break;
+        }
+        if (sibling.nodeType === Node.TEXT_NODE && sibling.textContent.trim()) {
+            contextParts.push(sibling.textContent);
+            break;
+        }
+        sibling = sibling.previousSibling;
+    }
+    
+    const parent = input.parentElement;
+    if (parent) {
+        const parentText = parent.innerText || parent.textContent;
+        if (parentText) {
+            const cleanText = parentText.split('\n')[0].trim();
+            if (cleanText.length > 0 && cleanText.length < 100) {
+                contextParts.push(cleanText);
+            }
+        }
+    }
+    
+    return contextParts.join(' ').toLowerCase();
+}
+
+function getCleanLabel(input) {
+    if (input.id) {
+        const label = document.querySelector(`label[for="${input.id}"]`);
+        if (label && label.textContent.trim()) {
+            return cleanLabelText(label.textContent);
+        }
+    }
+    const parentLabel = input.closest('label');
+    if (parentLabel && parentLabel.textContent.trim()) {
+        return cleanLabelText(parentLabel.textContent);
+    }
+    
+    if (input.placeholder) {
+        return cleanLabelText(input.placeholder);
+    }
+    
+    if (input.name) {
+        return capitalizeName(input.name);
+    }
+    
+    if (input.id) {
+        return capitalizeName(input.id);
+    }
+    
+    return null;
+}
+
+function cleanLabelText(text) {
+    return text.replace(/[*:]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function capitalizeName(name) {
+    return name
+        .replace(/[-_]/g, ' ')
+        .replace(/\b[a-z]/g, letter => letter.toUpperCase())
+        .trim();
+}
+
+function animateFilledField(input) {
+    input.classList.add('autofilled-field');
+    
+    if (!document.getElementById('autofill-animation-styles')) {
+        const styles = document.createElement('style');
+        styles.id = 'autofill-animation-styles';
+        styles.innerHTML = `
+            @keyframes autofill-flash {
+                0% { background-color: rgba(76, 175, 80, 0.4); box-shadow: 0 0 8px rgba(76, 175, 80, 0.6); }
+                100% { background-color: transparent; }
+            }
+            .autofilled-field {
+                animation: autofill-flash 1.5s ease-out;
+                border-color: #4caf50 !important;
+            }
+        `;
+        document.head.appendChild(styles);
+    }
+    
+    setTimeout(() => {
+        input.classList.remove('autofilled-field');
+    }, 1500);
+}
+
+async function initAutofillBadge() {
+    try {
+        chrome.storage.local.get(['settings', 'profile'], (result) => {
+            const settings = result.settings || { showAutofillBadge: true };
+            const profile = result.profile;
+            
+            if (settings.showAutofillBadge === false) {
+                removeAutofillBadge();
+                return;
+            }
+            
+            if (!profile) {
+                return;
+            }
+            
+            // Check for input fields
+            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]), textarea, select');
+            if (inputs.length < 2 && !document.querySelector('form')) {
+                return;
+            }
+            
+            if (document.getElementById('resume-fixer-autofill-widget')) {
+                return;
+            }
+            
+            injectAutofillBadge();
+        });
+    } catch (e) {
+        console.error('Error initializing autofill badge:', e);
+    }
+}
+
+function removeAutofillBadge() {
+    const el = document.getElementById('resume-fixer-autofill-widget');
+    if (el) el.remove();
+}
+
+function injectAutofillBadge() {
+    const widgetContainer = document.createElement('div');
+    widgetContainer.id = 'resume-fixer-autofill-widget';
+    widgetContainer.style.position = 'fixed';
+    widgetContainer.style.bottom = '20px';
+    widgetContainer.style.right = '20px';
+    widgetContainer.style.zIndex = '999999';
+    widgetContainer.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    
+    const shadow = widgetContainer.attachShadow({ mode: 'open' });
+    
+    const style = document.createElement('style');
+    style.textContent = `
+        .badge-wrapper {
+            display: flex;
+            align-items: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 8px 14px;
+            border-radius: 30px;
+            box-shadow: 0 4px 12px rgba(118, 75, 162, 0.3);
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            user-select: none;
+            position: relative;
+            font-size: 13px;
+            font-weight: 600;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .badge-wrapper:hover {
+            transform: translateY(-2px) scale(1.03);
+            box-shadow: 0 6px 16px rgba(118, 75, 162, 0.4);
+        }
+        
+        .badge-wrapper:active {
+            transform: translateY(0) scale(0.98);
+        }
+        
+        .badge-icon {
+            margin-right: 6px;
+            font-size: 15px;
+        }
+        
+        .badge-text {
+            white-space: nowrap;
+        }
+        
+        .btn-close {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            margin-left: 8px;
+            cursor: pointer;
+            font-size: 9px;
+            transition: background 0.2s;
+            font-weight: bold;
+        }
+        
+        .btn-close:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+
+        .toast-message {
+            position: absolute;
+            bottom: 45px;
+            right: 0;
+            background: #2d3748;
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            font-weight: normal;
+        }
+
+        .toast-message.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    `;
+    
+    const wrapper = document.createElement('div');
+    wrapper.className = 'badge-wrapper';
+    
+    const icon = document.createElement('span');
+    icon.className = 'badge-icon';
+    icon.textContent = '⚡';
+    
+    const text = document.createElement('span');
+    text.className = 'badge-text';
+    text.textContent = 'Autofill Form';
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn-close';
+    closeBtn.textContent = '✕';
+    closeBtn.title = 'Dismiss for this session';
+    
+    const toast = document.createElement('div');
+    toast.className = 'toast-message';
+    toast.textContent = 'Autofill complete!';
+    
+    wrapper.appendChild(icon);
+    wrapper.appendChild(text);
+    wrapper.appendChild(closeBtn);
+    wrapper.appendChild(toast);
+    
+    shadow.appendChild(style);
+    shadow.appendChild(wrapper);
+    document.body.appendChild(widgetContainer);
+    
+    wrapper.addEventListener('click', (e) => {
+        if (e.target === closeBtn) return;
+        
+        chrome.storage.local.get(['profile'], (result) => {
+            const currentProfile = result.profile;
+            if (!currentProfile) {
+                toast.textContent = 'Please fill out your profile in the popup first!';
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 3000);
+                return;
+            }
+            
+            const res = performAutofill(currentProfile);
+            const count = res.filledCount;
+            
+            toast.textContent = count > 0 ? `Filled ${count} fields! ⚡` : 'No matching fields to fill.';
+            toast.classList.add('show');
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        });
+    });
+    
+    closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        widgetContainer.remove();
+    });
+}
+
+// Run on load
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(initAutofillBadge, 1000);
+} else {
+    window.addEventListener('load', () => setTimeout(initAutofillBadge, 1000));
+}
+})();

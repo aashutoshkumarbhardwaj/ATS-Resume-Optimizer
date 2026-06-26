@@ -5,7 +5,7 @@
 
 // API Configuration - Update this with your Render URL
 export const API_CONFIG = {
-    BASE_URL: 'https://your-app-name.onrender.com/api', // Replace 'your-app-name' with your actual Render service name
+    BASE_URL: 'http://localhost:3000/api',
     TIMEOUT: 30000,
 };
 

@@ -70,6 +70,32 @@ class ResumeController {
             res.status(500).json({ error: error.message });
         }
     }
+
+    /**
+     * Parse resume into structured details
+     */
+    static async parseResume(req, res) {
+        try {
+            const { resumeText } = req.body;
+
+            if (!resumeText) {
+                return res.status(400).json({
+                    error: 'Missing required field: resumeText'
+                });
+            }
+
+            const ResumeParser = require('../services/resumeParser');
+            const parsedData = ResumeParser.parse(resumeText);
+
+            res.json({
+                success: true,
+                parsedData
+            });
+        } catch (error) {
+            console.error('Parse resume error:', error);
+            res.status(500).json({ error: error.message });
+        }
+    }
 }
 
 module.exports = ResumeController;

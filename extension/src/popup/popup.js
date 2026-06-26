@@ -6,7 +6,7 @@
 // Configuration - REPLACE WITH YOUR RENDER URL
 // Find your Render service URL in your Render dashboard
 // It should look like: https://your-service-name.onrender.com
-const API_BASE_URL = 'https://your-app-name.onrender.com/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 // State
 let currentJob = null;
@@ -17,7 +17,8 @@ let currentOptimization = null;
 // DOM Elements
 const tabs = {
     optimize: document.getElementById('optimizeTab'),
-    history: document.getElementById('historyTab')
+    history: document.getElementById('historyTab'),
+    autofill: document.getElementById('autofillTab')
 };
 
 const panels = {
@@ -76,9 +77,20 @@ document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
     setupEventListeners();
-    await loadDetectedJob();
     await loadSavedResume();
     await loadHistory();
+    await loadAutofillProfile();
+    
+    // First load detected job from storage
+    await loadDetectedJob();
+    
+    // Try to trigger active tab detection
+    chrome.runtime.sendMessage({ type: 'DETECT_JOB_ON_CURRENT_TAB' }, (response) => {
+        if (response && response.success && response.payload) {
+            currentJob = response.payload;
+            displayDetectedJob(response.payload);
+        }
+    });
 }
 
 /**
@@ -114,6 +126,22 @@ function setupEventListeners() {
     const copyOptimizedBtn = document.getElementById('copyOptimizedBtn');
     if (copyOptimizedBtn) {
         copyOptimizedBtn.addEventListener('click', handleCopyOptimized);
+    }
+
+    // Autofill event listeners
+    const addCustomFieldBtn = document.getElementById('addCustomFieldBtn');
+    if (addCustomFieldBtn) {
+        addCustomFieldBtn.addEventListener('click', () => addCustomFieldRow());
+    }
+    
+    const autofillForm = document.getElementById('autofillForm');
+    if (autofillForm) {
+        autofillForm.addEventListener('submit', handleSaveProfile);
+    }
+    
+    const autofillActiveTabBtn = document.getElementById('autofillActiveTabBtn');
+    if (autofillActiveTabBtn) {
+        autofillActiveTabBtn.addEventListener('click', handleAutofillTab);
     }
 }
 
@@ -240,6 +268,46 @@ async function handleFileUpload(event) {
             text: data.extractedText,
             metadata: data.metadata
         };
+        
+        // Send extracted text to backend to parse structured resume details
+        try {
+            showLoading('Extracting details from resume...');
+            const parseResponse = await fetch(`${API_BASE_URL}/resume/parse`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ resumeText: data.extractedText })
+            });
+
+            if (parseResponse.ok) {
+                const parseData = await parseResponse.json();
+                if (parseData.success && parseData.parsedData) {
+                    const parsed = parseData.parsedData;
+                    const c = parsed.contact || {};
+                    
+                    // Fill inputs in the Autofill tab
+                    document.getElementById('full_name').value = c.name || '';
+                    document.getElementById('first_name').value = c.first_name || '';
+                    document.getElementById('last_name').value = c.last_name || '';
+                    document.getElementById('email').value = c.email || '';
+                    document.getElementById('phone').value = c.phone || '';
+                    document.getElementById('city').value = c.city || '';
+                    document.getElementById('country').value = c.country || '';
+                    document.getElementById('linkedin').value = c.linkedin || '';
+                    document.getElementById('github').value = c.github || '';
+                    document.getElementById('portfolio').value = c.portfolio || '';
+                    document.getElementById('current_title').value = parsed.current_title || '';
+                    document.getElementById('years_of_experience').value = parsed.years_of_experience || '';
+                    
+                    // Trigger profile saving automatically
+                    await handleSaveProfile();
+                    showNotification('✅ Profile populated from resume details!', 'success');
+                }
+            }
+        } catch (parseError) {
+            console.error('Failed to parse resume details:', parseError);
+        }
         
         hideLoading();
     } catch (error) {
@@ -940,3 +1008,252 @@ function lazyLoadHistory() {
 
 // Initialize lazy loading
 lazyLoadHistory();
+
+/**
+ * ============================================================================
+ * Autofill Profile Implementation
+ * ============================================================================
+ */
+
+/**
+ * Load saved Autofill Profile
+ */
+async function loadAutofillProfile() {
+    try {
+        const result = await StorageUtil.getAutofillProfile();
+        if (result.success && result.profile) {
+            const p = result.profile;
+            document.getElementById('full_name').value = p.full_name || '';
+            document.getElementById('first_name').value = p.first_name || '';
+            document.getElementById('last_name').value = p.last_name || '';
+            document.getElementById('email').value = p.email || '';
+            document.getElementById('phone').value = p.phone || '';
+            document.getElementById('city').value = p.city || '';
+            document.getElementById('country').value = p.country || '';
+            document.getElementById('linkedin').value = p.linkedin || '';
+            document.getElementById('github').value = p.github || '';
+            document.getElementById('portfolio').value = p.portfolio || '';
+            document.getElementById('current_title').value = p.current_title || '';
+            document.getElementById('years_of_experience').value = p.years_of_experience || '';
+
+            // Load custom fields
+            const container = document.getElementById('customFieldsContainer');
+            container.innerHTML = '';
+            if (p.custom_fields && Array.isArray(p.custom_fields)) {
+                p.custom_fields.forEach(field => {
+                    addCustomFieldRow(field.key, field.value);
+                });
+            }
+        }
+
+        // Load settings
+        const settingsResult = await StorageUtil.getSettings();
+        if (settingsResult.success && settingsResult.settings) {
+            document.getElementById('settingShowBadge').checked = 
+                settingsResult.settings.showAutofillBadge !== false;
+        }
+    } catch (error) {
+        console.error('Error loading autofill profile:', error);
+    }
+}
+
+/**
+ * Add a new custom field input row
+ */
+function addCustomFieldRow(key = '', value = '') {
+    const container = document.getElementById('customFieldsContainer');
+    const row = document.createElement('div');
+    row.className = 'custom-field-row';
+    row.innerHTML = `
+        <input type="text" class="custom-key" placeholder="Key (e.g. Notice Period)" value="${key}" required>
+        <input type="text" class="custom-val" placeholder="Value (e.g. Immediate)" value="${value}" required>
+        <button type="button" class="btn-remove-custom" title="Remove Field">✕</button>
+    `;
+    
+    // Add remove event listener
+    row.querySelector('.btn-remove-custom').addEventListener('click', () => {
+        row.remove();
+    });
+    
+    container.appendChild(row);
+}
+
+/**
+ * Handle save profile form submit
+ */
+async function handleSaveProfile(e) {
+    if (e) e.preventDefault();
+    
+    const messageEl = document.getElementById('autofillMessage');
+    messageEl.className = 'autofill-status-message hidden';
+    
+    try {
+        // Collect custom fields
+        const customFields = [];
+        const rows = document.querySelectorAll('.custom-field-row');
+        rows.forEach(row => {
+            const key = row.querySelector('.custom-key').value.trim();
+            const value = row.querySelector('.custom-val').value.trim();
+            if (key && value) {
+                customFields.push({ key, value });
+            }
+        });
+
+        const profileData = {
+            full_name: document.getElementById('full_name').value.trim(),
+            first_name: document.getElementById('first_name').value.trim(),
+            last_name: document.getElementById('last_name').value.trim(),
+            email: document.getElementById('email').value.trim(),
+            phone: document.getElementById('phone').value.trim(),
+            city: document.getElementById('city').value.trim(),
+            country: document.getElementById('country').value.trim(),
+            linkedin: document.getElementById('linkedin').value.trim(),
+            github: document.getElementById('github').value.trim(),
+            portfolio: document.getElementById('portfolio').value.trim(),
+            current_title: document.getElementById('current_title').value.trim(),
+            years_of_experience: document.getElementById('years_of_experience').value.trim(),
+            custom_fields: customFields
+        };
+
+        // Save profile
+        const saveResult = await StorageUtil.saveAutofillProfile(profileData);
+        
+        // Save settings
+        const settingsResult = await StorageUtil.getSettings();
+        let currentSettings = {};
+        if (settingsResult.success) {
+            currentSettings = settingsResult.settings;
+        }
+        currentSettings.showAutofillBadge = document.getElementById('settingShowBadge').checked;
+        await StorageUtil.saveSettings(currentSettings);
+
+        if (saveResult.success) {
+            showAutofillStatus('Profile saved successfully! ✨', 'success');
+            
+            // Notify content script of settings update so it can add/remove the badge in real-time
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                if (tabs[0]) {
+                    chrome.tabs.sendMessage(tabs[0].id, { 
+                        type: 'SETTINGS_UPDATED',
+                        settings: currentSettings
+                    }, () => {
+                        // Ignore response, tab might not be a job site or loaded
+                    });
+                }
+            });
+        } else {
+            showAutofillStatus('Failed to save profile: ' + saveResult.error, 'error');
+        }
+    } catch (error) {
+        console.error('Error saving profile:', error);
+        showAutofillStatus('Error: ' + error.message, 'error');
+    }
+}
+
+function showAutofillStatus(text, type) {
+    const messageEl = document.getElementById('autofillMessage');
+    messageEl.textContent = text;
+    messageEl.className = `autofill-status-message ${type}`;
+    
+    // Auto-hide after 3 seconds
+    setTimeout(() => {
+        messageEl.classList.add('hidden');
+    }, 3000);
+}
+
+/**
+ * Handle Autofill Current Tab button
+ */
+async function handleAutofillTab() {
+    const messageEl = document.getElementById('autofillMessage');
+    messageEl.className = 'autofill-status-message hidden';
+    
+    try {
+        // Make sure we have the latest profile data
+        const profileResult = await StorageUtil.getAutofillProfile();
+        if (!profileResult.success || !profileResult.profile) {
+            showAutofillStatus('Please fill out and save your profile first.', 'error');
+            return;
+        }
+        
+        const profile = profileResult.profile;
+        
+        // Send message to active tab content script
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const activeTab = tabs[0];
+            if (!activeTab) {
+                showAutofillStatus('No active tab found.', 'error');
+                return;
+            }
+            
+            // Send request
+            showAutofillStatus('Autofilling form...', 'success');
+            
+            chrome.tabs.sendMessage(activeTab.id, {
+                type: 'AUTOFILL_START',
+                profile: profile
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    showAutofillStatus('Could not connect to page. Try reloading the page first.', 'error');
+                    console.error('Runtime error:', chrome.runtime.lastError);
+                    return;
+                }
+                
+                if (response && response.success) {
+                    showAutofillStatus(`Successfully filled ${response.filledCount} fields! ⚡`, 'success');
+                    if (response.missedFields && response.missedFields.length > 0) {
+                        showMissedFields(response.missedFields);
+                    } else {
+                        document.getElementById('missedFieldsSection').classList.add('hidden');
+                    }
+                } else {
+                    showAutofillStatus(response ? response.message : 'Failed to autofill page.', 'error');
+                }
+            });
+        });
+    } catch (error) {
+        console.error('Error initiating tab autofill:', error);
+        showAutofillStatus('Error: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Render missed fields under the form
+ */
+function showMissedFields(fields) {
+    const section = document.getElementById('missedFieldsSection');
+    const list = document.getElementById('missedFieldsList');
+    list.innerHTML = '';
+    
+    fields.forEach(field => {
+        const tag = document.createElement('div');
+        tag.className = 'missed-field-tag';
+        tag.innerHTML = `
+            <span>${field}</span>
+            <button type="button" class="btn-add-missed" title="Add as custom field">+</button>
+        `;
+        
+        tag.querySelector('.btn-add-missed').addEventListener('click', () => {
+            // Add a new custom field row
+            addCustomFieldRow(field, '');
+            tag.remove();
+            
+            // Hide the missed fields section if there are no tags left
+            if (list.children.length === 0) {
+                section.classList.add('hidden');
+            }
+            
+            // Focus on the newly added custom field value input
+            const rows = document.querySelectorAll('.custom-field-row');
+            if (rows.length > 0) {
+                const lastRow = rows[rows.length - 1];
+                const valInput = lastRow.querySelector('.custom-val');
+                if (valInput) valInput.focus();
+            }
+        });
+        
+        list.appendChild(tag);
+    });
+    
+    section.classList.remove('hidden');
+}

@@ -197,6 +197,32 @@ const StorageUtil = {
     },
 
     /**
+     * Save autofill profile to storage
+     */
+    async saveAutofillProfile(profileData) {
+        try {
+            await chrome.storage.local.set({ profile: profileData });
+            return { success: true };
+        } catch (error) {
+            console.error('Failed to save autofill profile:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
+     * Get autofill profile from storage
+     */
+    async getAutofillProfile() {
+        try {
+            const result = await chrome.storage.local.get(['profile']);
+            return { success: true, profile: result.profile || null };
+        } catch (error) {
+            console.error('Failed to get autofill profile:', error);
+            return { success: false, error: error.message };
+        }
+    },
+
+    /**
      * Get settings
      */
     async getSettings() {
@@ -204,12 +230,16 @@ const StorageUtil = {
             const result = await chrome.storage.local.get(['settings']);
             const defaultSettings = {
                 autoDetect: true,
-                apiEndpoint: 'http://localhost:5000'
+                apiEndpoint: 'http://localhost:5000',
+                showAutofillBadge: true
             };
+
+            // Merge stored settings with defaults to ensure new fields are populated
+            const mergedSettings = result.settings ? { ...defaultSettings, ...result.settings } : defaultSettings;
 
             return {
                 success: true,
-                settings: result.settings || defaultSettings
+                settings: mergedSettings
             };
         } catch (error) {
             console.error('Failed to get settings:', error);

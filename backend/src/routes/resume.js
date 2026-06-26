@@ -38,6 +38,9 @@ router.get('/suggestions', ResumeController.getSuggestions);
 // Optimize resume
 router.post('/optimize', ResumeController.optimizeResume);
 
+// Parse resume
+router.post('/parse', ResumeController.parseResume);
+
 /**
  * POST /api/resume/improve
  * Improve resume file in place

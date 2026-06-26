@@ -4,7 +4,7 @@
  */
 
 // API Base URL - Update this with your Render URL
-const BASE_URL = 'https://your-app-name.onrender.com/api'; // Replace 'your-app-name' with your actual Render service name
+const BASE_URL = 'http://localhost:3000/api';
 
 /**
  * Make API call

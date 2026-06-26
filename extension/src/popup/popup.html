@@ -17,6 +17,7 @@
         <div class="tabs">
             <button class="tab-btn active" data-tab="optimize">Optimize</button>
             <button class="tab-btn" data-tab="history">History</button>
+            <button class="tab-btn" data-tab="autofill">⚡ Autofill</button>
         </div>
 
         <div class="main-content">
@@ -201,6 +202,118 @@
                     <h3>📜 Optimization History</h3>
                     <div id="historyList" class="history-list"></div>
                     <button id="clearHistoryBtn" class="btn btn-secondary">Clear All History</button>
+                </div>
+            </div>
+
+            <!-- Autofill Tab -->
+            <div id="autofillTab" class="tab-content">
+                <div class="panel">
+                    <h3>⚡ Autofill Profile</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 12px; line-height: 1.4;">
+                        Fill in your profile details once. We will auto-fill them when you visit a job application page. All data is stored locally.
+                    </p>
+                    
+                    <form id="autofillForm">
+                        <div class="form-section-title">👤 Personal Info</div>
+                        <div class="form-group">
+                            <label for="full_name">Full Name</label>
+                            <input type="text" id="full_name" placeholder="John Doe">
+                        </div>
+                        
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="first_name">First Name</label>
+                                <input type="text" id="first_name" placeholder="John">
+                            </div>
+                            <div class="form-group">
+                                <label for="last_name">Last Name</label>
+                                <input type="text" id="last_name" placeholder="Doe">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="email">Email Address</label>
+                            <input type="email" id="email" placeholder="john.doe@example.com">
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="phone">Phone Number</label>
+                                <input type="tel" id="phone" placeholder="+1 (555) 019-2834">
+                            </div>
+                            <div class="form-group">
+                                <label for="city">City</label>
+                                <input type="text" id="city" placeholder="San Francisco">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="country">Country</label>
+                            <input type="text" id="country" placeholder="United States">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">🌐 Social & Portfolio Links</div>
+                        <div class="form-group">
+                            <label for="linkedin">LinkedIn Profile URL</label>
+                            <input type="url" id="linkedin" placeholder="https://linkedin.com/in/johndoe">
+                        </div>
+                        <div class="form-group">
+                            <label for="github">GitHub Profile URL</label>
+                            <input type="url" id="github" placeholder="https://github.com/johndoe">
+                        </div>
+                        <div class="form-group">
+                            <label for="portfolio">Portfolio / Personal Website</label>
+                            <input type="url" id="portfolio" placeholder="https://johndoe.dev">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">💼 Professional Info</div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="current_title">Current Job Title</label>
+                                <input type="text" id="current_title" placeholder="Software Engineer">
+                            </div>
+                            <div class="form-group">
+                                <label for="years_of_experience">Years of Experience</label>
+                                <input type="number" id="years_of_experience" placeholder="3" min="0">
+                            </div>
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>🛠 Custom Fields</span>
+                            <button type="button" id="addCustomFieldBtn" class="btn-text-action">+ Add Custom Field</button>
+                        </div>
+                        <p style="font-size: 10px; color: #888; margin-top: -4px; margin-bottom: 8px;">
+                            Define any extra fields career forms might ask (e.g. Notice Period, Desired Salary).
+                        </p>
+                        
+                        <div id="customFieldsContainer" class="custom-fields-container">
+                            <!-- Dynamic rows will be inserted here -->
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">⚙️ Settings</div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="settingShowBadge" checked>
+                            <label for="settingShowBadge" style="font-weight: normal; cursor: pointer;">Show floating "Autofill" button on career pages</label>
+                        </div>
+
+                        <div style="margin-top: 20px; display: flex; gap: 8px;">
+                            <button type="submit" id="saveProfileBtn" class="btn btn-primary" style="flex: 1;">💾 Save Profile</button>
+                            <button type="button" id="autofillActiveTabBtn" class="btn btn-secondary" style="flex: 1;">⚡ Autofill Tab</button>
+                        </div>
+                    </form>
+                    
+                    <div id="autofillMessage" class="autofill-status-message hidden"></div>
+
+                    <!-- Missed Fields Reporter Panel -->
+                    <div id="missedFieldsSection" class="hidden" style="margin-top: 16px; border-top: 1px dashed #e2e8f0; padding-top: 12px; text-align: left;">
+                        <h4 style="color: #e53e3e; font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; font-weight: 700;">
+                            <span>⚠️</span> Unfilled Fields on Current Page
+                        </h4>
+                        <p style="font-size: 10px; color: #718096; margin-bottom: 8px; line-height: 1.3;">
+                            Click the <strong>+</strong> next to any field to add it to your Custom Fields profile.
+                        </p>
+                        <div id="missedFieldsList" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+                    </div>
                 </div>
             </div>
         </div>
