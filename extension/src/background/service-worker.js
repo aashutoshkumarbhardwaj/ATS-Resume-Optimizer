@@ -1,119 +1,214 @@
 /**
- * Background Service Worker
+ * Background Service Worker - Fixed Version
  * Handles background tasks, message passing, and API communication
+ * 
+ * Fixes:
+ * - Offloads long-running tasks from popup
+ * - Handles file processing
+ * - Manages API calls
+ * - Single response pattern
  */
 
-// Store detected job data
-let currentDetectedJob = null;
-
-// API Configuration
-// TODO: Replace 'http://localhost:5000/api' with your AWS backend URL when deploying
 const API_BASE_URL = 'http://localhost:3000/api';
 
-// Listen for messages from content scripts and popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === 'GET_RESUME_TEXT') {
-        // Handle getting resume text from a page
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            chrome.tabs.sendMessage(tabs[0].id, { type: 'EXTRACT_RESUME' }, (response) => {
-                sendResponse(response);
-            });
-        });
-        return true; // Will respond asynchronously
-    }
+// Track active tabs to detect switches
+let lastActiveTab = null;
 
-    if (request.type === 'ANALYZE_RESUME') {
-        // Forward analysis request to backend
-        analyzeResume(request.payload, sendResponse);
-        return true; // Will respond asynchronously
-    }
-
-    if (request.type === 'JOB_DETECTED') {
-        // Store detected job data
-        currentDetectedJob = request.payload;
-        console.log('Job detected:', currentDetectedJob);
+// Listen for tab changes
+chrome.tabs.onActivated.addListener((activeInfo) => {
+    if (lastActiveTab !== activeInfo.tabId) {
+        lastActiveTab = activeInfo.tabId;
         
-        // Store in chrome storage
-        chrome.storage.local.set({ 
-            currentJob: currentDetectedJob,
-            jobDetectedAt: Date.now()
+        // Notify popup that tab switched
+        chrome.runtime.sendMessage({
+            type: 'TAB_SWITCHED'
+        }).catch(() => {
+            // Popup likely closed, ignore
         });
-        
-        // Update badge to show job is detected
-        chrome.action.setBadgeText({ text: '1' });
-        chrome.action.setBadgeBackgroundColor({ color: '#667eea' });
-        
-        sendResponse({ success: true });
-        return true;
-    }
-
-    if (request.type === 'GET_CURRENT_JOB') {
-        // Return currently detected job
-        if (currentDetectedJob) {
-            sendResponse({ success: true, job: currentDetectedJob });
-        } else {
-            // Try to get from storage
-            chrome.storage.local.get(['currentJob'], (result) => {
-                if (result.currentJob) {
-                    currentDetectedJob = result.currentJob;
-                    sendResponse({ success: true, job: result.currentJob });
-                } else {
-                    sendResponse({ success: false, message: 'No job detected' });
-                }
-            });
-            return true;
-        }
-    }
-
-    if (request.type === 'DETECT_JOB_ON_CURRENT_TAB') {
-        // Request job detection from content script
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, { type: 'DETECT_JOB' }, (response) => {
-                    if (response && response.success) {
-                        currentDetectedJob = response.payload;
-                        chrome.storage.local.set({ currentJob: currentDetectedJob });
-                    }
-                    sendResponse(response);
-                });
-            } else {
-                sendResponse({ success: false, message: 'No active tab' });
-            }
-        });
-        return true;
-    }
-
-    if (request.type === 'OPEN_POPUP') {
-        // Store job data and let popup retrieve it
-        currentDetectedJob = request.payload;
-        chrome.storage.local.set({ currentJob: currentDetectedJob });
-        sendResponse({ success: true });
     }
 });
 
-/**
- * Analyze resume via backend API
- */
-async function analyzeResume(payload, sendResponse) {
+// Main message listener
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Use try-catch to ensure sendResponse is called once
     try {
-        const response = await fetch(`${API_BASE_URL}/resume/analyze`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload)
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+        switch (request.type) {
+            case 'PROCESS_FILE':
+                processFile(request.payload, sendResponse);
+                return true;
+            
+            case 'PARSE_RESUME':
+                parseResume(request.payload, sendResponse);
+                return true;
+            
+            case 'ANALYZE_RESUME':
+                analyzeResume(request.payload, sendResponse);
+                return true;
+            
+            case 'OPTIMIZE_RESUME':
+                optimizeResume(request.payload, sendResponse);
+                return true;
+            
+            case 'GENERATE_DOCUMENT':
+                generateDocument(request.payload, sendResponse);
+                return true;
+            
+            case 'JOB_DETECTED':
+                handleJobDetected(request.payload, sendResponse);
+                return false;
+            
+            default:
+                sendResponse({ success: false, error: 'Unknown request type' });
+                return false;
         }
+    } catch (error) {
+        console.error('[Background] Error:', error);
+        sendResponse({ success: false, error: error.message });
+        return false;
+    }
+});
 
+// ============================================================================
+// HANDLERS
+// ============================================================================
+
+/**
+ * Process uploaded file
+ */
+async function processFile(payload, sendResponse) {
+    try {
+        console.log('[Background] Processing file...');
+        
+        const { buffer, fileName, fileSize } = payload;
+        const uint8Array = new Uint8Array(buffer);
+        const blob = new Blob([uint8Array]);
+        
+        // Send to backend for processing
+        const formData = new FormData();
+        formData.append('file', blob, fileName);
+        
+        const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (!response.ok) throw new Error('Upload failed');
+        
         const data = await response.json();
         sendResponse({ success: true, data });
     } catch (error) {
-        console.error('Error analyzing resume:', error);
+        console.error('[Background] File processing error:', error);
         sendResponse({ success: false, error: error.message });
     }
+}
+
+/**
+ * Parse resume details
+ */
+async function parseResume(payload, sendResponse) {
+    try {
+        console.log('[Background] Parsing resume...');
+        
+        const response = await fetch(`${API_BASE_URL}/resume/parse`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error('Parse failed');
+        
+        const data = await response.json();
+        sendResponse({ success: true, data: data.parsedData });
+    } catch (error) {
+        console.error('[Background] Parse error:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Analyze resume
+ */
+async function analyzeResume(payload, sendResponse) {
+    try {
+        console.log('[Background] Analyzing resume...');
+        
+        const response = await fetch(`${API_BASE_URL}/analysis/analyze`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error('Analysis failed');
+        
+        const data = await response.json();
+        sendResponse({ success: true, data });
+    } catch (error) {
+        console.error('[Background] Analysis error:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Optimize resume
+ */
+async function optimizeResume(payload, sendResponse) {
+    try {
+        console.log('[Background] Optimizing resume...');
+        
+        const response = await fetch(`${API_BASE_URL}/analysis/optimize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error('Optimization failed');
+        
+        const data = await response.json();
+        sendResponse({ success: true, data });
+    } catch (error) {
+        console.error('[Background] Optimization error:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Generate document
+ */
+async function generateDocument(payload, sendResponse) {
+    try {
+        console.log('[Background] Generating document...');
+        
+        const response = await fetch(`${API_BASE_URL}/documents/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error('Generation failed');
+        
+        const blob = await response.blob();
+        sendResponse({ success: true, blob: blob.arrayBuffer() });
+    } catch (error) {
+        console.error('[Background] Generation error:', error);
+        sendResponse({ success: false, error: error.message });
+    }
+}
+
+/**
+ * Handle job detected
+ */
+function handleJobDetected(payload, sendResponse) {
+    console.log('[Background] Job detected:', payload);
+    
+    chrome.storage.local.set({
+        currentJob: payload,
+        jobDetectedAt: Date.now()
+    });
+    
+    chrome.action.setBadgeText({ text: '1' });
+    chrome.action.setBadgeBackgroundColor({ color: '#667eea' });
+    
+    sendResponse({ success: true });
 }
 
 // Listen for extension installation/update
