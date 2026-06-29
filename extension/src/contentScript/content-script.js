@@ -1823,39 +1823,78 @@ function animateFilledField(input) {
 
 async function initAutofillBadge() {
     try {
-        chrome.storage.local.get(['settings', 'profile'], (result) => {
-            const settings = result.settings || { showAutofillBadge: true };
-            const profile = result.profile;
-            
-            if (settings.showAutofillBadge === false) {
-                removeAutofillBadge();
-                return;
-            }
-            
-            if (!profile) {
-                return;
-            }
-            
-            // Check for input fields
-            const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]), textarea, select');
-            if (inputs.length < 2 && !document.querySelector('form')) {
-                return;
-            }
-            
-            if (document.getElementById('resume-fixer-autofill-widget')) {
-                return;
-            }
-            
-            injectAutofillBadge();
+        return new Promise((resolve) => {
+            // Use proper chrome.storage API with error handling
+            chrome.storage.local.get(['settings', 'profile'], (result) => {
+                try {
+                    // Check for chrome errors
+                    if (chrome.runtime.lastError) {
+                        console.error('[Content] Storage error:', chrome.runtime.lastError);
+                        resolve();
+                        return;
+                    }
+                    
+                    const settings = result.settings || { showAutofillBadge: true };
+                    const profile = result.profile;
+                    
+                    if (settings.showAutofillBadge === false) {
+                        removeAutofillBadge();
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check if profile exists and has data
+                    if (!profile || typeof profile !== 'object') {
+                        console.log('[Content] No profile found for autofill badge');
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check for input fields
+                    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]), textarea, select');
+                    if (inputs.length < 2 && !document.querySelector('form')) {
+                        console.log('[Content] Insufficient form fields for autofill badge');
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check if badge already exists
+                    if (document.getElementById('resume-fixer-autofill-widget')) {
+                        console.log('[Content] Autofill badge already exists');
+                        resolve();
+                        return;
+                    }
+                    
+                    // Safe injection
+                    try {
+                        injectAutofillBadge();
+                        console.log('[Content] Autofill badge injected successfully');
+                    } catch (injectError) {
+                        console.error('[Content] Error injecting autofill badge:', injectError);
+                    }
+                    
+                    resolve();
+                } catch (e) {
+                    console.error('[Content] Error in storage callback:', e);
+                    resolve();
+                }
+            });
         });
     } catch (e) {
-        console.error('Error initializing autofill badge:', e);
+        console.error('[Content] Error initializing autofill badge:', e);
     }
 }
 
 function removeAutofillBadge() {
-    const el = document.getElementById('resume-fixer-autofill-widget');
-    if (el) el.remove();
+    try {
+        const el = document.getElementById('resume-fixer-autofill-widget');
+        if (el) {
+            el.remove();
+            console.log('[Content] Autofill badge removed');
+        }
+    } catch (e) {
+        console.error('[Content] Error removing autofill badge:', e);
+    }
 }
 
 function injectAutofillBadge() {

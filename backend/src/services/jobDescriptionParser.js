@@ -12,11 +12,26 @@ class JobDescriptionParser {
      */
     static parse(jobDescription) {
         if (!jobDescription || typeof jobDescription !== 'string') {
-            throw new Error('Invalid job description');
+            throw new Error('Invalid job description: must be a non-empty string');
+        }
+
+        // Trim and validate
+        const trimmed = jobDescription.trim();
+        
+        if (!trimmed) {
+            throw new Error('Invalid job description: cannot be empty or whitespace only');
+        }
+
+        if (trimmed.length < 50) {
+            throw new Error('Invalid job description: minimum 50 characters required');
+        }
+
+        if (trimmed.length > 50000) {
+            throw new Error('Invalid job description: maximum 50000 characters allowed');
         }
 
         // Generate cache key from job description hash
-        const cacheKey = 'job_' + crypto.createHash('md5').update(jobDescription).digest('hex');
+        const cacheKey = 'job_' + crypto.createHash('md5').update(trimmed).digest('hex');
         
         // Check cache first
         const cached = cache.get(cacheKey);
@@ -26,17 +41,17 @@ class JobDescriptionParser {
         }
 
         // Parse job description
-        const sections = this.identifySections(jobDescription);
-        const keywords = this.extractKeywords(jobDescription, sections);
-        const requirements = this.classifyRequirements(jobDescription, sections);
-        const metadata = this.extractMetadata(jobDescription);
+        const sections = this.identifySections(trimmed);
+        const keywords = this.extractKeywords(trimmed, sections);
+        const requirements = this.classifyRequirements(trimmed, sections);
+        const metadata = this.extractMetadata(trimmed);
 
         const result = {
             sections,
             keywords,
             requirements,
             metadata,
-            rawText: jobDescription
+            rawText: trimmed
         };
 
         // Cache the result for 1 hour

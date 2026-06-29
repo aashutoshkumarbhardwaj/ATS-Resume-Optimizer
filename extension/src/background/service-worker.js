@@ -73,124 +73,178 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // ============================================================================
 
 /**
- * Process uploaded file
+ * Process uploaded file - with improved error handling
  */
 async function processFile(payload, sendResponse) {
     try {
         console.log('[Background] Processing file...');
         
+        if (!payload || !payload.buffer) {
+            throw new Error('Invalid payload: missing buffer');
+        }
+        
         const { buffer, fileName, fileSize } = payload;
         const uint8Array = new Uint8Array(buffer);
         const blob = new Blob([uint8Array]);
         
-        // Send to backend for processing
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        
         const formData = new FormData();
         formData.append('file', blob, fileName);
         
         const response = await fetch(`${API_BASE_URL}/documents/upload`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: controller.signal
         });
         
-        if (!response.ok) throw new Error('Upload failed');
+        clearTimeout(timeout);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            throw new Error(errorData.error || 'Upload failed');
+        }
         
         const data = await response.json();
         sendResponse({ success: true, data });
     } catch (error) {
         console.error('[Background] File processing error:', error);
-        sendResponse({ success: false, error: error.message });
+        
+        let errorMessage = error.message;
+        if (error.name === 'AbortError') {
+            errorMessage = 'Upload timed out';
+        } else if (error.message.includes('Failed to fetch')) {
+            errorMessage = 'Cannot connect to server at ' + API_BASE_URL;
+        }
+        
+        sendResponse({ success: false, error: errorMessage });
     }
 }
 
 /**
- * Parse resume details
+ * Parse resume - with improved error handling
  */
 async function parseResume(payload, sendResponse) {
     try {
         console.log('[Background] Parsing resume...');
         
+        if (!payload || !payload.resumeText) {
+            throw new Error('Missing required field: resumeText');
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        
         const response = await fetch(`${API_BASE_URL}/resume/parse`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: controller.signal
         });
         
-        if (!response.ok) throw new Error('Parse failed');
+        clearTimeout(timeout);
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            throw new Error(errorData.error || 'Parse failed');
+        }
         
         const data = await response.json();
         sendResponse({ success: true, data: data.parsedData });
     } catch (error) {
         console.error('[Background] Parse error:', error);
-        sendResponse({ success: false, error: error.message });
+        
+        let errorMessage = error.message;
+        if (error.name === 'AbortError') {
+            errorMessage = 'Parse request timed out';
+        }
+        
+        sendResponse({ success: false, error: errorMessage });
     }
 }
 
 /**
- * Analyze resume
- */
-async function analyzeResume(payload, sendResponse) {
-    try {
-        console.log('[Background] Analyzing resume...');
-        
-        const response = await fetch(`${API_BASE_URL}/analysis/analyze`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        if (!response.ok) throw new Error('Analysis failed');
-        
-        const data = await response.json();
-        sendResponse({ success: true, data });
-    } catch (error) {
-        console.error('[Background] Analysis error:', error);
-        sendResponse({ success: false, error: error.message });
-    }
-}
-
-/**
- * Optimize resume
+ * Optimize resume - with improved error handling
  */
 async function optimizeResume(payload, sendResponse) {
     try {
         console.log('[Background] Optimizing resume...');
         
+        if (!payload || !payload.resumeText || !payload.jobDescription) {
+            throw new Error('Missing required fields');
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60000); // 60 second timeout for optimization
+
         const response = await fetch(`${API_BASE_URL}/analysis/optimize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: controller.signal
         });
+
+        clearTimeout(timeout);
         
-        if (!response.ok) throw new Error('Optimization failed');
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            throw new Error(errorData.error || 'Optimization failed');
+        }
         
         const data = await response.json();
         sendResponse({ success: true, data });
     } catch (error) {
         console.error('[Background] Optimization error:', error);
-        sendResponse({ success: false, error: error.message });
+        
+        let errorMessage = error.message;
+        if (error.name === 'AbortError') {
+            errorMessage = 'Optimization request timed out';
+        }
+        
+        sendResponse({ success: false, error: errorMessage });
     }
 }
 
 /**
- * Generate document
+ * Generate document - with improved error handling
  */
 async function generateDocument(payload, sendResponse) {
     try {
         console.log('[Background] Generating document...');
         
+        if (!payload) {
+            throw new Error('Invalid payload');
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+
         const response = await fetch(`${API_BASE_URL}/documents/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify(payload),
+            signal: controller.signal
         });
+
+        clearTimeout(timeout);
         
-        if (!response.ok) throw new Error('Generation failed');
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            throw new Error(errorData.error || 'Generation failed');
+        }
         
         const blob = await response.blob();
-        sendResponse({ success: true, blob: blob.arrayBuffer() });
+        sendResponse({ success: true, blob: await blob.arrayBuffer() });
     } catch (error) {
         console.error('[Background] Generation error:', error);
-        sendResponse({ success: false, error: error.message });
+        
+        let errorMessage = error.message;
+        if (error.name === 'AbortError') {
+            errorMessage = 'Document generation timed out';
+        }
+        
+        sendResponse({ success: false, error: errorMessage });
     }
 }
 

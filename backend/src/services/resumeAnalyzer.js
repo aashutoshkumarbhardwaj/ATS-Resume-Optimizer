@@ -16,6 +16,23 @@ class ResumeAnalyzer {
      * Analyze resume against job description
      */
     static async analyze(resumeText, jobDescription) {
+        if (!resumeText || typeof resumeText !== 'string') {
+            throw new Error('Invalid resume: must be a non-empty string');
+        }
+
+        if (!jobDescription || typeof jobDescription !== 'string') {
+            throw new Error('Invalid job description: must be a non-empty string');
+        }
+
+        // Validate minimum content
+        if (resumeText.trim().length < 50) {
+            throw new Error('Resume too short: minimum 50 characters required');
+        }
+
+        if (jobDescription.trim().length < 50) {
+            throw new Error('Job description too short: minimum 50 characters required');
+        }
+
         const analyzer = new ResumeAnalyzer();
         return analyzer.performAnalysis(resumeText, jobDescription);
     }

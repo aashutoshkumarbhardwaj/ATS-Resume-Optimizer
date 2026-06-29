@@ -14,14 +14,56 @@ class AnalysisController {
         try {
             const { resumeText, jobDescription } = req.body;
 
+            // Comprehensive validation
             if (!resumeText || !jobDescription) {
                 return res.status(400).json({
+                    success: false,
                     error: 'Missing required fields: resumeText, jobDescription'
                 });
             }
 
+            // Type validation
+            if (typeof resumeText !== 'string' || typeof jobDescription !== 'string') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Invalid input: resumeText and jobDescription must be strings'
+                });
+            }
+
+            // Trim and validate content
+            const cleanResumeText = resumeText.trim();
+            const cleanJobDescription = jobDescription.trim();
+
+            if (cleanResumeText.length < 50) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Resume too short. Minimum 50 characters required.'
+                });
+            }
+
+            if (cleanJobDescription.length < 50) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Job description too short. Minimum 50 characters required.'
+                });
+            }
+
+            if (cleanResumeText.length > 50000) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Resume too long. Maximum 50000 characters allowed.'
+                });
+            }
+
+            if (cleanJobDescription.length > 50000) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Job description too long. Maximum 50000 characters allowed.'
+                });
+            }
+
             // Perform enhanced analysis
-            const analysisResult = await ResumeAnalyzer.analyze(resumeText, jobDescription);
+            const analysisResult = await ResumeAnalyzer.analyze(cleanResumeText, cleanJobDescription);
 
             res.json({
                 success: true,
@@ -29,9 +71,9 @@ class AnalysisController {
             });
         } catch (error) {
             console.error('Analysis error:', error);
-            res.status(500).json({ 
-                error: error.message,
-                success: false
+            res.status(500).json({
+                success: false,
+                error: error.message || 'Analysis failed. Please try again.'
             });
         }
     }

@@ -3,7 +3,8 @@
  * Business logic for resume operations
  */
 
-const Analysis = require('../models/Analysis');
+// Removed MongoDB dependency - Analysis model not needed for basic parsing/analysis
+// const Analysis = require('../models/Analysis');
 
 class ResumeService {
     /**

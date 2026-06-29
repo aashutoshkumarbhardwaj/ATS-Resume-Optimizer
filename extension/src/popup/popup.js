@@ -30,66 +30,80 @@ let tabs = null;
 let panels = null;
 let elements = null;
 
-// Initialize DOM references
+// Initialize DOM references with null safety
 function initializeDOMElements() {
     if (elements) return; // Already initialized
     
-    tabs = {
-        optimize: document.getElementById('optimizeTab'),
-        history: document.getElementById('historyTab'),
-        autofill: document.getElementById('autofillTab')
-    };
+    try {
+        tabs = {
+            optimize: document.getElementById('optimizeTab'),
+            history: document.getElementById('historyTab'),
+            autofill: document.getElementById('autofillTab')
+        };
 
-    panels = {
-        jobDetection: document.getElementById('jobDetectionPanel'),
-        resumeUpload: document.getElementById('resumeUploadPanel'),
-        analysis: document.getElementById('analysisPanel'),
-        optimization: document.getElementById('optimizationPanel')
-    };
+        panels = {
+            jobDetection: document.getElementById('jobDetectionPanel'),
+            resumeUpload: document.getElementById('resumeUploadPanel'),
+            analysis: document.getElementById('analysisPanel'),
+            optimization: document.getElementById('optimizationPanel')
+        };
 
-    elements = {
-        // Job Detection
-        detectedJobInfo: document.getElementById('detectedJobInfo'),
-        detectedJobTitle: document.getElementById('detectedJobTitle'),
-        detectedCompany: document.getElementById('detectedCompany'),
-        jobDescription: document.getElementById('jobDescription'),
+        elements = {
+            // Job Detection
+            detectedJobInfo: document.getElementById('detectedJobInfo'),
+            detectedJobTitle: document.getElementById('detectedJobTitle'),
+            detectedCompany: document.getElementById('detectedCompany'),
+            jobDescription: document.getElementById('jobDescription'),
+            
+            // Resume Upload
+            uploadArea: document.getElementById('uploadArea'),
+            resumeFile: document.getElementById('resumeFile'),
+            uploadedFileInfo: document.getElementById('uploadedFileInfo'),
+            fileName: document.getElementById('fileName'),
+            removeFile: document.getElementById('removeFile'),
+            resumeText: document.getElementById('resumeText'),
+            
+            // Buttons
+            analyzeBtn: document.getElementById('analyzeBtn'),
+            optimizeBtn: document.getElementById('optimizeBtn'),
+            
+            // Analysis Results
+            atsScore: document.getElementById('atsScore'),
+            keywordBar: document.getElementById('keywordBar'),
+            experienceBar: document.getElementById('experienceBar'),
+            skillsBar: document.getElementById('skillsBar'),
+            matchedKeywords: document.getElementById('matchedKeywords'),
+            missingKeywords: document.getElementById('missingKeywords'),
+            suggestionsList: document.getElementById('suggestionsList'),
+            
+            // Optimization Results
+            originalScore: document.getElementById('originalScore'),
+            optimizedScore: document.getElementById('optimizedScore'),
+            scoreImprovement: document.getElementById('scoreImprovement'),
+            changesList: document.getElementById('changesList'),
+            
+            // History
+            historyList: document.getElementById('historyList'),
+            clearHistoryBtn: document.getElementById('clearHistoryBtn'),
+            
+            // Loading & Error
+            loadingSpinner: document.getElementById('loadingSpinner'),
+            loadingText: document.getElementById('loadingText'),
+            errorMessage: document.getElementById('errorMessage')
+        };
         
-        // Resume Upload
-        uploadArea: document.getElementById('uploadArea'),
-        resumeFile: document.getElementById('resumeFile'),
-        uploadedFileInfo: document.getElementById('uploadedFileInfo'),
-        fileName: document.getElementById('fileName'),
-        removeFile: document.getElementById('removeFile'),
-        resumeText: document.getElementById('resumeText'),
+        // Validate critical elements exist
+        const criticalElements = ['jobDescription', 'resumeText', 'analyzeBtn'];
+        const missing = criticalElements.filter(key => !elements[key]);
         
-        // Buttons
-        analyzeBtn: document.getElementById('analyzeBtn'),
-        optimizeBtn: document.getElementById('optimizeBtn'),
-        
-        // Analysis Results
-        atsScore: document.getElementById('atsScore'),
-        keywordBar: document.getElementById('keywordBar'),
-        experienceBar: document.getElementById('experienceBar'),
-        skillsBar: document.getElementById('skillsBar'),
-        matchedKeywords: document.getElementById('matchedKeywords'),
-        missingKeywords: document.getElementById('missingKeywords'),
-        suggestionsList: document.getElementById('suggestionsList'),
-        
-        // Optimization Results
-        originalScore: document.getElementById('originalScore'),
-        optimizedScore: document.getElementById('optimizedScore'),
-        scoreImprovement: document.getElementById('scoreImprovement'),
-        changesList: document.getElementById('changesList'),
-        
-        // History
-        historyList: document.getElementById('historyList'),
-        clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-        
-        // Loading & Error
-        loadingSpinner: document.getElementById('loadingSpinner'),
-        loadingText: document.getElementById('loadingText'),
-        errorMessage: document.getElementById('errorMessage')
-    };
+        if (missing.length > 0) {
+            console.warn('[Popup] Missing critical DOM elements:', missing);
+            throw new Error(`Missing DOM elements: ${missing.join(', ')}`);
+        }
+    } catch (error) {
+        console.error('[Popup] Failed to initialize DOM elements:', error);
+        throw error;
+    }
 }
 
 // Initialize
@@ -102,16 +116,25 @@ document.addEventListener('DOMContentLoaded', () => {
 /**
  * Setup Auto-Close Logic
  * Closes popup when user focuses elsewhere or switches tabs
+ * BUT NOT during active file processing!
  */
 function setupAutoClose() {
-    // Close popup when window loses focus
+    // Close popup when window loses focus (but not during tasks)
     window.addEventListener('blur', () => {
+        if (PopupState.hasActiveTasks()) {
+            console.log('[Popup] Lost focus but tasks pending, staying open...');
+            return;
+        }
         console.log('[Popup] Lost focus, closing...');
         closePopupSafely();
     });
     
-    // Close popup when popup itself loses focus
+    // Close popup when popup itself loses focus (but not during tasks)
     window.addEventListener('focusout', (e) => {
+        if (PopupState.hasActiveTasks()) {
+            console.log('[Popup] FocusOut but tasks pending, staying open...');
+            return;
+        }
         // Only close if focus moved to something outside
         if (!document.hasFocus()) {
             console.log('[Popup] FocusOut detected, closing...');
@@ -122,6 +145,11 @@ function setupAutoClose() {
     // Listen for tab switch notification from background
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.type === 'TAB_SWITCHED') {
+            if (PopupState.hasActiveTasks()) {
+                console.log('[Popup] Tab switched but tasks pending, staying open...');
+                sendResponse({ success: true });
+                return;
+            }
             console.log('[Popup] Tab switched, closing...');
             closePopupSafely();
             sendResponse({ success: true });
@@ -393,8 +421,7 @@ async function loadSavedResume() {
 }
 
 /**
- * Handle File Upload
- * Offloads heavy processing to background script
+ * Handle File Upload - with proper response handling
  */
 async function handleFileUpload(event) {
     const file = event.target.files[0];
@@ -431,62 +458,96 @@ async function handleFileUpload(event) {
                 fileSize: file.size
             }
         }, (response) => {
-            if (response && response.success) {
-                const data = response.data;
+            try {
+                if (!response) {
+                    throw new Error('No response from background script');
+                }
                 
-                // Save extracted text
-                elements.resumeText.value = data.extractedText;
-                displayUploadedFile(file.name);
-                
-                // Save to storage
-                chrome.storage.local.set({
-                    resume: {
-                        text: data.extractedText,
-                        metadata: {
-                            filename: file.name,
-                            size: file.size,
-                            format: data.metadata.format
-                        }
-                    }
-                });
-                
-                currentResume = {
-                    text: data.extractedText,
-                    metadata: data.metadata
-                };
-                
-                // Parse resume details in background
-                chrome.runtime.sendMessage({
-                    type: 'PARSE_RESUME',
-                    payload: { resumeText: data.extractedText }
-                }, (parseResponse) => {
-                    if (parseResponse && parseResponse.success) {
-                        const parsed = parseResponse.data;
-                        const c = parsed.contact || {};
-                        
-                        // Fill inputs in the Autofill tab
-                        document.getElementById('full_name').value = c.name || '';
-                        document.getElementById('first_name').value = c.first_name || '';
-                        document.getElementById('last_name').value = c.last_name || '';
-                        document.getElementById('email').value = c.email || '';
-                        document.getElementById('phone').value = c.phone || '';
-                        document.getElementById('city').value = c.city || '';
-                        document.getElementById('country').value = c.country || '';
-                        document.getElementById('linkedin').value = c.linkedin || '';
-                        document.getElementById('github').value = c.github || '';
-                        document.getElementById('portfolio').value = c.portfolio || '';
-                        document.getElementById('current_title').value = parsed.current_title || '';
-                        document.getElementById('years_of_experience').value = parsed.years_of_experience || '';
-                        
-                        handleSaveProfile();
-                        showNotification('✅ Profile populated from resume!', 'success');
-                    }
+                if (response && response.success) {
+                    const data = response.data;
                     
-                    hideLoading();
-                    PopupState.unmarkTask();
-                });
-            } else {
-                showError(response?.error || 'Failed to process file');
+                    // Save extracted text
+                    elements.resumeText.value = data.extractedText;
+                    displayUploadedFile(file.name);
+                    
+                    // Save to storage
+                    chrome.storage.local.set({
+                        resume: {
+                            text: data.extractedText,
+                            metadata: {
+                                filename: file.name,
+                                size: file.size,
+                                format: data.metadata.format
+                            }
+                        }
+                    });
+                    
+                    currentResume = {
+                        text: data.extractedText,
+                        metadata: data.metadata
+                    };
+                    
+                    console.log('[Popup] Resume uploaded and saved');
+                    
+                    // Parse resume details in background
+                    chrome.runtime.sendMessage({
+                        type: 'PARSE_RESUME',
+                        payload: { resumeText: data.extractedText }
+                    }, (parseResponse) => {
+                        try {
+                            if (parseResponse && parseResponse.success) {
+                                const parsed = parseResponse.data;
+                                const c = parsed.contact || {};
+                                
+                                // Fill inputs in the Autofill tab
+                                const formFields = {
+                                    'full_name': c.name || '',
+                                    'first_name': c.first_name || '',
+                                    'last_name': c.last_name || '',
+                                    'email': c.email || '',
+                                    'phone': c.phone || '',
+                                    'city': c.city || '',
+                                    'country': c.country || '',
+                                    'linkedin': c.linkedin || '',
+                                    'github': c.github || '',
+                                    'portfolio': c.portfolio || '',
+                                    'current_title': parsed.current_title || '',
+                                    'years_of_experience': parsed.years_of_experience || ''
+                                };
+                                
+                                // Set all fields
+                                Object.entries(formFields).forEach(([fieldId, value]) => {
+                                    const field = document.getElementById(fieldId);
+                                    if (field) {
+                                        field.value = value;
+                                    }
+                                });
+                                
+                                // Save profile to storage
+                                chrome.storage.local.set({ profile: formFields });
+                                
+                                console.log('[Popup] Profile parsed and saved:', formFields);
+                                
+                                // Show success notification
+                                showNotification('✅ Profile populated from resume!', 'success');
+                            } else {
+                                console.warn('[Popup] Parse response error:', parseResponse?.error);
+                            }
+                            
+                            hideLoading();
+                            PopupState.unmarkTask();
+                        } catch (parseError) {
+                            console.error('[Popup] Error in parse response handling:', parseError);
+                            hideLoading();
+                            PopupState.unmarkTask();
+                        }
+                    });
+                } else {
+                    throw new Error(response?.error || 'Failed to process file');
+                }
+            } catch (error) {
+                console.error('[Popup] Error in file upload response:', error);
+                showError(error.message || 'Failed to process file');
                 hideLoading();
                 PopupState.unmarkTask();
             }
@@ -544,11 +605,17 @@ function handleDrop(e) {
 }
 
 /**
- * Handle Analyze
+ * Handle Analyze - with improved error handling
  */
 async function handleAnalyze() {
-    const jobDescription = elements.jobDescription.value.trim();
-    const resumeText = elements.resumeText.value.trim();
+    // Safety check on elements
+    if (!elements || !elements.jobDescription || !elements.resumeText) {
+        showError('UI not fully initialized. Please refresh the popup.');
+        return;
+    }
+    
+    const jobDescription = (elements.jobDescription.value || '').trim();
+    const resumeText = (elements.resumeText.value || '').trim();
     
     // Validation
     if (!jobDescription) {
@@ -561,12 +628,29 @@ async function handleAnalyze() {
         return;
     }
     
+    // Additional validation - check minimum content
+    if (jobDescription.length < 50) {
+        showError('Job description too short. Please provide at least 50 characters.');
+        return;
+    }
+    
+    if (resumeText.length < 50) {
+        showError('Resume too short. Please provide at least 50 characters.');
+        return;
+    }
+    
     showLoading('Analyzing your resume...');
     hideError();
-    panels.analysis.classList.add('hidden');
-    panels.optimization.classList.add('hidden');
+    if (panels && panels.analysis) panels.analysis.classList.add('hidden');
+    if (panels && panels.optimization) panels.optimization.classList.add('hidden');
+    
+    PopupState.markTask();
     
     try {
+        // Add timeout for the request
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+        
         const response = await fetch(`${API_BASE_URL}/analysis/analyze`, {
             method: 'POST',
             headers: {
@@ -575,29 +659,54 @@ async function handleAnalyze() {
             body: JSON.stringify({
                 jobDescription,
                 resumeText
-            })
+            }),
+            signal: controller.signal
         });
         
+        clearTimeout(timeout);
+        
         if (!response.ok) {
-            throw new Error('Analysis failed');
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.error || `API Error: ${response.status} ${response.statusText}`);
         }
         
         const data = await response.json();
+        
+        if (!data || typeof data !== 'object') {
+            throw new Error('Invalid response format from server');
+        }
+        
         currentAnalysis = data;
         
         // Save analysis
-        await StorageUtil.saveAnalysis(data);
+        await StorageUtil.saveAnalysis(data).catch(err => {
+            console.warn('[Popup] Failed to save analysis to storage:', err);
+            // Don't fail the whole operation, just warn
+        });
         
         // Display results
         displayAnalysisResults(data);
         
         hideLoading();
-        panels.analysis.classList.remove('hidden');
+        if (panels && panels.analysis) panels.analysis.classList.remove('hidden');
         
     } catch (error) {
-        console.error('Error analyzing resume:', error);
-        showError('Failed to analyze resume: ' + error.message);
+        console.error('[Popup] Error analyzing resume:', error);
+        
+        // Provide more specific error messages
+        let userMessage = 'Failed to analyze resume';
+        if (error.name === 'AbortError') {
+            userMessage = 'Request timed out. Please try again.';
+        } else if (error.message.includes('Failed to fetch')) {
+            userMessage = 'Cannot connect to backend. Is the server running on localhost:3000?';
+        } else {
+            userMessage = `Failed to analyze resume: ${error.message}`;
+        }
+        
+        showError(userMessage);
         hideLoading();
+    } finally {
+        PopupState.unmarkTask();
     }
 }
 
@@ -1203,6 +1312,8 @@ lazyLoadHistory();
  */
 async function loadAutofillProfile() {
     try {
+        PopupState.markTask();
+        
         const result = await StorageUtil.getAutofillProfile();
         if (result.success && result.profile) {
             const p = result.profile;
@@ -1218,6 +1329,8 @@ async function loadAutofillProfile() {
             document.getElementById('portfolio').value = p.portfolio || '';
             document.getElementById('current_title').value = p.current_title || '';
             document.getElementById('years_of_experience').value = p.years_of_experience || '';
+
+            console.log('[Popup] Autofill profile loaded:', p);
 
             // Load custom fields
             const container = document.getElementById('customFieldsContainer');
@@ -1236,7 +1349,9 @@ async function loadAutofillProfile() {
                 settingsResult.settings.showAutofillBadge !== false;
         }
     } catch (error) {
-        console.error('Error loading autofill profile:', error);
+        console.error('[Popup] Error loading autofill profile:', error);
+    } finally {
+        PopupState.unmarkTask();
     }
 }
 

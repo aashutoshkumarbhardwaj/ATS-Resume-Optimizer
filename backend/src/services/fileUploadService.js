@@ -5,8 +5,9 @@
 
 const fs = require('fs').promises;
 const path = require('path');
-const pdfParse = require('pdf-parse');
-const mammoth = require('mammoth');
+// Lazy-load pdf-parse and mammoth to avoid blocking startup
+// const pdfParse = require('pdf-parse');
+// const mammoth = require('mammoth');
 
 class FileUploadService {
     /**
@@ -67,6 +68,7 @@ class FileUploadService {
      */
     static async extractFromPDF(filePath) {
         try {
+            const pdfParse = require('pdf-parse'); // Lazy-load
             const dataBuffer = await fs.readFile(filePath);
             const data = await pdfParse(dataBuffer);
             return data.text;
@@ -80,6 +82,7 @@ class FileUploadService {
      */
     static async extractFromDOCX(filePath) {
         try {
+            const mammoth = require('mammoth'); // Lazy-load
             const result = await mammoth.extractRawText({ path: filePath });
             return result.value;
         } catch (error) {
