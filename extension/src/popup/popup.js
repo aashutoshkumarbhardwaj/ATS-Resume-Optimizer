@@ -314,6 +314,12 @@ function setupEventListeners() {
     if (showAutofillButtonBtn) {
         showAutofillButtonBtn.addEventListener('click', handleShowAutofillButton);
     }
+
+    // Dismiss autofill notice
+    const dismissAutofillNoticeBtn = document.getElementById('dismissAutofillNoticeBtn');
+    if (dismissAutofillNoticeBtn) {
+        dismissAutofillNoticeBtn.addEventListener('click', handleDismissAutofillNotice);
+    }
 }
 
 /**
@@ -1536,8 +1542,11 @@ async function handleShowAutofillButton() {
                     showNotification('✅ Autofill button is now visible on the page!', 'success');
                     document.getElementById('autofillHiddenNotice').style.display = 'none';
                     
-                    // Clear the hidden flag
-                    chrome.storage.local.set({ autofillButtonHidden: false });
+                    // Clear both hidden and dismissed flags
+                    chrome.storage.local.set({ 
+                        autofillButtonHidden: false,
+                        autofillNoticeDismissed: false
+                    });
                 } else {
                     showNotification('Could not show autofill button', 'error');
                 }
@@ -1557,14 +1566,18 @@ async function handleShowAutofillButton() {
  */
 function checkAutofillButtonStatus() {
     try {
-        chrome.storage.local.get(['autofillButtonHidden'], (result) => {
+        chrome.storage.local.get(['autofillButtonHidden', 'autofillNoticeDismissed'], (result) => {
             if (chrome.runtime.lastError) {
                 console.error('[Popup] Storage error:', chrome.runtime.lastError);
                 return;
             }
             
             const notice = document.getElementById('autofillHiddenNotice');
-            if (result.autofillButtonHidden === true) {
+            
+            // Show notice only if:
+            // 1. Button is hidden AND
+            // 2. Notice hasn't been dismissed
+            if (result.autofillButtonHidden === true && result.autofillNoticeDismissed !== true) {
                 notice.style.display = 'block';
                 console.log('[Popup] Autofill button is hidden - showing notice');
             } else {
@@ -1573,6 +1586,24 @@ function checkAutofillButtonStatus() {
         });
     } catch (error) {
         console.error('[Popup] Error checking autofill status:', error);
+    }
+}
+
+/**
+ * Handle Dismiss Autofill Notice
+ * User clicks X to dismiss the notice without showing the button
+ */
+function handleDismissAutofillNotice() {
+    try {
+        const notice = document.getElementById('autofillHiddenNotice');
+        notice.style.display = 'none';
+        
+        // Save that user dismissed the notice (so it doesn't show again this session)
+        chrome.storage.local.set({ autofillNoticeDismissed: true }, () => {
+            console.log('[Popup] Autofill notice dismissed by user');
+        });
+    } catch (error) {
+        console.error('[Popup] Error dismissing autofill notice:', error);
     }
 }
 
