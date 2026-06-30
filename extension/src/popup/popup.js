@@ -226,6 +226,9 @@ async function init() {
         // Load history only when tab is active
         setupLazyTabLoading();
         
+        // Check autofill button status
+        checkAutofillButtonStatus();
+        
         PopupState.initialized = true;
         console.log('[Popup] Initialized');
     } catch (error) {
@@ -305,6 +308,12 @@ function setupEventListeners() {
     if (autofillActiveTabBtn) {
         autofillActiveTabBtn.addEventListener('click', handleAutofillTab);
     }
+
+    // Show autofill button again
+    const showAutofillButtonBtn = document.getElementById('showAutofillButtonBtn');
+    if (showAutofillButtonBtn) {
+        showAutofillButtonBtn.addEventListener('click', handleShowAutofillButton);
+    }
 }
 
 /**
@@ -324,6 +333,11 @@ function switchTab(tabName) {
     // Load history if switching to history tab
     if (tabName === 'history') {
         loadHistory();
+    }
+    
+    // Check autofill status when switching to autofill tab
+    if (tabName === 'autofill') {
+        checkAutofillButtonStatus();
     }
 }
 
@@ -1491,8 +1505,78 @@ async function handleAutofillTab() {
 }
 
 /**
- * Render missed fields under the form
+ * Handle Show Autofill Button on Current Page
+ * Re-enables the autofill button if user closed it
  */
+async function handleShowAutofillButton() {
+    try {
+        PopupState.markTask();
+        
+        // Send message to active tab to re-enable autofill button
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (tabs.length === 0) {
+                showNotification('No active tab found', 'error');
+                PopupState.unmarkTask();
+                return;
+            }
+            
+            const activeTab = tabs[0];
+            
+            chrome.tabs.sendMessage(activeTab.id, {
+                type: 'SHOW_AUTOFILL_BUTTON'
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Popup] Could not send message to tab:', chrome.runtime.lastError);
+                    showNotification('Please reload the page first', 'error');
+                    PopupState.unmarkTask();
+                    return;
+                }
+                
+                if (response && response.success) {
+                    showNotification('✅ Autofill button is now visible on the page!', 'success');
+                    document.getElementById('autofillHiddenNotice').style.display = 'none';
+                    
+                    // Clear the hidden flag
+                    chrome.storage.local.set({ autofillButtonHidden: false });
+                } else {
+                    showNotification('Could not show autofill button', 'error');
+                }
+                
+                PopupState.unmarkTask();
+            });
+        });
+    } catch (error) {
+        console.error('[Popup] Error showing autofill button:', error);
+        showNotification('Error: ' + error.message, 'error');
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Check if Autofill Button is Hidden and Show Notice
+ */
+function checkAutofillButtonStatus() {
+    try {
+        chrome.storage.local.get(['autofillButtonHidden'], (result) => {
+            if (chrome.runtime.lastError) {
+                console.error('[Popup] Storage error:', chrome.runtime.lastError);
+                return;
+            }
+            
+            const notice = document.getElementById('autofillHiddenNotice');
+            if (result.autofillButtonHidden === true) {
+                notice.style.display = 'block';
+                console.log('[Popup] Autofill button is hidden - showing notice');
+            } else {
+                notice.style.display = 'none';
+            }
+        });
+    } catch (error) {
+        console.error('[Popup] Error checking autofill status:', error);
+    }
+}
+
+
 function showMissedFields(fields) {
     const section = document.getElementById('missedFieldsSection');
     const list = document.getElementById('missedFieldsList');

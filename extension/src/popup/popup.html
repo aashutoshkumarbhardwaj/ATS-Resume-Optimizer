@@ -296,6 +296,15 @@
                             <label for="settingShowBadge" style="font-weight: normal; cursor: pointer;">Show floating "Autofill" button on career pages</label>
                         </div>
 
+                        <div style="margin-top: 12px; padding: 10px; background: #fff3cd; border-radius: 6px; border-left: 4px solid #ffc107; display: none;" id="autofillHiddenNotice">
+                            <p style="font-size: 11px; color: #856404; margin: 0 0 8px 0;">
+                                ⚠️ You closed the autofill button on the current page. Click below to show it again.
+                            </p>
+                            <button type="button" id="showAutofillButtonBtn" class="btn btn-secondary" style="width: 100%; font-size: 12px;">
+                                🔄 Show Autofill Button on Current Page
+                            </button>
+                        </div>
+
                         <div style="margin-top: 20px; display: flex; gap: 8px;">
                             <button type="submit" id="saveProfileBtn" class="btn btn-primary" style="flex: 1;">💾 Save Profile</button>
                             <button type="button" id="autofillActiveTabBtn" class="btn btn-secondary" style="flex: 1;">⚡ Autofill Tab</button>

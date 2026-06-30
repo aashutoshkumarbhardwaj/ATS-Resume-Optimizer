@@ -88,6 +88,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
     }
 
+    if (request.type === 'SHOW_AUTOFILL_BUTTON') {
+        // User clicked "Show Autofill Button" in popup
+        chrome.storage.local.set({ autofillButtonHidden: false }, () => {
+            console.log('[Content] Autofill button re-enabled by user');
+            initAutofillBadge();
+            sendResponse({ success: true });
+        });
+        return true;
+    }
+
     return true;
 });
 
@@ -1825,11 +1835,18 @@ async function initAutofillBadge() {
     try {
         return new Promise((resolve) => {
             // Use proper chrome.storage API with error handling
-            chrome.storage.local.get(['settings', 'profile'], (result) => {
+            chrome.storage.local.get(['settings', 'profile', 'autofillButtonHidden'], (result) => {
                 try {
                     // Check for chrome errors
                     if (chrome.runtime.lastError) {
                         console.error('[Content] Storage error:', chrome.runtime.lastError);
+                        resolve();
+                        return;
+                    }
+                    
+                    // Check if autofill button was hidden by user
+                    if (result.autofillButtonHidden === true) {
+                        console.log('[Content] Autofill button is hidden by user');
                         resolve();
                         return;
                     }
@@ -2045,6 +2062,15 @@ function injectAutofillBadge() {
     
     closeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
+        
+        // Save the state that autofill button was hidden by user
+        chrome.storage.local.set({ 
+            autofillButtonHidden: true,
+            autofillHiddenAt: new Date().toISOString()
+        }, () => {
+            console.log('[Content] Autofill button hidden by user');
+        });
+        
         widgetContainer.remove();
     });
 }
