@@ -115,43 +115,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
 /**
  * Setup Auto-Close Logic
- * Closes popup when user focuses elsewhere or switches tabs
- * BUT NOT during active file processing!
+ * IMPORTANT: Auto-close is DISABLED during any active tasks (uploads, analysis, optimization)
+ * Popup will stay open until user is done with all actions
  */
 function setupAutoClose() {
-    // Close popup when window loses focus (but not during tasks)
+    // Track focus loss but DO NOT auto-close
+    // User must manually close the popup when they're done
     window.addEventListener('blur', () => {
         if (PopupState.hasActiveTasks()) {
             console.log('[Popup] Lost focus but tasks pending, staying open...');
-            return;
+        } else {
+            console.log('[Popup] Blur event detected (popup will stay open until manually closed)');
         }
-        console.log('[Popup] Lost focus, closing...');
-        closePopupSafely();
     });
     
-    // Close popup when popup itself loses focus (but not during tasks)
+    // Track focus out but DO NOT auto-close
     window.addEventListener('focusout', (e) => {
         if (PopupState.hasActiveTasks()) {
             console.log('[Popup] FocusOut but tasks pending, staying open...');
-            return;
-        }
-        // Only close if focus moved to something outside
-        if (!document.hasFocus()) {
-            console.log('[Popup] FocusOut detected, closing...');
-            closePopupSafely();
         }
     });
     
-    // Listen for tab switch notification from background
+    // Tab switch - keep popup open even when switching tabs
+    // This allows user to work on the job page while popup loads data
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.type === 'TAB_SWITCHED') {
-            if (PopupState.hasActiveTasks()) {
-                console.log('[Popup] Tab switched but tasks pending, staying open...');
-                sendResponse({ success: true });
-                return;
-            }
-            console.log('[Popup] Tab switched, closing...');
-            closePopupSafely();
+            console.log('[Popup] Tab switched - popup stays open (user can switch back)');
             sendResponse({ success: true });
         }
     });
@@ -163,39 +152,22 @@ function setupAutoClose() {
 
 /**
  * Close popup safely
- * Waits for active tasks to complete before closing
+ * NOTE: Manual close only - auto-close removed
+ * Popup stays open for user convenience during multi-step workflows
  */
 function closePopupSafely() {
-    if (!PopupState.isOpen) return;
-    
-    PopupState.isOpen = false;
-    
-    // If no active tasks, close immediately
-    if (!PopupState.hasActiveTasks()) {
-        closePopupImmediate();
-        return;
-    }
-    
-    // Wait for tasks to complete (max 2 seconds)
-    const maxWait = 2000;
-    const pollInterval = 100;
-    let waited = 0;
-    
-    const checkTasksInterval = setInterval(() => {
-        waited += pollInterval;
-        
-        if (!PopupState.hasActiveTasks() || waited >= maxWait) {
-            clearInterval(checkTasksInterval);
-            closePopupImmediate();
-        }
-    }, pollInterval);
+    // This function is now manual-close only
+    // Auto-close has been removed to prevent disrupting user workflows
+    console.log('[Popup] Close requested - not auto-closing, user must close manually');
+    return;
 }
 
 /**
  * Immediately close popup
+ * NOTE: This is manual close only via X button
  */
 function closePopupImmediate() {
-    console.log('[Popup] Closing immediately');
+    console.log('[Popup] Manual close via X button');
     cleanupPopup();
     window.close();
 }
@@ -422,6 +394,7 @@ async function loadSavedResume() {
 
 /**
  * Handle File Upload - with proper response handling
+ * IMPORTANT: Popup stays open throughout entire upload process
  */
 async function handleFileUpload(event) {
     const file = event.target.files[0];
@@ -441,7 +414,9 @@ async function handleFileUpload(event) {
     }
     
     showLoading('Extracting text from file...');
-    PopupState.markTask();
+    PopupState.markTask(); // Mark task as active
+    
+    console.log('[Popup] File upload started:', file.name);
     
     try {
         // Read file as ArrayBuffer and send to background
@@ -487,7 +462,7 @@ async function handleFileUpload(event) {
                         metadata: data.metadata
                     };
                     
-                    console.log('[Popup] Resume uploaded and saved');
+                    console.log('[Popup] Resume uploaded and saved successfully');
                     
                     // Parse resume details in background
                     chrome.runtime.sendMessage({
@@ -526,7 +501,7 @@ async function handleFileUpload(event) {
                                 // Save profile to storage
                                 chrome.storage.local.set({ profile: formFields });
                                 
-                                console.log('[Popup] Profile parsed and saved:', formFields);
+                                console.log('[Popup] Profile parsed and saved from resume');
                                 
                                 // Show success notification
                                 showNotification('✅ Profile populated from resume!', 'success');
@@ -535,11 +510,11 @@ async function handleFileUpload(event) {
                             }
                             
                             hideLoading();
-                            PopupState.unmarkTask();
+                            PopupState.unmarkTask(); // Mark task as complete
                         } catch (parseError) {
                             console.error('[Popup] Error in parse response handling:', parseError);
                             hideLoading();
-                            PopupState.unmarkTask();
+                            PopupState.unmarkTask(); // Mark task as complete
                         }
                     });
                 } else {
@@ -549,7 +524,7 @@ async function handleFileUpload(event) {
                 console.error('[Popup] Error in file upload response:', error);
                 showError(error.message || 'Failed to process file');
                 hideLoading();
-                PopupState.unmarkTask();
+                PopupState.unmarkTask(); // Mark task as complete
             }
         });
         
@@ -557,7 +532,7 @@ async function handleFileUpload(event) {
         console.error('[Popup] Error uploading file:', error);
         showError('Failed to process file: ' + error.message);
         hideLoading();
-        PopupState.unmarkTask();
+        PopupState.unmarkTask(); // Mark task as complete
     }
 }
 

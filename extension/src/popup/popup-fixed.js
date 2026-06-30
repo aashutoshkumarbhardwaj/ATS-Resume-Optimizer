@@ -162,46 +162,23 @@ function deferredInit() {
 // ============================================================================
 
 function setupAutoClose() {
-    // Auto-close when window loses focus
-    window.addEventListener('blur', () => {
-        console.log('[Popup] Window blur, closing...');
-        closePopupSafely();
-    });
+    // Auto-close DISABLED - Popup stays open for entire user session
+    // User manually closes via X button when done with all actions
+    console.log('[Popup] Auto-close disabled - popup will stay open');
     
-    // Listen for tab switch from background
-    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-        if (request.type === 'TAB_SWITCHED') {
-            console.log('[Popup] Tab switched, closing...');
-            closePopupSafely();
-        }
-        sendResponse({ received: true });
-    });
+    // Only setup cleanup on unload
+    window.addEventListener('unload', cleanup);
+    window.addEventListener('beforeunload', cleanup);
 }
 
 function closePopupSafely() {
-    if (!PopupState.isOpen) return;
-    
-    PopupState.isOpen = false;
-    console.log('[Popup] Closing safely, pending tasks:', PopupState.tasksPending);
-    
-    if (!PopupState.hasActiveTasks()) {
-        closePopupImmediate();
-        return;
-    }
-    
-    // Wait up to 2 seconds for active tasks
-    let waited = 0;
-    const interval = setInterval(() => {
-        waited += 100;
-        if (!PopupState.hasActiveTasks() || waited >= 2000) {
-            clearInterval(interval);
-            closePopupImmediate();
-        }
-    }, 100);
+    // Manual close only - no automatic closing
+    console.log('[Popup] Close requested - user must manually close');
+    return;
 }
 
 function closePopupImmediate() {
-    console.log('[Popup] Closing immediately');
+    console.log('[Popup] Closing via manual X button');
     cleanup();
     window.close();
 }
