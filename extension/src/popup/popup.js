@@ -282,6 +282,12 @@ function setupEventListeners() {
     elements.optimizeBtn.addEventListener('click', handleOptimize);
     elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
     
+    // Fetch job description button
+    const fetchJobDescBtn = document.getElementById('fetchJobDescBtn');
+    if (fetchJobDescBtn) {
+        fetchJobDescBtn.addEventListener('click', handleFetchJobDescription);
+    }
+    
     // Download buttons
     document.querySelectorAll('.btn-download').forEach(btn => {
         btn.addEventListener('click', () => handleDownload(btn.dataset.format));
@@ -701,6 +707,76 @@ async function handleAnalyze() {
         showError(userMessage);
         hideLoading();
     } finally {
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Handle Fetch Job Description from Current Page
+ */
+async function handleFetchJobDescription() {
+    showLoading('Fetching job description from page...');
+    hideError();
+    PopupState.markTask();
+    
+    try {
+        // Get active tab
+        const tabs = await new Promise((resolve) => {
+            chrome.tabs.query({ active: true, currentWindow: true }, resolve);
+        });
+        
+        if (tabs.length === 0) {
+            showError('No active tab found');
+            hideLoading();
+            PopupState.unmarkTask();
+            return;
+        }
+        
+        const activeTab = tabs[0];
+        
+        // Send message to content script to fetch job description
+        chrome.tabs.sendMessage(activeTab.id, {
+            type: 'FETCH_JOB_DESCRIPTION'
+        }, (response) => {
+            try {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Popup] Runtime error:', chrome.runtime.lastError);
+                    showError('Unable to fetch from this page. Try reloading it first.');
+                    hideLoading();
+                    PopupState.unmarkTask();
+                    return;
+                }
+                
+                if (response && response.success && response.job) {
+                    // Update job description textarea
+                    elements.jobDescription.value = response.job.description || '';
+                    
+                    // Save to storage
+                    chrome.storage.local.set({ currentJob: response.job });
+                    
+                    showNotification('✅ Job description fetched! Ready to analyze.', 'success');
+                    hideLoading();
+                    
+                    // Scroll to job description area
+                    elements.jobDescription.scrollIntoView({ behavior: 'smooth' });
+                } else {
+                    showError(response?.message || 'Could not fetch job description');
+                    hideLoading();
+                }
+                
+                PopupState.unmarkTask();
+            } catch (error) {
+                console.error('[Popup] Error in fetch response:', error);
+                showError('Error: ' + error.message);
+                hideLoading();
+                PopupState.unmarkTask();
+            }
+        });
+        
+    } catch (error) {
+        console.error('[Popup] Error fetching job description:', error);
+        showError('Error: ' + error.message);
+        hideLoading();
         PopupState.unmarkTask();
     }
 }
