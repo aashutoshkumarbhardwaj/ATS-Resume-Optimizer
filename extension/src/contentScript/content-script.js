@@ -42,6 +42,24 @@ const JD_EXTRACTION_CONFIG = {
         'experience', 'skills', 'requirements', 'qualifications', 'responsibilities',
         'bachelor', 'master', 'degree', 'years', 'team', 'work', 'develop',
         'manage', 'lead', 'collaborate', 'implement', 'design', 'analyze'
+    ],
+    
+    // Minimum job keyword matches required to consider it a valid job description
+    minJobKeywordMatches: 3,
+    
+    // URL patterns that indicate job posting pages
+    jobPagePatterns: [
+        /linkedin\.com.*\/jobs?/i,
+        /indeed\.com/i,
+        /glassdoor\.com/i,
+        /monster\.com/i,
+        /dice\.com/i,
+        /ziprecruiter\.com/i,
+        /workable\.com/i,
+        /greenhouse\.io/i,
+        /lever\.co/i,
+        /(?:career|job|position|vacancy)s?\/\d+/i,
+        /apply|recruit|hiring|vacancy/i
     ]
 };
 
@@ -505,6 +523,9 @@ function getCleanText(el) {
 function extractJobDescription() {
     const candidates = [];
     
+    // First, check if this looks like a job page
+    const isLikelyJobPage = isJobPostingPage();
+    
     // Strategy 1: Look for elements with description-related attributes or classes
     const descriptionSelectors = [
         '[class*="description"]', '[class*="job-detail"]', '[class*="jobDetail"]',
@@ -521,8 +542,9 @@ function extractJobDescription() {
                 if (text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
                     candidates.push({
                         text: text,
-                        score: calculateDescriptionScore(text, el),
-                        element: el
+                        score: calculateDescriptionScore(text, el, true),
+                        element: el,
+                        source: 'semantic'
                     });
                 }
             });
@@ -550,30 +572,38 @@ function extractJobDescription() {
                 const cleanContent = content.replace(/\.helpPopup\s*\{[^}]*\}/g, '').replace(/\s+/g, ' ').trim();
                 candidates.push({
                     text: cleanContent,
-                    score: calculateDescriptionScore(cleanContent, heading) + 20, // Bonus for semantic heading
-                    element: heading
+                    score: calculateDescriptionScore(cleanContent, heading, isLikelyJobPage) + 30, // Bonus for semantic heading
+                    element: heading,
+                    source: 'heading'
                 });
             }
         }
     });
     
     // Strategy 3: Text density analysis - find the largest block of meaningful text
-    const textBlocks = findLargeTextBlocks();
-    textBlocks.forEach(block => {
-        if (isFormElement(block.element)) return;
-        if (block.text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
-            candidates.push({
-                text: block.text,
-                score: calculateDescriptionScore(block.text, block.element) + 10, // Bonus for text density
-                element: block.element
-            });
-        }
-    });
+    // Only use this if we're on a job page or if we found semantic markers
+    if (isLikelyJobPage || candidates.length > 0) {
+        const textBlocks = findLargeTextBlocks();
+        textBlocks.forEach(block => {
+            if (isFormElement(block.element)) return;
+            if (block.text.length >= JD_EXTRACTION_CONFIG.minDescriptionLength) {
+                candidates.push({
+                    text: block.text,
+                    score: calculateDescriptionScore(block.text, block.element, isLikelyJobPage) + 15,
+                    element: block.element,
+                    source: 'density'
+                });
+            }
+        });
+    }
     
-    // Return the highest scoring candidate
-    if (candidates.length > 0) {
-        candidates.sort((a, b) => b.score - a.score);
-        return candidates[0].text;
+    // Filter candidates by minimum score threshold
+    const validCandidates = candidates.filter(c => c.score >= 30);
+    
+    if (validCandidates.length > 0) {
+        validCandidates.sort((a, b) => b.score - a.score);
+        console.log(`[Content] Selected job description from: ${validCandidates[0].source} (score: ${validCandidates[0].score})`);
+        return validCandidates[0].text;
     }
     
     return '';
@@ -639,65 +669,118 @@ function findLargeTextBlocks() {
 }
 
 /**
- * Calculate score for potential job description
+ * Check if current page is likely a job posting page
  */
-function calculateDescriptionScore(text, element) {
+function isJobPostingPage() {
+    const url = window.location.href.toLowerCase();
+    const htmlContent = document.documentElement.innerHTML.toLowerCase();
+    
+    // Check URL patterns
+    const urlMatches = JD_EXTRACTION_CONFIG.jobPagePatterns.some(pattern => pattern.test(url));
+    
+    // Check for job-related meta tags or structured data
+    const hasJobMetaTags = 
+        document.querySelector('meta[property="og:title"][content*="job"]') ||
+        document.querySelector('meta[name="description"][content*="job posting"]') ||
+        document.querySelector('script[type="application/ld+json"]');
+    
+    // Check for common job site indicators in page
+    const hasJobSiteIndicators = 
+        /linkedin|indeed|glassdoor|monster|dice|ziprecruiter/i.test(htmlContent);
+    
+    return urlMatches || !!hasJobMetaTags || hasJobSiteIndicators;
+}
+
+/**
+ * Calculate score for potential job description
+ * Higher score = more likely to be actual job description
+ */
+function calculateDescriptionScore(text, element, isJobPage = false) {
     let score = 0;
     const lowerText = text.toLowerCase();
     
     // ❌ Heavily penalize CSS/style content (from .helpPopup etc.)
     if (/\.helpPopup\s*\{/.test(text) || /background-color\s*:/.test(text) || /z-index\s*:/.test(text)) {
-        score -= 100;
+        return -100;
     }
     
-    // ❌ Penalize registration form patterns
-    const formLabelPatterns = [
-        /First Name/i, /Last Name/i, /Surname/i, /Home Street/i, /Home City/i,
-        /Home Country/i, /Home Post Code/i, /Mobile Phone/i, /Current Employer/i,
-        /privacy policy/i, /How did you hear/i, /Preferred First Name/i
-    ];
-    const formHits = formLabelPatterns.filter(p => p.test(text)).length;
-    if (formHits >= 3) {
-        score -= 60; // This is a registration form, not a job description
+    // ✅ Bonus if on known job page
+    if (isJobPage) {
+        score += 20;
     }
     
-    // ❌ Penalize if element contains inputs
-    if (element && element.querySelectorAll) {
-        const inputCount = element.querySelectorAll('input, select, textarea').length;
-        if (inputCount >= 3) score -= 50;
-    }
-    
-    // ✅ Bonus for job-related keywords
-    let keywordCount = 0;
+    // ✅ Count job-related keywords for validation
+    let jobKeywordMatches = 0;
     JD_EXTRACTION_CONFIG.jobKeywords.forEach(keyword => {
         const regex = new RegExp('\\b' + keyword + '\\b', 'gi');
         const matches = text.match(regex);
         if (matches) {
-            keywordCount += matches.length;
+            jobKeywordMatches += matches.length;
         }
     });
-    score += Math.min(keywordCount * 5, 50); // Cap at 50 points
     
-    // ✅ Bonus for length (longer descriptions are usually better)
-    if (text.length > 500) score += 10;
+    // Require minimum keyword matches unless on known job page
+    if (!isJobPage && jobKeywordMatches < JD_EXTRACTION_CONFIG.minJobKeywordMatches) {
+        return -50; // Not enough job keywords - likely not a job description
+    }
+    
+    // ✅ Award points based on keyword density
+    score += Math.min(jobKeywordMatches * 5, 30);
+    
+    // ✅ Check for job description section patterns
+    let hasDescriptionHeading = false;
+    const parent = element.parentElement;
+    if (parent) {
+        const prevHeading = parent.querySelector('h1, h2, h3, h4, h5, h6');
+        if (prevHeading) {
+            hasDescriptionHeading = JD_EXTRACTION_CONFIG.sectionPatterns.some(pattern =>
+                pattern.test(prevHeading.textContent)
+            );
+        }
+    }
+    
+    if (hasDescriptionHeading) {
+        score += 25;
+    }
+    
+    // ✅ Check for job-specific vocabulary patterns
+    const jobPatterns = [
+        /\b(experience|expertise|background|track record)\b/gi,
+        /\b(responsibilities|duties|accountable for)\b/gi,
+        /\b(qualifications|requirements|must have|should have)\b/gi,
+        /\b(skills|technical|proficiency|competencies)\b/gi,
+        /\b(education|degree|bachelor|master|certification)\b/gi,
+        /\b(apply|apply now|submit|join our team|become|join)\b/gi
+    ];
+    
+    let patternMatches = 0;
+    jobPatterns.forEach(pattern => {
+        if (pattern.test(text)) {
+            patternMatches++;
+        }
+    });
+    
+    score += Math.min(patternMatches * 5, 20);
+    
+    // ✅ Penalize if text looks like navigation or metadata
+    const badPatterns = [
+        /cookie|privacy|terms|disclaimer|copyright/gi,
+        /menu|navigation|sidebar|footer/gi,
+        /advertisement|ad|sponsored/gi
+    ];
+    
+    badPatterns.forEach(pattern => {
+        if (pattern.test(text)) {
+            score -= 30;
+        }
+    });
+    
+    // ✅ Text length bonus (longer = more likely to be full description)
+    if (text.length > 500) score += 15;
     if (text.length > 1000) score += 10;
     if (text.length > 2000) score += 10;
     
-    // ❌ Penalty for very long descriptions (might be entire page content)
-    if (text.length > 8000) score -= 20;
-    
-    // Bonus for structured content (bullet points, paragraphs)
-    const bulletPoints = text.match(/[•\-\*]/g);
-    if (bulletPoints) {
-        score += Math.min(bulletPoints.length * 2, 20);
-    }
-    
-    const paragraphs = text.split('\n\n').length;
-    if (paragraphs > 2) {
-        score += Math.min(paragraphs * 2, 15);
-    }
-    
-    return score;
+    return Math.max(score, 0); // Never go below 0
 }
 
 /**
