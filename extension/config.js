@@ -10,7 +10,7 @@ export const CONFIG = {
     API_BASE_URL: 'https://ats-resume-optimizer-niap.onrender.com/api',
     
     // Development API URL (for local testing)
-    DEV_API_BASE_URL: 'http://localhost:3000/api',
+    DEV_API_BASE_URL: 'https://ats-resume-optimizer-359j.onrender.com/api',
     
     // Use production by default
     USE_PRODUCTION: true

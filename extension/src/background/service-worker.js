@@ -9,7 +9,7 @@
  * - Single response pattern
  */
 
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
 
 // Track active tabs to detect switches
 let lastActiveTab = null;

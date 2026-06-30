@@ -5,7 +5,7 @@
 
 // API Configuration - Update this with your Render URL
 export const API_CONFIG = {
-    BASE_URL: 'http://localhost:3000/api',
+    BASE_URL: 'https://ats-resume-optimizer-359j.onrender.com/api',
     TIMEOUT: 30000,
 };
 

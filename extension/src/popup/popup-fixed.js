@@ -11,7 +11,7 @@
  */
 
 // Configuration
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
 
 // Popup state management
 const PopupState = {

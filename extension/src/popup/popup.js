@@ -5,7 +5,7 @@
  */
 
 // Configuration
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
 
 // Popup state management
 const PopupState = {
@@ -698,7 +698,7 @@ async function handleAnalyze() {
         if (error.name === 'AbortError') {
             userMessage = 'Request timed out. Please try again.';
         } else if (error.message.includes('Failed to fetch')) {
-            userMessage = 'Cannot connect to backend. Is the server running on localhost:3000?';
+            userMessage = 'Cannot connect to backend. Check your connection and try again.';
         } else {
             userMessage = `Failed to analyze resume: ${error.message}`;
         }

@@ -4,7 +4,7 @@
  */
 
 // API Base URL - Update this with your Render URL
-const BASE_URL = 'http://localhost:3000/api';
+const BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
 
 /**
  * Make API call
