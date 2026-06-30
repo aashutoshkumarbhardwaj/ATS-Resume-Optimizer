@@ -5,6 +5,11 @@ const morgan = require('morgan');
 const fs = require('fs');
 const path = require('path');
 
+// Initialize PostgreSQL database
+const sequelize = require('./config/database');
+const User = require('./models/User');
+const OptimizationHistory = require('./models/OptimizationHistory');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -121,9 +126,23 @@ app.use((error, req, res, next) => {
 process.on('SIGTERM', () => { console.log('SIGTERM'); process.exit(0); });
 process.on('SIGINT',  () => { console.log('SIGINT');  process.exit(0); });
 
-app.listen(PORT, () => {
-    console.log(`🚀 Resume Fixer API running on port ${PORT}`);
-    console.log(`📊 Health: http://localhost:${PORT}/health`);
-});
+// Initialize database and start server
+async function startServer() {
+    try {
+        // Sync database models
+        await sequelize.sync({ alter: false });
+        console.log('✅ PostgreSQL database synced');
+        
+        app.listen(PORT, () => {
+            console.log(`🚀 Resume Fixer API running on port ${PORT}`);
+            console.log(`📊 Health: http://localhost:${PORT}/health`);
+        });
+    } catch (error) {
+        console.error('❌ Failed to start server:', error.message);
+        process.exit(1);
+    }
+}
+
+startServer();
 
 module.exports = app;
