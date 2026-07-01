@@ -16,8 +16,9 @@
         <!-- Tab Navigation -->
         <div class="tabs">
             <button class="tab-btn active" data-tab="optimize">Optimize</button>
-            <button class="tab-btn" data-tab="history">History</button>
+            <button class="tab-btn" data-tab="jobtracking">📊 Job Tracker</button>
             <button class="tab-btn" data-tab="autofill">⚡ Autofill</button>
+            <button class="tab-btn" data-tab="settings">⚙️ Settings</button>
         </div>
 
         <div class="main-content">
@@ -200,12 +201,152 @@
                 <div id="errorMessage" class="error-message hidden"></div>
             </div>
 
-            <!-- History Tab -->
-            <div id="historyTab" class="tab-content">
+            <!-- Job Tracking Tab -->
+            <div id="jobtrackingTab" class="tab-content">
                 <div class="panel">
-                    <h3>📜 Optimization History</h3>
-                    <div id="historyList" class="history-list"></div>
-                    <button id="clearHistoryBtn" class="btn btn-secondary">Clear All History</button>
+                    <h3>📊 Job Application Tracker</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
+                        Track all your job applications with details like company, salary, location, and status. Synced with Job Orbit.
+                    </p>
+
+                    <!-- Job Orbit Connection Status -->
+                    <div id="jobOrbitStatus" style="padding: 10px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50; margin-bottom: 12px; display: none;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 20px;">✓</span>
+                            <div style="flex: 1;">
+                                <p style="margin: 0; font-weight: 600; color: #2e7d32; font-size: 12px;">Connected to Job Orbit</p>
+                                <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;">Your applications are synced</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Job Tracking Stats -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+                        <div style="background: #f5f5f5; padding: 12px; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: #667eea;" id="totalApplications">0</div>
+                            <div style="font-size: 11px; color: #666; margin-top: 4px;">Total Applications</div>
+                        </div>
+                        <div style="background: #f5f5f5; padding: 12px; border-radius: 6px; text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: #4caf50;" id="appliedStatus">0</div>
+                            <div style="font-size: 11px; color: #666; margin-top: 4px;">Applied</div>
+                        </div>
+                    </div>
+
+                    <!-- Application List -->
+                    <div id="jobTrackingList" style="max-height: 300px; overflow-y: auto; border: 1px solid #e0e0e0; border-radius: 6px;">
+                        <div style="padding: 20px; text-align: center; color: #999;">
+                            <p style="margin: 0; font-size: 12px;">No applications tracked yet</p>
+                            <p style="margin: 4px 0 0 0; font-size: 10px;">Applications will appear here automatically</p>
+                        </div>
+                    </div>
+
+                    <!-- Sync Button -->
+                    <button id="syncJobTrackingBtn" class="btn btn-primary" style="width: 100%; margin-top: 12px;">
+                        🔄 Sync with Job Orbit
+                    </button>
+
+                    <!-- Export Button -->
+                    <button id="exportJobsBtn" class="btn btn-secondary" style="width: 100%; margin-top: 8px;">
+                        📥 Export to CSV
+                    </button>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settingsTab" class="tab-content">
+                <div class="panel">
+                    <h3>⚙️ Settings & Controls</h3>
+
+                    <!-- Job Orbit Integration -->
+                    <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">🌐 Job Orbit Integration</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="jobOrbitAutoSync" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Auto-sync job applications to Job Orbit</span>
+                            </label>
+                            <p style="font-size: 10px; color: #999; margin: 6px 0 0 24px;">
+                                ℹ️ Applications will be saved automatically after autofill
+                            </p>
+                        </div>
+
+                        <div style="margin-bottom: 12px;">
+                            <label style="display: block; font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">Job Orbit API Key</label>
+                            <input type="password" id="jobOrbitApiKey" placeholder="Paste your Job Orbit API key" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; box-sizing: border-box;">
+                            <p style="font-size: 10px; color: #999; margin: 4px 0 0 0;">
+                                Get your API key from <a href="https://joborbit.com/settings" target="_blank" style="color: #667eea;">Job Orbit settings</a>
+                            </p>
+                        </div>
+
+                        <button id="connectJobOrbitBtn" class="btn btn-secondary" style="width: 100%;">
+                            🔗 Connect to Job Orbit
+                        </button>
+                    </div>
+
+                    <!-- Autofill Settings -->
+                    <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">⚡ Autofill Settings</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+                                <input type="checkbox" id="autoStartAutofill" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Auto-start autofill on job pages</span>
+                            </label>
+                            
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+                                <input type="checkbox" id="showFloatingButton" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Show floating autofill button</span>
+                            </label>
+                            
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="enableNotifications" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Show autofill notifications</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Data Management -->
+                    <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">🗂️ Data Management</h4>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <button id="exportSettingsBtn" class="btn btn-secondary" style="font-size: 11px;">
+                                📤 Export Data
+                            </button>
+                            <button id="importSettingsBtn" class="btn btn-secondary" style="font-size: 11px;">
+                                📥 Import Data
+                            </button>
+                        </div>
+
+                        <div style="margin-top: 8px;">
+                            <button id="clearAllDataBtn" class="btn btn-secondary" style="width: 100%; background-color: #ff6b6b; border-color: #ff6b6b; color: white; font-size: 11px;">
+                                🗑️ Clear All Data
+                            </button>
+                            <p style="font-size: 10px; color: #ff6b6b; margin: 4px 0 0 0;">
+                                ⚠️ This action cannot be undone
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- About & Help -->
+                    <div>
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">ℹ️ About</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px; font-size: 11px; line-height: 1.6;">
+                            <p style="margin: 0 0 8px 0;">
+                                <strong>ATS Resume Optimizer</strong><br>
+                                v1.0.0
+                            </p>
+                            <p style="margin: 0 0 8px 0;">
+                                Track job applications and auto-fill forms with your profile. Integrated with Job Orbit.
+                            </p>
+                            <p style="margin: 0;">
+                                <a href="https://github.com/aashutosh-kumarbhardwaj/ATS-Resume-Optimizer" target="_blank" style="color: #667eea; text-decoration: none;">GitHub Repository</a> | 
+                                <a href="https://joborbit.com" target="_blank" style="color: #667eea; text-decoration: none;">Job Orbit</a>
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
 

@@ -69,6 +69,15 @@ try {
     console.error('❌ Documents routes failed:', e.message);
 }
 
+// Job Orbit routes — no DB required, pure axios API calls
+try {
+    const jobOrbitRoutes = require('./routes/jobOrbit');
+    app.use('/api/job-orbit', jobOrbitRoutes);
+    console.log('✅ Job Orbit routes loaded');
+} catch (e) {
+    console.error('❌ Job Orbit routes failed:', e.message);
+}
+
 // User / job-role routes require MongoDB — only load if URI is configured
 if (process.env.MONGODB_URI) {
     try {

@@ -398,6 +398,563 @@ class DocumentGenerator {
 }
 ```
 
+#### 2.5 Advanced Form Autofiller
+
+**Purpose**: Detect form fields and automatically populate them with resume data
+
+**Key Responsibilities**:
+- Detect forms and identify field types
+- Handle React-controlled inputs
+- Support multiple form frameworks
+- Map resume data to form fields
+- Dispatch proper events for form state management
+- Support Google Forms and specialized form types
+
+**Field Detection Strategy**:
+
+```javascript
+class AdvancedFormDetector {
+  detectFields() {
+    const fields = [];
+    
+    // Strategy 1: Direct HTML inputs
+    document.querySelectorAll('input, select, textarea').forEach(el => {
+      const field = this.analyzeElement(el);
+      if (field) fields.push(field);
+    });
+    
+    // Strategy 2: React/Vue/Angular controlled inputs
+    fields.push(...this.detectReactInputs());
+    
+    // Strategy 3: Framework-specific inputs (MUI, Chakra, Ant Design, etc.)
+    fields.push(...this.detectFrameworkInputs());
+    
+    // Strategy 4: Shadow DOM elements
+    fields.push(...this.detectShadowDOMInputs());
+    
+    // Strategy 5: Iframe content
+    fields.push(...this.detectIframeInputs());
+    
+    return this.deduplicateFields(fields);
+  }
+  
+  analyzeElement(element) {
+    const label = this.extractLabel(element);
+    const fieldType = this.detectFieldType(label);
+    
+    return {
+      element,
+      label,
+      fieldType,
+      dataKey: this.mapFieldToResumeKey(fieldType, label),
+      framework: this.detectFramework(element),
+      confidence: this.calculateConfidence(label, element)
+    };
+  }
+}
+```
+
+**Field Mapping Logic**:
+
+```javascript
+class FieldMapper {
+  static fieldVariations = {
+    firstName: [
+      'first name', 'given name', 'legal name', 'preferred name',
+      'first_name', 'firstname', 'forename', 'first n'
+    ],
+    lastName: [
+      'last name', 'family name', 'surname', 'last_name', 'lastname'
+    ],
+    email: [
+      'email', 'email address', 'e-mail', 'contact email', 'primary email'
+    ],
+    phone: [
+      'phone', 'mobile', 'phone number', 'contact number', 'telephone'
+    ],
+    country: [
+      'country', 'country of residence', 'nationality', 'country code'
+    ],
+    state: [
+      'state', 'province', 'region', 'state/province'
+    ],
+    city: [
+      'city', 'city name', 'municipality'
+    ],
+    zipCode: [
+      'zip', 'postal code', 'zipcode', 'postcode'
+    ],
+    yearsExperience: [
+      'years of experience', 'years experience', 'experience level', 'years exp'
+    ],
+    noticePeriod: [
+      'notice period', 'availability', 'available from', 'notice'
+    ],
+    jobTitle: [
+      'current position', 'job title', 'position', 'designation'
+    ],
+    company: [
+      'current company', 'company name', 'employer', 'organization'
+    ],
+    salary: [
+      'expected salary', 'desired salary', 'salary', 'compensation'
+    ],
+    employmentType: [
+      'employment type', 'job type', 'contract type', 'employment status'
+    ],
+    visaStatus: [
+      'visa status', 'work authorization', 'sponsorship required'
+    ]
+  };
+  
+  mapLabelToField(label) {
+    const normalizedLabel = label.toLowerCase().trim();
+    
+    for (const [fieldKey, variations] of Object.entries(this.fieldVariations)) {
+      for (const variation of variations) {
+        if (normalizedLabel.includes(variation) || variation.includes(normalizedLabel)) {
+          return fieldKey;
+        }
+      }
+    }
+    
+    return null;
+  }
+}
+```
+
+**Form Framework Support**:
+
+```javascript
+class FormFrameworkAdapter {
+  static SUPPORTED_FRAMEWORKS = {
+    'REACT_SELECT': /react-select|ReactSelect/i,
+    'MUI_SELECT': /mui-select|MuiSelect|MUISelect/i,
+    'ANT_DESIGN': /ant-select|AntSelect/i,
+    'CHAKRA_UI': /chakra-select|chakra-ui/i,
+    'HEADLESS_UI': /headless|combobox/i,
+    'NATIVE_SELECT': /select/i,
+    'GOOGLE_FORMS': /formResponse|docs\.google\.com/i
+  };
+  
+  static detectFramework(element) {
+    for (const [framework, pattern] of Object.entries(this.SUPPORTED_FRAMEWORKS)) {
+      if (pattern.test(element.className) || pattern.test(element.id)) {
+        return framework;
+      }
+      if (element.closest('[class*="react-select"]')) return 'REACT_SELECT';
+      if (element.closest('[class*="MuiSelect"]')) return 'MUI_SELECT';
+      if (element.closest('[class*="ant-select"]')) return 'ANT_DESIGN';
+      if (element.closest('[data-reach-combobox]')) return 'HEADLESS_UI';
+    }
+    return null;
+  }
+  
+  static setValue(element, value, framework) {
+    switch (framework) {
+      case 'REACT_SELECT':
+        return this.setReactSelectValue(element, value);
+      case 'MUI_SELECT':
+        return this.setMUISelectValue(element, value);
+      case 'ANT_DESIGN':
+        return this.setAntDesignValue(element, value);
+      case 'CHAKRA_UI':
+        return this.setChakraValue(element, value);
+      case 'HEADLESS_UI':
+        return this.setHeadlessUIValue(element, value);
+      case 'NATIVE_SELECT':
+        return this.setNativeSelectValue(element, value);
+      case 'GOOGLE_FORMS':
+        return this.setGoogleFormsValue(element, value);
+      default:
+        return this.setNativeValue(element, value);
+    }
+  }
+  
+  static setReactSelectValue(element, value) {
+    // Click to open dropdown
+    element.click();
+    
+    // Find and click the matching option
+    const options = document.querySelectorAll('[class*="option"]');
+    const matching = Array.from(options).find(opt => 
+      opt.textContent.toLowerCase().includes(value.toLowerCase())
+    );
+    
+    if (matching) {
+      matching.click();
+      this.dispatchEvents(element, ['change', 'blur']);
+      return true;
+    }
+    return false;
+  }
+  
+  static setMUISelectValue(element, value) {
+    const selectInput = element.querySelector('[role="button"]') || element;
+    selectInput.click();
+    
+    const options = document.querySelectorAll('[role="option"]');
+    const matching = Array.from(options).find(opt =>
+      opt.textContent.toLowerCase().includes(value.toLowerCase())
+    );
+    
+    if (matching) {
+      matching.click();
+      this.dispatchEvents(element, ['change', 'blur']);
+      return true;
+    }
+    return false;
+  }
+  
+  static setNativeValue(element, value) {
+    // Use React Fiber to trigger state update for React inputs
+    const fiberKey = Object.keys(element).find(key => 
+      key.startsWith('__react')
+    );
+    
+    if (fiberKey) {
+      const fiber = element[fiberKey];
+      const setter = fiber.memoizedState?.memoizedState?.baseState;
+      if (setter) {
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('blur', { bubbles: true }));
+        return true;
+      }
+    }
+    
+    // Fallback to standard approach
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+    element.dispatchEvent(new Event('blur', { bubbles: true }));
+    return true;
+  }
+  
+  static dispatchEvents(element, events) {
+    events.forEach(eventName => {
+      element.dispatchEvent(new Event(eventName, { 
+        bubbles: true, 
+        cancelable: true 
+      }));
+    });
+  }
+}
+```
+
+**Dropdown Value Selection**:
+
+```javascript
+class DropdownSelector {
+  static FIELD_VALUE_MAPPINGS = {
+    country: {
+      'India': ['India', 'IN', 'IND'],
+      'United States': ['USA', 'US', 'United States', 'America'],
+      'Canada': ['Canada', 'CA', 'CAN']
+      // ... more countries
+    },
+    state: {
+      'California': ['CA', 'California', 'Calif.'],
+      'New York': ['NY', 'New York', 'N.Y.']
+      // ... more states
+    },
+    employmentType: {
+      'Full-time': ['Full-time', 'Full time', 'FT', 'Fulltime'],
+      'Part-time': ['Part-time', 'Part time', 'PT', 'Parttime'],
+      'Contract': ['Contract', 'Contractor'],
+      'Temporary': ['Temporary', 'Temp'],
+      'Internship': ['Internship', 'Intern']
+    },
+    noticePeriod: {
+      'Immediate': ['Immediate', 'Now', '0'],
+      '15 days': ['15 days', '15', 'two weeks'],
+      '30 days': ['30 days', '30', 'one month'],
+      '60 days': ['60 days', '60', 'two months']
+    },
+    visaStatus: {
+      'Citizen': ['Citizen', 'Yes, I am a citizen', 'PR'],
+      'Need sponsorship': ['Need sponsorship', 'Require', 'Visa needed'],
+      'No sponsorship needed': ['No sponsorship', 'Not required', 'Have authorization']
+    }
+  };
+  
+  static findBestOption(fieldType, options, resumeValue) {
+    const mappings = this.FIELD_VALUE_MAPPINGS[fieldType] || {};
+    
+    for (const [displayValue, aliases] of Object.entries(mappings)) {
+      for (const alias of aliases) {
+        const matchedOption = options.find(opt => 
+          opt.toLowerCase().includes(alias.toLowerCase())
+        );
+        if (matchedOption) return matchedOption;
+      }
+    }
+    
+    return null;
+  }
+}
+```
+
+#### 2.6 Floating Button Manager
+
+**Purpose**: Manage persistent floating button for autofill access
+
+**Key Responsibilities**:
+- Inject floating button into page
+- Monitor button status and re-inject if missing
+- Handle button visibility preferences
+- Trigger autofill on button click
+- Prevent interference with form interaction
+
+**Implementation**:
+
+```javascript
+class FloatingButtonManager {
+  constructor() {
+    this.buttonId = 'ats-autofill-button';
+    this.checkInterval = 10000; // Check every 10 seconds
+    this.lastInjectionTime = 0;
+  }
+  
+  async init() {
+    await this.loadPreferences();
+    this.injectButton();
+    this.startMonitoring();
+  }
+  
+  injectButton() {
+    if (document.getElementById(this.buttonId)) return;
+    
+    const button = document.createElement('div');
+    button.id = this.buttonId;
+    button.innerHTML = `
+      <button class="ats-autofill-btn" title="Autofill Application Form">
+        <svg>...</svg>
+        <span>Autofill</span>
+      </button>
+    `;
+    
+    button.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 2147483647;
+      background: #4A90E2;
+      border-radius: 50px;
+      padding: 12px 16px;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `;
+    
+    button.querySelector('button').addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'TRIGGER_AUTOFILL' });
+    });
+    
+    document.body.appendChild(button);
+    this.lastInjectionTime = Date.now();
+  }
+  
+  startMonitoring() {
+    this.monitorInterval = setInterval(() => {
+      if (!document.getElementById(this.buttonId)) {
+        console.log('[FloatingButton] Button missing, re-injecting...');
+        this.injectButton();
+      }
+    }, this.checkInterval);
+  }
+  
+  show() {
+    const button = document.getElementById(this.buttonId);
+    if (button) button.style.display = 'block';
+    chrome.storage.local.set({ autofillButtonHidden: false });
+  }
+  
+  hide() {
+    const button = document.getElementById(this.buttonId);
+    if (button) button.style.display = 'none';
+  }
+  
+  remove() {
+    const button = document.getElementById(this.buttonId);
+    if (button) button.remove();
+    clearInterval(this.monitorInterval);
+  }
+}
+```
+
+#### 2.7 Automatic Autofill Orchestrator
+
+**Purpose**: Coordinate automatic autofill workflow without manual button clicks
+
+**Workflow**:
+
+```javascript
+class AutomaticAutofillOrchestrator {
+  async orchestrate() {
+    try {
+      // Step 1: Detect if we're on an application form
+      const isApplicationForm = await this.detectApplicationForm();
+      if (!isApplicationForm) return;
+      
+      // Step 2: Detect and extract job description
+      const jobData = await this.detectJobDescription();
+      if (!jobData || jobData.confidence < 30) {
+        console.log('[Autofill] Low confidence job detection, showing manual option');
+        chrome.runtime.sendMessage({ type: 'ENABLE_MANUAL_JOB_INPUT' });
+        return;
+      }
+      
+      // Step 3: Load user's resume
+      const resume = await this.loadUserResume();
+      if (!resume) {
+        console.log('[Autofill] No resume loaded, showing upload prompt');
+        chrome.runtime.sendMessage({ type: 'SHOW_RESUME_UPLOAD' });
+        return;
+      }
+      
+      // Step 4: Auto-populate form fields
+      const results = await this.autofillFormFields(resume, jobData);
+      
+      // Step 5: Report results
+      chrome.runtime.sendMessage({
+        type: 'AUTOFILL_COMPLETE',
+        payload: {
+          filledCount: results.filled,
+          skippedCount: results.skipped,
+          failedCount: results.failed,
+          details: results.details
+        }
+      });
+      
+    } catch (error) {
+      console.error('[Autofill] Orchestration error:', error);
+      chrome.runtime.sendMessage({
+        type: 'AUTOFILL_ERROR',
+        payload: { error: error.message }
+      });
+    }
+  }
+  
+  async autofillFormFields(resume, jobData) {
+    const detector = new AdvancedFormDetector();
+    const fields = detector.detectFields();
+    
+    const results = {
+      filled: 0,
+      skipped: 0,
+      failed: 0,
+      details: []
+    };
+    
+    for (const field of fields) {
+      try {
+        const value = this.extractResumeValue(resume, field.dataKey);
+        if (value) {
+          const success = await this.fillField(field, value);
+          if (success) {
+            results.filled++;
+          } else {
+            results.failed++;
+          }
+        } else {
+          results.skipped++;
+        }
+        
+        results.details.push({
+          label: field.label,
+          status: value ? (success ? 'filled' : 'failed') : 'skipped'
+        });
+        
+      } catch (error) {
+        results.failed++;
+        results.details.push({
+          label: field.label,
+          status: 'error',
+          error: error.message
+        });
+      }
+    }
+    
+    return results;
+  }
+}
+```
+
+#### 2.8 Enhanced Job Description Extractor
+
+**Purpose**: Improved extraction with platform-specific logic and semantic analysis
+
+**Platform Extractors**:
+
+```javascript
+class PlatformExtractors {
+  static EXTRACTORS = {
+    'linkedin.com': new LinkedInExtractor(),
+    'indeed.com': new IndeedExtractor(),
+    'glassdoor.com': new GlassdoorExtractor(),
+    'monster.com': new MonsterExtractor(),
+    'ziprecruiter.com': new ZipRecruiterExtractor(),
+    'workable.com': new WorkableExtractor(),
+    'greenhouse.io': new GreenhouseExtractor(),
+    'lever.co': new LeverExtractor(),
+    'default': new SemanticJobExtractor()
+  };
+  
+  static async extract(url) {
+    const domain = this.getDomain(url);
+    const extractor = this.EXTRACTORS[domain] || this.EXTRACTORS['default'];
+    
+    const result = await extractor.extract();
+    result.confidence = this.calculateConfidence(result);
+    result.platform = domain;
+    
+    return result;
+  }
+  
+  static calculateConfidence(result) {
+    let score = 0;
+    if (result.jobTitle?.length > 5) score += 25;
+    if (result.company?.length > 2) score += 15;
+    if (result.description?.length > 200) score += 40;
+    if (result.requirements?.length > 0) score += 20;
+    return Math.min(score, 100);
+  }
+}
+
+class SemanticJobExtractor {
+  async extract() {
+    return {
+      jobTitle: this.extractJobTitle(),
+      company: this.extractCompanyName(),
+      description: this.extractDescription(),
+      requirements: this.extractRequirements(),
+      location: this.extractLocation(),
+      salary: this.extractSalary()
+    };
+  }
+  
+  extractDescription() {
+    // Uses semantic analysis, Shadow DOM support, lazy-loading support
+    // Merges split sections
+    // Already implemented in content-script.js
+  }
+}
+
+class LinkedInExtractor {
+  async extract() {
+    // LinkedIn-specific extraction logic
+    return {
+      jobTitle: document.querySelector('.job-details-jobs-unified-top-card__job-title')?.textContent?.trim(),
+      company: document.querySelector('.job-details-jobs-unified-top-card__company-name')?.textContent?.trim(),
+      description: document.querySelector('.jobs-description__content')?.textContent?.trim(),
+      location: document.querySelector('[data-test-id="job-details-jobs-unified-top-card__location"]')?.textContent?.trim(),
+      requirements: this.parseRequirements()
+    };
+  }
+}
+```
+
 ### 3. API Endpoints
 
 #### Resume Analysis Endpoints

@@ -258,3 +258,277 @@
   - Optimize keyword extraction algorithms
   - Add loading indicators for all async operations
   - _Requirements: All_
+
+---
+
+## Phase 2: Advanced Form Autofill and Enhancements
+
+- [ ] 14. Implement Advanced Form Field Detection
+  - [ ] 14.1 Create field detector for all input types
+    - Detect standard HTML inputs, selects, and textareas
+    - Support React-controlled inputs using Fiber inspection
+    - Support Shadow DOM elements with proper DOM traversal
+    - Support iframe content extraction
+    - _Requirements: 11.1_
+  
+  - [ ] 14.2 Build framework detection system
+    - Detect React Select, Material-UI, Ant Design, Chakra UI, Headless UI
+    - Identify native HTML select elements
+    - Support Google Forms field detection
+    - _Requirements: 11.5_
+  
+  - [ ] 14.3 Create field label extraction engine
+    - Extract labels from associated label elements
+    - Extract labels from aria-label attributes
+    - Extract labels from placeholder attributes
+    - Extract labels from nearby text nodes
+    - _Requirements: 11.1_
+  
+  - [ ] 14.4 Implement field type detection
+    - Classify fields as text, email, phone, select, radio, checkbox, textarea
+    - Detect special fields (country, state, city, salary, experience, etc.)
+    - Support custom field types
+    - _Requirements: 11.4_
+
+- [ ] 15. Build Field-to-Resume Mapper
+  - [ ] 15.1 Create comprehensive field variation matching
+    - Add all field variations (First Name → Given Name, Legal Name, etc.)
+    - Support fuzzy matching for label variations
+    - Create confidence scoring for field matches
+    - _Requirements: 5_
+  
+  - [ ] 15.2 Map resume data to form fields
+    - Extract contact information fields
+    - Extract professional information fields
+    - Extract education fields
+    - Extract skills and certifications
+    - _Requirements: 11.4_
+  
+  - [ ] 15.3 Build value transformation engine
+    - Transform resume phone number to field format
+    - Transform dates to various formats
+    - Transform salary values to form format
+    - _Requirements: 11.4_
+
+- [ ] 16. Implement Framework-Specific Input Handlers
+  - [ ] 16.1 Create React Select handler
+    - Detect React Select components
+    - Open dropdown and find matching option
+    - Click option and dispatch events
+    - Handle multi-select scenarios
+    - _Requirements: 11.5_
+  
+  - [ ] 16.2 Create Material-UI handler
+    - Detect MUI Select components
+    - Handle MUI custom styling
+    - Properly dispatch MUI-specific events
+    - _Requirements: 11.5_
+  
+  - [ ] 16.3 Create Ant Design handler
+    - Detect Ant Select components
+    - Handle Ant Design dropdown behavior
+    - Support multiple selection
+    - _Requirements: 11.5_
+  
+  - [ ] 16.4 Create Chakra UI and Headless UI handlers
+    - Detect Chakra and Headless UI components
+    - Handle combobox patterns
+    - Support accessible input methods
+    - _Requirements: 11.5_
+  
+  - [ ] 16.5 Create Google Forms handler
+    - Detect Google Forms field types
+    - Support radio buttons and checkboxes
+    - Handle Google Forms dropdowns
+    - Support multiple choice questions
+    - _Requirements: 1_
+
+- [ ] 17. Build Dropdown Value Selection Engine
+  - [ ] 17.1 Create field-specific value mappings
+    - Build country dropdown mapping
+    - Build state/province mapping
+    - Build employment type mapping
+    - Build notice period mapping
+    - Build visa status mapping
+    - Build yes/no field mapping
+    - _Requirements: 6_
+  
+  - [ ] 17.2 Implement smart option matching
+    - Match resume data to dropdown options
+    - Support multiple option formats for same value
+    - Handle abbreviations and variations
+    - Return best matching option
+    - _Requirements: 6_
+
+- [ ] 18. Build Floating Button Management System
+  - [ ] 18.1 Create floating button component
+    - Design non-intrusive floating button UI
+    - Position fixed without interfering with forms
+    - Make button dismissible but not permanently removable
+    - _Requirements: 2_
+  
+  - [ ] 18.2 Implement button injection and monitoring
+    - Inject button when form is detected
+    - Monitor button presence every 10 seconds
+    - Re-inject if button is missing
+    - Remove button when navigating away
+    - _Requirements: 2_
+  
+  - [ ] 18.3 Create visibility preference system
+    - Load user preference from storage
+    - Allow showing/hiding button
+    - Persist preference across page loads
+    - Ignore permanent dismissal requests
+    - _Requirements: 2_
+
+- [ ] 19. Implement Automatic Autofill Orchestration
+  - [ ] 19.1 Create autofill workflow
+    - Detect if page is an application form
+    - Auto-detect job description on page
+    - Auto-extract job requirements
+    - Auto-load user's resume
+    - Auto-populate all form fields
+    - Report results to user
+    - _Requirements: 3_
+  
+  - [ ] 19.2 Add intelligent error handling
+    - Show "Retry Autofill" button if job detection fails
+    - Show "Manual Job Input" option if confidence is low
+    - Show "Upload Resume" prompt if no resume is loaded
+    - Skip fields that cannot be auto-filled
+    - _Requirements: 3_
+  
+  - [ ] 19.3 Create result summary UI
+    - Display number of fields filled
+    - Show number of fields skipped
+    - Highlight fields requiring manual intervention
+    - Allow user to make final adjustments
+    - _Requirements: 3_
+
+- [ ] 20. Enhance Job Description Extraction
+  - [ ] 20.1 Create platform-specific extractors
+    - Build LinkedIn job extractor
+    - Build Indeed job extractor
+    - Build Glassdoor job extractor
+    - Build Monster job extractor
+    - Build ZipRecruiter job extractor
+    - Build Workable job extractor
+    - Build Greenhouse job extractor
+    - Build Lever job extractor
+    - _Requirements: 4_
+  
+  - [ ] 20.2 Implement Shadow DOM and iframe support
+    - Detect Shadow DOM boundaries
+    - Query Shadow DOM elements safely
+    - Support iframe content extraction
+    - Handle nested iframes
+    - _Requirements: 4_
+  
+  - [ ] 20.3 Add lazy-loading support
+    - Detect dynamically loaded content
+    - Wait for lazy-loaded sections to appear
+    - Extract content as it loads
+    - Implement reasonable timeout
+    - _Requirements: 4_
+  
+  - [ ] 20.4 Build description merging engine
+    - Identify and merge split job descriptions
+    - Combine requirements from multiple sections
+    - Deduplicate content
+    - Maintain logical flow
+    - _Requirements: 4_
+  
+  - [ ] 20.5 Implement confidence scoring
+    - Score each extracted element
+    - Calculate overall extraction confidence
+    - Return confidence in response
+    - Set confidence thresholds
+    - _Requirements: 4_
+
+- [ ] 21. Improve Form Event Dispatching
+  - [ ] 21.1 Create event dispatcher
+    - Dispatch input events for text fields
+    - Dispatch change events for selects/radios
+    - Dispatch blur events for focus loss
+    - Dispatch custom React change events
+    - _Requirements: 1_
+  
+  - [ ] 21.2 Add React state management support
+    - Detect React fiber key
+    - Access React state management
+    - Trigger React re-renders
+    - Handle useState hooks
+    - _Requirements: 1_
+  
+  - [ ] 21.3 Implement proper event sequencing
+    - Dispatch events in correct order
+    - Allow time for state updates
+    - Handle asynchronous listeners
+    - Ensure form recognizes changes
+    - _Requirements: 1_
+
+- [ ] 22. Add Google Forms Support
+  - [ ] 22.1 Create Google Forms field detector
+    - Identify Google Forms entry fields
+    - Support text inputs
+    - Support multiple choice questions
+    - Support radio buttons and checkboxes
+    - Support dropdown selects
+    - Support text areas
+    - _Requirements: 1_
+  
+  - [ ] 22.2 Implement Google Forms data entry
+    - Fill text responses
+    - Select multiple choice options
+    - Check/uncheck checkboxes
+    - Select radio buttons
+    - Properly handle form submission events
+    - _Requirements: 1_
+
+- [ ] 23. Integration and Testing
+  - [ ] 23.1 Wire autofill trigger
+    - Connect floating button to orchestrator
+    - Connect popup autofill button to orchestrator
+    - Connect automatic triggers
+    - _Requirements: 2, 3_
+  
+  - [ ] 23.2 Test form detection on major sites
+    - Test LinkedIn application forms
+    - Test Indeed application forms
+    - Test Glassdoor application forms
+    - Test Google Forms
+    - Test custom application forms
+    - _Requirements: 1, 2, 3_
+  
+  - [ ] 23.3 Test autofill accuracy
+    - Test field mapping accuracy
+    - Test value selection accuracy
+    - Test framework compatibility
+    - Test event handling
+    - _Requirements: 1, 2, 3_
+  
+  - [ ] 23.4 Performance testing
+    - Test form detection speed
+    - Test autofill execution speed
+    - Test on forms with 50+ fields
+    - Test with large resume data
+    - _Requirements: All Phase 2_
+
+- [ ] 24. UI/UX Enhancements for New Features
+  - [ ] 24.1 Add autofill progress indicator
+    - Show real-time field filling progress
+    - Display status for each field
+    - Show any errors or issues
+    - _Requirements: 3_
+  
+  - [ ] 24.2 Create failure recovery UI
+    - Show retry button on failures
+    - Allow manual field adjustment
+    - Show helpful error messages
+    - _Requirements: 3_
+  
+  - [ ] 24.3 Add field mapping visualization
+    - Show which resume fields map to form fields
+    - Highlight unmapped fields
+    - Allow manual field remapping
+    - _Requirements: 5_

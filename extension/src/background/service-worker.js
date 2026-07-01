@@ -57,6 +57,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 handleJobDetected(request.payload, sendResponse);
                 return false;
             
+            case 'GET_AUTOFILL_PROFILE':
+                getAutofillProfile(sendResponse);
+                return true;
+            
+            case 'SAVE_AUTOFILL_PROFILE':
+                saveAutofillProfile(request.payload, sendResponse);
+                return true;
+            
+            case 'SAVE_APPLICATION_RECORD':
+                saveApplicationRecord(request.payload, sendResponse);
+                return true;
+            
+            case 'GET_APPLICATION_HISTORY':
+                getApplicationHistory(sendResponse);
+                return true;
+            
+            case 'CLEAR_APPLICATION_HISTORY':
+                clearApplicationHistory(sendResponse);
+                return true;
+            
             default:
                 sendResponse({ success: false, error: 'Unknown request type' });
                 return false;
@@ -263,6 +283,84 @@ function handleJobDetected(payload, sendResponse) {
     chrome.action.setBadgeBackgroundColor({ color: '#667eea' });
     
     sendResponse({ success: true });
+}
+
+/**
+ * Get autofill profile from storage
+ */
+function getAutofillProfile(sendResponse) {
+    chrome.storage.sync.get(['autofillProfile'], (result) => {
+        const profile = result.autofillProfile || {
+            fullName: '',
+            email: '',
+            phone: '',
+            firstName: '',
+            lastName: '',
+            city: '',
+            country: '',
+            linkedin: '',
+            github: '',
+            portfolio: '',
+            currentJobTitle: '',
+            yearsOfExperience: '',
+            customFields: {}
+        };
+        sendResponse({ success: true, profile });
+    });
+}
+
+/**
+ * Save autofill profile to storage
+ */
+function saveAutofillProfile(payload, sendResponse) {
+    chrome.storage.sync.set({ autofillProfile: payload }, () => {
+        sendResponse({ success: true });
+    });
+}
+
+/**
+ * Save application record for tracking
+ */
+function saveApplicationRecord(payload, sendResponse) {
+    chrome.storage.local.get(['applicationHistory'], (result) => {
+        const history = result.applicationHistory || [];
+        
+        const record = {
+            id: Date.now(),
+            timestamp: new Date().toISOString(),
+            ...payload
+        };
+        
+        history.push(record);
+        
+        // Keep only last 100 applications
+        if (history.length > 100) {
+            history.shift();
+        }
+        
+        chrome.storage.local.set({ applicationHistory: history }, () => {
+            sendResponse({ success: true, record });
+        });
+    });
+}
+
+/**
+ * Get application history
+ */
+function getApplicationHistory(sendResponse) {
+    chrome.storage.local.get(['applicationHistory'], (result) => {
+        const history = result.applicationHistory || [];
+        sendResponse({ success: true, history });
+    });
+}
+
+/**
+ * Clear application history
+ */
+function clearApplicationHistory(sendResponse) {
+    chrome.storage.local.set({ applicationHistory: [] }, () => {
+        sendResponse({ success: true });
+    });
 }
 
 // Listen for extension installation/update

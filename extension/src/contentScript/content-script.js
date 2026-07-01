@@ -2271,4 +2271,47 @@ if (document.readyState === 'complete' || document.readyState === 'interactive')
 } else {
     window.addEventListener('load', () => setTimeout(initAutofillBadge, 1000));
 }
+
+// Initialize FloatingButtonManager for new orchestrator flow
+try {
+    if (typeof FloatingButtonManager !== 'undefined') {
+        const floatingButtonManager = new FloatingButtonManager();
+        floatingButtonManager.init().catch(err => 
+            console.error('[Content] FloatingButton init error:', err)
+        );
+    }
+} catch (error) {
+    console.error('[Content] Error initializing FloatingButtonManager:', error);
+}
+
+// Handle autofill trigger from popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'TRIGGER_AUTOFILL_FROM_POPUP') {
+        console.log('[Content] Received TRIGGER_AUTOFILL_FROM_POPUP message');
+        
+        try {
+            if (typeof AutofillOrchestrator !== 'undefined') {
+                const orchestrator = new AutofillOrchestrator();
+                orchestrator.start().then(result => {
+                    console.log('[Content] Autofill complete:', result);
+                    chrome.runtime.sendMessage({
+                        type: 'AUTOFILL_COMPLETE',
+                        data: result
+                    }).catch(err => console.error('[Content] Error sending result:', err));
+                    
+                    sendResponse({ success: true, result });
+                }).catch(error => {
+                    console.error('[Content] Autofill error:', error);
+                    sendResponse({ success: false, error: error.message });
+                });
+                return true;
+            } else {
+                sendResponse({ success: false, error: 'AutofillOrchestrator not loaded' });
+            }
+        } catch (error) {
+            console.error('[Content] Error triggering autofill:', error);
+            sendResponse({ success: false, error: error.message });
+        }
+    }
+});
 })();

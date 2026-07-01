@@ -32,9 +32,17 @@
         "http://*/*"
       ],
       "js": [
+        "src/autofill/core/fieldMapper.js",
+        "src/autofill/core/eventDispatcher.js",
+        "src/autofill/core/dropdownSelector.js",
+        "src/autofill/adapters/reactSelectAdapter.js",
+        "src/autofill/adapters/muiSelectAdapter.js",
+        "src/autofill/adapters/antDesignSelectAdapter.js",
+        "src/contentScript/floatingButtonManager.js",
+        "src/contentScript/autofillOrchestrator.js",
         "src/contentScript/content-script.js"
       ],
-      "run_at": "document_end"
+      "run_at": "document_start"
     }
   ],
   "icons": {

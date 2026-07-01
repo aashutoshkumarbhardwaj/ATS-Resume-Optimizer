@@ -137,3 +137,68 @@ The ATS Resume Optimizer is a Chrome extension feature that automatically detect
 3. THE Extension SHALL prioritize suggestions based on impact on ATS compatibility
 4. THE Extension SHALL display suggestions in a dedicated "Resume Improvement Tips" section
 5. WHERE the User has optimized resumes for multiple jobs, THE Resume Analyzer SHALL identify patterns in missing skills across job applications
+
+### Requirement 11
+
+**User Story:** As a job seeker filling out application forms, I want the extension to automatically fill form fields with relevant information, so that I can apply faster without manual data entry
+
+#### Acceptance Criteria
+
+1. WHEN the User navigates to a job application form, THE Extension SHALL detect form fields within 3 seconds
+2. THE Extension SHALL identify field types with semantic understanding including text inputs, dropdowns, radio buttons, and multi-selects
+3. THE Extension SHALL support React-controlled inputs and custom form frameworks (React Select, MUI, Ant Design, Chakra, Headless UI)
+4. WHEN autofill is enabled, THE Extension SHALL automatically populate fields with appropriate resume data
+5. THE Extension SHALL properly dispatch input, change, and blur events to ensure form state updates
+6. THE Extension SHALL handle Google Forms and similar survey platforms with special field detection
+7. WHERE multiple field name variations exist (e.g., "First Name", "Given Name", "Legal Name"), THE Extension SHALL recognize all variations
+8. WHEN a dropdown field is detected, THE Extension SHALL select appropriate values for common fields (Country, State, City, Salary, Experience, Notice Period, Employment Type, Visa Status)
+9. THE Extension SHALL support all form frameworks including native HTML select, React-Select, Material-UI, Ant Design, Chakra UI, and Headless UI
+10. WHERE a form field cannot be auto-filled, THE Extension SHALL skip gracefully without errors
+
+### Requirement 12
+
+**User Story:** As a job seeker, I want autofill to start automatically when I open the extension on an application page, so that I don't have to click multiple buttons
+
+#### Acceptance Criteria
+
+1. WHEN the User clicks the extension icon on an application form page, THE Extension SHALL begin automatic job detection and extraction within 2 seconds
+2. WHEN a job description is detected, THE Extension SHALL automatically extract job requirements and keywords without requiring the User to click a button
+3. WHEN job data is extracted, THE Extension SHALL automatically match the resume to the job and begin autofilling form fields
+4. THE Extension SHALL continue autofilling until all form fields are processed or an error occurs
+5. WHEN autofill completes, THE Extension SHALL display a summary showing number of fields filled and any fields that require manual intervention
+6. THE Extension SHALL provide a "Retry Autofill" button as a fallback for manual re-triggering
+7. THE Extension SHALL preserve manual changes made by the User and not override them during autofill
+8. WHEN the User dismisses the extension, THE Extension SHALL remember the autofill state and resume on next activation
+
+### Requirement 13
+
+**User Story:** As a job seeker viewing job descriptions, I want better detection of job details across different platforms, so that the extension works reliably on all career websites
+
+#### Acceptance Criteria
+
+1. THE Extension SHALL implement platform-specific extractors for major job boards (LinkedIn, Indeed, Glassdoor, Monster, ZipRecruiter, etc.)
+2. THE Extension SHALL support generic semantic extraction fallback for unknown job boards
+3. THE Extension SHALL support extraction from pages with Shadow DOM elements
+4. THE Extension SHALL support extraction from pages with multiple iframes
+5. THE Extension SHALL support extraction from pages with lazy-loaded content
+6. THE Extension SHALL merge split job description sections from different page elements
+7. THE Extension SHALL assign confidence scores to extracted job descriptions (0-100)
+8. WHEN confidence is below 50%, THE Extension SHALL enable manual job description input mode
+9. THE Extension SHALL cache platform-specific selectors for performance
+10. THE Extension SHALL detect and extract job metadata including title, company, location, salary range, and employment type
+
+### Requirement 14
+
+**User Story:** As a job seeker, I want the floating autofill button to remain available and functional, so that I can access autofill features even if I dismiss it
+
+#### Acceptance Criteria
+
+1. WHEN the Extension detects an application form, THE Extension SHALL inject a floating button into the page
+2. WHEN the User clicks "Show Floating Button" in the popup, THE Extension SHALL display the floating button on the page if hidden
+3. WHEN the User dismisses or closes the floating button, THE Extension SHALL NOT permanently hide it
+4. WHEN the User refreshes the page or navigates to another application form, THE Extension SHALL re-inject the floating button
+5. THE Extension SHALL check for and re-inject the floating button every 10 seconds if it's missing from the page
+6. WHEN the User clicks the floating button, THE Extension SHALL trigger the same autofill flow as the popup button
+7. THE Extension SHALL store user preference about floating button visibility and respect it
+8. THE Extension SHALL ensure the floating button does not interfere with form interaction
+9. THE Extension SHALL properly remove the floating button when the User navigates away from the application page

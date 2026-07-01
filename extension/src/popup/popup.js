@@ -37,8 +37,10 @@ function initializeDOMElements() {
     try {
         tabs = {
             optimize: document.getElementById('optimizeTab'),
-            history: document.getElementById('historyTab'),
-            autofill: document.getElementById('autofillTab')
+            history: document.getElementById('jobtrackingTab'),  // Renamed for compatibility
+            jobtracking: document.getElementById('jobtrackingTab'),
+            autofill: document.getElementById('autofillTab'),
+            settings: document.getElementById('settingsTab')
         };
 
         panels = {
@@ -143,6 +145,13 @@ function setupAutoClose() {
             console.log('[Popup] Tab switched - popup stays open (user can switch back)');
             sendResponse({ success: true });
         }
+        
+        // Handle autofill complete results from content script
+        if (request.type === 'AUTOFILL_COMPLETE') {
+            console.log('[Popup] Received AUTOFILL_COMPLETE:', request.data);
+            handleAutofillResults(request.data);
+            sendResponse({ success: true });
+        }
     });
     
     // Cleanup on unload
@@ -214,16 +223,20 @@ async function init() {
                 loadSavedResume();
                 loadDetectedJob();
                 loadAutofillProfile();
+                loadSettings();
+                loadJobTracking();
             }, { timeout: 1000 });
         } else {
             setTimeout(() => {
                 loadSavedResume();
                 loadDetectedJob();
                 loadAutofillProfile();
+                loadSettings();
+                loadJobTracking();
             }, 100);
         }
         
-        // Load history only when tab is active
+        // Setup lazy tab loading
         setupLazyTabLoading();
         
         // Check autofill button status
@@ -280,7 +293,6 @@ function setupEventListeners() {
     // Buttons
     elements.analyzeBtn.addEventListener('click', handleAnalyze);
     elements.optimizeBtn.addEventListener('click', handleOptimize);
-    elements.clearHistoryBtn.addEventListener('click', handleClearHistory);
     
     // Fetch job description button
     const fetchJobDescBtn = document.getElementById('fetchJobDescBtn');
@@ -326,6 +338,9 @@ function setupEventListeners() {
     if (dismissAutofillNoticeBtn) {
         dismissAutofillNoticeBtn.addEventListener('click', handleDismissAutofillNotice);
     }
+    
+    // Settings listeners
+    setupSettingsListeners();
 }
 
 /**
@@ -339,17 +354,18 @@ function switchTab(tabName) {
     
     // Update tab content
     Object.keys(tabs).forEach(key => {
-        tabs[key].classList.toggle('active', key === tabName);
+        if (tabs[key]) {
+            tabs[key].classList.toggle('active', key === tabName);
+        }
     });
     
-    // Load history if switching to history tab
-    if (tabName === 'history') {
-        loadHistory();
+    // Load content based on tab
+    if (tabName === 'jobtracking') {
+        loadJobTracking();
     }
     
-    // Check autofill status when switching to autofill tab
-    if (tabName === 'autofill') {
-        checkAutofillButtonStatus();
+    if (tabName === 'settings') {
+        loadSettings();
     }
 }
 
@@ -1720,4 +1736,433 @@ function showMissedFields(fields) {
     });
     
     section.classList.remove('hidden');
+}
+
+/**
+ * Handle Autofill Results
+ * Called when autofill completes from content script
+ */
+function handleAutofillResults(result) {
+    console.log('[Popup] Processing autofill results:', result);
+    
+    if (!result) {
+        console.error('[Popup] No result data provided');
+        return;
+    }
+    
+    // Show results summary
+    if (result.filled || result.skipped || result.failed) {
+        const messageEl = document.getElementById('autofillMessage');
+        if (messageEl) {
+            const total = (result.filled || 0) + (result.skipped || 0) + (result.failed || 0);
+            const message = `✅ Autofill Complete! Filled: ${result.filled || 0}, Skipped: ${result.skipped || 0}, Failed: ${result.failed || 0}`;
+            messageEl.textContent = message;
+            messageEl.className = 'autofill-status-message success';
+            
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                messageEl.classList.add('hidden');
+            }, 5000);
+        }
+    }
+    
+    // Record application if details are available
+    if (result.jobTitle || result.company) {
+        const applicationData = {
+            company: result.company || 'Unknown Company',
+            jobTitle: result.jobTitle || 'Unknown Position',
+            date: new Date().toISOString(),
+            resumeVersion: 'current',
+            status: 'Applied',
+            notes: `Auto-filled ${result.filled || 0} fields`
+        };
+        
+        chrome.runtime.sendMessage({
+            type: 'SAVE_APPLICATION_RECORD',
+            payload: applicationData
+        }, (response) => {
+            if (response && response.success) {
+                console.log('[Popup] Application record saved');
+            }
+        });
+    }
+}
+
+
+/**
+ * Job Orbit Integration Functions
+ */
+
+/**
+ * Connect to Job Orbit
+ */
+async function handleConnectJobOrbit() {
+    const apiKey = document.getElementById('jobOrbitApiKey').value.trim();
+    
+    if (!apiKey) {
+        showNotification('Please enter your Job Orbit API key', 'error');
+        return;
+    }
+    
+    try {
+        PopupState.markTask();
+        
+        // Validate API key by making test request to Job Orbit
+        const response = await fetch('https://api.joborbit.com/v1/applications', {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            throw new Error('Invalid API key or Job Orbit connection failed');
+        }
+        
+        // Save API key to storage
+        chrome.storage.sync.set({ jobOrbitApiKey: apiKey }, () => {
+            showNotification('✅ Connected to Job Orbit!', 'success');
+            document.getElementById('jobOrbitStatus').style.display = 'block';
+            syncJobTrackingWithOrbit();
+        });
+        
+    } catch (error) {
+        console.error('[Popup] Job Orbit connection error:', error);
+        showNotification('Failed to connect: ' + error.message, 'error');
+    } finally {
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Sync jobs with Job Orbit
+ */
+async function syncJobTrackingWithOrbit() {
+    try {
+        PopupState.markTask();
+        
+        // Get API key from storage
+        const result = await new Promise((resolve) => {
+            chrome.storage.sync.get(['jobOrbitApiKey'], resolve);
+        });
+        
+        if (!result.jobOrbitApiKey) {
+            showNotification('Job Orbit not connected. Please add API key in settings.', 'error');
+            PopupState.unmarkTask();
+            return;
+        }
+        
+        // Get local applications
+        const localResult = await new Promise((resolve) => {
+            chrome.storage.local.get(['applicationHistory'], resolve);
+        });
+        
+        const applications = localResult.applicationHistory || [];
+        
+        if (applications.length === 0) {
+            showNotification('No applications to sync', 'info');
+            PopupState.unmarkTask();
+            return;
+        }
+        
+        // Send to Job Orbit
+        const jobOrbitData = applications.map(app => ({
+            company: app.company,
+            jobTitle: app.jobTitle,
+            location: app.location,
+            salary: app.salary,
+            jobUrl: app.jobUrl,
+            appliedDate: app.timestamp,
+            status: app.status || 'Applied',
+            notes: app.notes,
+            resumeVersion: app.resumeVersion
+        }));
+        
+        const response = await fetch('https://api.joborbit.com/v1/applications/batch', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${result.jobOrbitApiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                applications: jobOrbitData
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            showNotification(`✅ Synced ${applications.length} applications to Job Orbit!`, 'success');
+            displayJobTracking(applications);
+        } else {
+            throw new Error('Failed to sync applications');
+        }
+        
+    } catch (error) {
+        console.error('[Popup] Job Orbit sync error:', error);
+        showNotification('Sync failed: ' + error.message, 'error');
+    } finally {
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Display job tracking list
+ */
+function displayJobTracking(applications) {
+    const listContainer = document.getElementById('jobTrackingList');
+    
+    if (!applications || applications.length === 0) {
+        listContainer.innerHTML = `
+            <div style="padding: 20px; text-align: center; color: #999;">
+                <p style="margin: 0; font-size: 12px;">No applications tracked yet</p>
+            </div>
+        `;
+        document.getElementById('totalApplications').textContent = '0';
+        document.getElementById('appliedStatus').textContent = '0';
+        return;
+    }
+    
+    // Update stats
+    document.getElementById('totalApplications').textContent = applications.length;
+    const appliedCount = applications.filter(a => a.status === 'Applied').length;
+    document.getElementById('appliedStatus').textContent = appliedCount;
+    
+    // Build HTML for applications
+    const html = applications.map((app, index) => `
+        <div style="border-bottom: 1px solid #f0f0f0; padding: 12px; display: flex; gap: 12px; align-items: start;">
+            <div style="flex: 1; font-size: 12px;">
+                <div style="font-weight: 600; color: #333; margin-bottom: 4px;">${escapeHtml(app.company || 'Unknown Company')}</div>
+                <div style="color: #666; margin-bottom: 4px;">${escapeHtml(app.jobTitle || 'Unknown Position')}</div>
+                <div style="color: #999; font-size: 11px; display: flex; gap: 8px;">
+                    <span>📍 ${escapeHtml(app.location || 'Location N/A')}</span>
+                    ${app.salary ? `<span>💰 ${escapeHtml(app.salary)}</span>` : ''}
+                </div>
+                ${app.jobUrl ? `<div style="color: #667eea; font-size: 10px; margin-top: 4px;"><a href="${escapeHtml(app.jobUrl)}" target="_blank" style="color: #667eea; text-decoration: none;">View Job →</a></div>` : ''}
+            </div>
+            <div style="text-align: right;">
+                <span style="display: inline-block; padding: 4px 8px; background: #e8f5e9; color: #2e7d32; border-radius: 4px; font-size: 10px; font-weight: 600;">
+                    ${app.status || 'Applied'}
+                </span>
+                <div style="font-size: 10px; color: #999; margin-top: 4px;">
+                    ${app.timestamp ? new Date(app.timestamp).toLocaleDateString() : 'N/A'}
+                </div>
+            </div>
+        </div>
+    `).join('');
+    
+    listContainer.innerHTML = html;
+}
+
+/**
+ * Export applications to CSV
+ */
+function exportJobsToCSV() {
+    chrome.storage.local.get(['applicationHistory'], (result) => {
+        const applications = result.applicationHistory || [];
+        
+        if (applications.length === 0) {
+            showNotification('No applications to export', 'info');
+            return;
+        }
+        
+        // Create CSV header
+        const headers = ['Company', 'Job Title', 'Location', 'Salary', 'Status', 'Applied Date', 'Notes'];
+        
+        // Create CSV rows
+        const rows = applications.map(app => [
+            app.company || 'N/A',
+            app.jobTitle || 'N/A',
+            app.location || 'N/A',
+            app.salary || 'N/A',
+            app.status || 'Applied',
+            app.timestamp ? new Date(app.timestamp).toLocaleDateString() : 'N/A',
+            app.notes || ''
+        ]);
+        
+        // Combine headers and rows
+        const csv = [headers, ...rows]
+            .map(row => row.map(cell => `"${cell.toString().replace(/"/g, '""')}"`).join(','))
+            .join('\n');
+        
+        // Download CSV
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `job-applications-${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        
+        showNotification('✅ Exported to CSV!', 'success');
+    });
+}
+
+/**
+ * Load settings from storage
+ */
+async function loadSettings() {
+    const result = await new Promise((resolve) => {
+        chrome.storage.sync.get([
+            'jobOrbitAutoSync',
+            'autoStartAutofill',
+            'showFloatingButton',
+            'enableNotifications'
+        ], resolve);
+    });
+    
+    document.getElementById('jobOrbitAutoSync').checked = result.jobOrbitAutoSync !== false;
+    document.getElementById('autoStartAutofill').checked = result.autoStartAutofill !== false;
+    document.getElementById('showFloatingButton').checked = result.showFloatingButton !== false;
+    document.getElementById('enableNotifications').checked = result.enableNotifications !== false;
+}
+
+/**
+ * Save settings
+ */
+function saveSettings() {
+    const settings = {
+        jobOrbitAutoSync: document.getElementById('jobOrbitAutoSync').checked,
+        autoStartAutofill: document.getElementById('autoStartAutofill').checked,
+        showFloatingButton: document.getElementById('showFloatingButton').checked,
+        enableNotifications: document.getElementById('enableNotifications').checked
+    };
+    
+    chrome.storage.sync.set(settings, () => {
+        showNotification('✅ Settings saved!', 'success');
+    });
+}
+
+/**
+ * Export all data
+ */
+function exportAllData() {
+    chrome.storage.sync.get(null, (syncData) => {
+        chrome.storage.local.get(null, (localData) => {
+            const allData = {
+                sync: syncData,
+                local: localData,
+                exportDate: new Date().toISOString()
+            };
+            
+            const json = JSON.stringify(allData, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ats-resume-optimizer-backup-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+            
+            showNotification('✅ Data exported!', 'success');
+        });
+    });
+}
+
+/**
+ * Import data
+ */
+function importData() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            
+            if (data.sync) {
+                chrome.storage.sync.set(data.sync);
+            }
+            if (data.local) {
+                chrome.storage.local.set(data.local);
+            }
+            
+            showNotification('✅ Data imported successfully!', 'success');
+            location.reload();
+        } catch (error) {
+            showNotification('Failed to import data: ' + error.message, 'error');
+        }
+    };
+    input.click();
+}
+
+/**
+ * Clear all data
+ */
+function clearAllData() {
+    if (confirm('⚠️ Are you sure? This will delete all your profile, resumes, and application history. This cannot be undone.')) {
+        chrome.storage.sync.clear(() => {
+            chrome.storage.local.clear(() => {
+                showNotification('✅ All data cleared!', 'success');
+                location.reload();
+            });
+        });
+    }
+}
+
+/**
+ * Setup Settings Tab event listeners
+ */
+function setupSettingsListeners() {
+    // Job Orbit
+    const connectJobOrbitBtn = document.getElementById('connectJobOrbitBtn');
+    if (connectJobOrbitBtn) {
+        connectJobOrbitBtn.addEventListener('click', handleConnectJobOrbit);
+    }
+    
+    // Job Tracking
+    const syncJobTrackingBtn = document.getElementById('syncJobTrackingBtn');
+    if (syncJobTrackingBtn) {
+        syncJobTrackingBtn.addEventListener('click', syncJobTrackingWithOrbit);
+    }
+    
+    const exportJobsBtn = document.getElementById('exportJobsBtn');
+    if (exportJobsBtn) {
+        exportJobsBtn.addEventListener('click', exportJobsToCSV);
+    }
+    
+    // Settings toggles
+    ['jobOrbitAutoSync', 'autoStartAutofill', 'showFloatingButton', 'enableNotifications'].forEach(id => {
+        const elem = document.getElementById(id);
+        if (elem) {
+            elem.addEventListener('change', saveSettings);
+        }
+    });
+    
+    // Data management
+    const exportSettingsBtn = document.getElementById('exportSettingsBtn');
+    if (exportSettingsBtn) {
+        exportSettingsBtn.addEventListener('click', exportAllData);
+    }
+    
+    const importSettingsBtn = document.getElementById('importSettingsBtn');
+    if (importSettingsBtn) {
+        importSettingsBtn.addEventListener('click', importData);
+    }
+    
+    const clearAllDataBtn = document.getElementById('clearAllDataBtn');
+    if (clearAllDataBtn) {
+        clearAllDataBtn.addEventListener('click', clearAllData);
+    }
+}
+
+/**
+ * Load Job Tracking on tab switch
+ */
+function loadJobTracking() {
+    chrome.storage.local.get(['applicationHistory'], (result) => {
+        const applications = result.applicationHistory || [];
+        displayJobTracking(applications);
+        
+        // Check if Job Orbit is connected
+        chrome.storage.sync.get(['jobOrbitApiKey'], (result) => {
+            if (result.jobOrbitApiKey) {
+                document.getElementById('jobOrbitStatus').style.display = 'block';
+            }
+        });
+    });
 }
