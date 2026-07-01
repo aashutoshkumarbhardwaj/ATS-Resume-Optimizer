@@ -85,13 +85,15 @@ try {
     const applicationsRoutes = require('./routes/applications');
     const aiMemoryRoutes = require('./routes/ai-memory');
     const authRoutes = require('./routes/auth');
+    const extensionAuthRoutes = require('./routes/extension-auth');
     
     app.use('/api/profile', profileRoutes);
     app.use('/api/resumes', resumesRoutes);
     app.use('/api/applications', applicationsRoutes);
     app.use('/api/ai-memory', aiMemoryRoutes);
     app.use('/api/auth', authRoutes);
-    console.log('✅ Supabase cloud routes loaded (profile, resumes, applications, ai-memory, auth)');
+    app.use('/api/extension-auth', extensionAuthRoutes);
+    console.log('✅ Supabase cloud routes loaded (profile, resumes, applications, ai-memory, auth, extension-auth)');
 } catch (e) {
     console.error('❌ Supabase routes failed:', e.message);
 }

@@ -60,6 +60,14 @@
       "matches": [
         "<all_urls>"
       ]
+    },
+    {
+      "resources": [
+        "src/popup/popup.html"
+      ],
+      "matches": [
+        "https://job-orbit-flax.vercel.app/*"
+      ]
     }
   ]
 }

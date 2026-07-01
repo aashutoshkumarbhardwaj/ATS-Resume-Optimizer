@@ -344,6 +344,14 @@ function setupEventListeners() {
     
     // Settings listeners
     setupSettingsListeners();
+    
+    // Listen for storage changes to update UI in real-time
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName === 'sync' && changes.jobOrbitAuth) {
+            console.log('[Popup] Job Orbit auth changed, updating UI');
+            checkJobOrbitConnection();
+        }
+    });
 }
 
 /**
@@ -1863,8 +1871,15 @@ function checkJobOrbitConnection() {
     chrome.storage.sync.get(['jobOrbitAuth'], (result) => {
         const auth = result.jobOrbitAuth;
         
-        if (auth && auth.accessToken) {
-            showJobOrbitConnected(auth.userEmail);
+        if (auth && auth.extensionToken) {
+            // Check if token is expired
+            if (auth.expiresAt && Date.now() > auth.expiresAt) {
+                // Token expired, show not connected
+                showJobOrbitNotConnected();
+            } else {
+                // Token valid, show connected
+                showJobOrbitConnected(auth.user?.email || 'Connected');
+            }
         } else {
             showJobOrbitNotConnected();
         }
@@ -1900,49 +1915,64 @@ function showJobOrbitNotConnected() {
  */
 async function handleJobOrbitLogin() {
     try {
-        showLoading('Connecting to Job Orbit...');
+        showLoading('Opening Job Orbit...');
         
-        // Get redirect URL for OAuth
-        const redirectUri = chrome.identity.getRedirectURL();
+        // Generate a unique state for CSRF protection
+        const state = Math.random().toString(36).substring(7);
+        const nonce = Date.now().toString();
         
-        // Call backend to initiate OAuth flow
-        const response = await fetch(`${API_BASE_URL}/auth/joborbit/init`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ redirectUri })
+        // Store state in local storage temporarily
+        chrome.storage.local.set({
+            jobOrbitAuthState: state,
+            jobOrbitAuthNonce: nonce,
+            jobOrbitAuthTime: Date.now()
         });
         
-        if (!response.ok) throw new Error('Failed to initiate OAuth');
+        // Open the auth URL in a new tab
+        const extensionId = chrome.runtime.id;
+        const authUrl = `https://job-orbit-flax.vercel.app/extension-auth?extensionId=${extensionId}&state=${state}&nonce=${nonce}`;
         
-        const data = await response.json();
-        
-        // Launch OAuth flow
-        chrome.identity.launchWebAuthFlow({
-            url: data.authUrl,
-            interactive: true
-        }, (redirectUrl) => {
+        chrome.tabs.create({ url: authUrl }, (tab) => {
             hideLoading();
+            console.log('[Popup] Auth tab opened, waiting for response...');
             
-            if (chrome.runtime.lastError) {
-                showNotification('Login cancelled', 'error');
-                return;
-            }
-            
-            if (redirectUrl) {
-                // Extract auth code from redirect URL
-                try {
-                    const url = new URL(redirectUrl);
-                    const code = url.searchParams.get('code');
-                    const state = url.searchParams.get('state');
+            // Listen for messages from the auth page
+            const messageListener = (request, sender, sendResponse) => {
+                if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
+                    console.log('[Popup] Received Job Orbit auth response from:', sender.url);
                     
-                    if (code && state) {
-                        exchangeCodeForToken(code, state);
-                    }
-                } catch (e) {
-                    showNotification('Invalid redirect URL', 'error');
+                    // Validate state to prevent CSRF
+                    chrome.storage.local.get(['jobOrbitAuthState', 'jobOrbitAuthTime'], (result) => {
+                        const timeDiff = Date.now() - (result.jobOrbitAuthTime || 0);
+                        
+                        // Check if state is valid and not expired (15 minutes)
+                        if (request.state === result.jobOrbitAuthState && timeDiff < 15 * 60 * 1000) {
+                            handleJobOrbitAuthResponse(request.data, tab.id);
+                        } else {
+                            console.error('[Popup] State validation failed. Expected:', result.jobOrbitAuthState, 'Got:', request.state);
+                            showNotification('Authentication failed: Invalid or expired state', 'error');
+                        }
+                        
+                        // Clean up
+                        chrome.storage.local.remove(['jobOrbitAuthState', 'jobOrbitAuthNonce', 'jobOrbitAuthTime']);
+                    });
+                    
+                    // Remove the listener
+                    chrome.runtime.onMessage.removeListener(messageListener);
+                    
+                    sendResponse({ success: true });
                 }
-            }
+            };
+            
+            chrome.runtime.onMessage.addListener(messageListener);
+            
+            // Set a timeout to remove the listener after 15 minutes to prevent memory leaks
+            setTimeout(() => {
+                chrome.runtime.onMessage.removeListener(messageListener);
+                console.log('[Popup] Auth listener timeout after 15 minutes');
+            }, 15 * 60 * 1000);
         });
+        
     } catch (error) {
         hideLoading();
         console.error('[Popup] Job Orbit login error:', error);
@@ -1951,40 +1981,66 @@ async function handleJobOrbitLogin() {
 }
 
 /**
- * Exchange Auth Code for Token
+ * Handle Job Orbit Auth Response
  */
-async function exchangeCodeForToken(code, state) {
+function handleJobOrbitAuthResponse(authData, tabId) {
+    if (!authData || !authData.extensionToken) {
+        showNotification('Authentication failed: No token received', 'error');
+        return;
+    }
+    
     try {
-        showLoading('Connecting to Job Orbit...');
+        // Calculate expiration time
+        const expiresIn = authData.expiresIn || 86400; // Default 24 hours
+        const expiresAt = Date.now() + (expiresIn * 1000);
         
-        const response = await fetch(`${API_BASE_URL}/auth/joborbit/callback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code, state })
-        });
+        // Prepare auth object
+        const jobOrbitAuth = {
+            extensionToken: authData.extensionToken,
+            expiresAt: expiresAt,
+            // User information (optional)
+            user: authData.user ? {
+                id: authData.user.id,
+                email: authData.user.email,
+                name: authData.user.name,
+                avatar: authData.user.avatar
+            } : null
+        };
         
-        if (!response.ok) throw new Error('Failed to get token');
-        
-        const data = await response.json();
-        
-        // Save auth token
-        chrome.storage.sync.set({
-            jobOrbitAuth: {
-                accessToken: data.accessToken,
-                refreshToken: data.refreshToken,
-                userEmail: data.userEmail,
-                expiresAt: data.expiresAt
-            }
-        }, () => {
-            hideLoading();
+        // Store in chrome storage
+        chrome.storage.sync.set({ jobOrbitAuth }, () => {
             showNotification('✅ Connected to Job Orbit!', 'success');
-            showJobOrbitConnected(data.userEmail);
+            showJobOrbitConnected(authData.user?.email || 'Connected');
+            
+            // Close the auth tab after a short delay
+            setTimeout(() => {
+                chrome.tabs.remove(tabId);
+                // Refresh the settings UI immediately
+                checkJobOrbitConnection();
+            }, 1000);
         });
     } catch (error) {
-        hideLoading();
-        console.error('[Popup] Token exchange error:', error);
-        showNotification('Connection failed: ' + error.message, 'error');
+        console.error('[Popup] Error processing auth response:', error);
+        showNotification('Failed to save authentication: ' + error.message, 'error');
     }
+}
+
+/**
+ * Verify Job Orbit Token Expiration
+ */
+function verifyJobOrbitTokenExpiration() {
+    chrome.storage.sync.get(['jobOrbitAuth'], (result) => {
+        if (result.jobOrbitAuth && result.jobOrbitAuth.expiresAt) {
+            const now = Date.now();
+            const expiresAt = result.jobOrbitAuth.expiresAt;
+            
+            // If token expires in less than 5 minutes, refresh it
+            if (expiresAt - now < 5 * 60 * 1000) {
+                console.log('[Popup] Token expiring soon, should refresh');
+                // In a real app, you'd refresh the token here
+            }
+        }
+    });
 }
 
 /**
@@ -2095,14 +2151,12 @@ function exportJobsToCSV() {
 async function loadSettings() {
     const result = await new Promise((resolve) => {
         chrome.storage.sync.get([
-            'jobOrbitAutoSync',
             'autoStartAutofill',
             'showFloatingButton',
             'enableNotifications'
         ], resolve);
     });
     
-    document.getElementById('jobOrbitAutoSync').checked = result.jobOrbitAutoSync !== false;
     document.getElementById('autoStartAutofill').checked = result.autoStartAutofill !== false;
     document.getElementById('showFloatingButton').checked = result.showFloatingButton !== false;
     document.getElementById('enableNotifications').checked = result.enableNotifications !== false;
@@ -2113,7 +2167,6 @@ async function loadSettings() {
  */
 function saveSettings() {
     const settings = {
-        jobOrbitAutoSync: document.getElementById('jobOrbitAutoSync').checked,
         autoStartAutofill: document.getElementById('autoStartAutofill').checked,
         showFloatingButton: document.getElementById('showFloatingButton').checked,
         enableNotifications: document.getElementById('enableNotifications').checked
