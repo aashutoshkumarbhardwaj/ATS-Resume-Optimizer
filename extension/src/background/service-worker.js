@@ -77,6 +77,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 clearApplicationHistory(sendResponse);
                 return true;
             
+            case 'GET_AUTH_STATUS':
+                getAuthStatus(sendResponse);
+                return true;
+            
             default:
                 sendResponse({ success: false, error: 'Unknown request type' });
                 return false;
@@ -360,6 +364,30 @@ function getApplicationHistory(sendResponse) {
 function clearApplicationHistory(sendResponse) {
     chrome.storage.local.set({ applicationHistory: [] }, () => {
         sendResponse({ success: true });
+    });
+}
+
+/**
+ * Get authentication status
+ */
+function getAuthStatus(sendResponse) {
+    // Get current user from storage
+    chrome.storage.sync.get(['supabaseUser'], (syncResult) => {
+        const user = syncResult.supabaseUser;
+        
+        if (user) {
+            // User is logged in
+            sendResponse({ success: true, user, isLoggedIn: true });
+        } else {
+            // Check for guest user
+            chrome.storage.local.get(['guestUser'], (localResult) => {
+                if (localResult.guestUser) {
+                    sendResponse({ success: true, user: localResult.guestUser, isLoggedIn: false, isGuest: true });
+                } else {
+                    sendResponse({ success: true, user: null, isLoggedIn: false, isGuest: false });
+                }
+            });
+        }
     });
 }
 

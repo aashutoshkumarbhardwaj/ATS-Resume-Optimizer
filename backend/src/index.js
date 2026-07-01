@@ -78,6 +78,24 @@ try {
     console.error('❌ Job Orbit routes failed:', e.message);
 }
 
+// Supabase routes — Cloud auth & data sync
+try {
+    const profileRoutes = require('./routes/profile');
+    const resumesRoutes = require('./routes/resumes');
+    const applicationsRoutes = require('./routes/applications');
+    const aiMemoryRoutes = require('./routes/ai-memory');
+    const authRoutes = require('./routes/auth');
+    
+    app.use('/api/profile', profileRoutes);
+    app.use('/api/resumes', resumesRoutes);
+    app.use('/api/applications', applicationsRoutes);
+    app.use('/api/ai-memory', aiMemoryRoutes);
+    app.use('/api/auth', authRoutes);
+    console.log('✅ Supabase cloud routes loaded (profile, resumes, applications, ai-memory, auth)');
+} catch (e) {
+    console.error('❌ Supabase routes failed:', e.message);
+}
+
 // User / job-role routes require MongoDB — only load if URI is configured
 if (process.env.MONGODB_URI) {
     try {

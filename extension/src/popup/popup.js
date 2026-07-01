@@ -10,7 +10,7 @@ const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
 // Popup state management
 const PopupState = {
     isOpen: true,
-    activeTab: 'optimize',
+    activeTab: 'home',
     tasksPending: 0,
     initialized: false,
     
@@ -36,11 +36,11 @@ function initializeDOMElements() {
     
     try {
         tabs = {
-            optimize: document.getElementById('optimizeTab'),
-            history: document.getElementById('jobtrackingTab'),  // Renamed for compatibility
-            jobtracking: document.getElementById('jobtrackingTab'),
+            home: document.getElementById('homeTab'),
+            resume: document.getElementById('resumeTab'),
             autofill: document.getElementById('autofillTab'),
-            settings: document.getElementById('settingsTab')
+            ai: document.getElementById('aiTab'),
+            account: document.getElementById('accountTab')
         };
 
         panels = {
@@ -217,6 +217,9 @@ async function init() {
         // Fast initialization - only load what's needed
         setupEventListeners();
         
+        // Load dashboard on startup (home tab is active by default)
+        loadDashboard();
+        
         // Defer non-critical loading
         if ('requestIdleCallback' in window) {
             requestIdleCallback(() => {
@@ -360,13 +363,23 @@ function switchTab(tabName) {
     });
     
     // Load content based on tab
-    if (tabName === 'jobtracking') {
-        loadJobTracking();
+    if (tabName === 'home') {
+        loadDashboard();
     }
     
-    if (tabName === 'settings') {
-        loadSettings();
+    if (tabName === 'resume') {
+        loadResumeTab();
     }
+    
+    if (tabName === 'account') {
+        loadAccountTab();
+    }
+    
+    if (tabName === 'ai') {
+        loadSettingsTab();
+    }
+    
+    PopupState.activeTab = tabName;
 }
 
 /**
@@ -1404,18 +1417,43 @@ async function loadAutofillProfile() {
         const result = await StorageUtil.getAutofillProfile();
         if (result.success && result.profile) {
             const p = result.profile;
+            
+            // Personal fields
             document.getElementById('full_name').value = p.full_name || '';
             document.getElementById('first_name').value = p.first_name || '';
             document.getElementById('last_name').value = p.last_name || '';
             document.getElementById('email').value = p.email || '';
             document.getElementById('phone').value = p.phone || '';
             document.getElementById('city').value = p.city || '';
+            if (document.getElementById('state')) document.getElementById('state').value = p.state || '';
+            if (document.getElementById('zip')) document.getElementById('zip').value = p.zip || '';
             document.getElementById('country').value = p.country || '';
+            
+            // Professional fields
+            document.getElementById('current_title').value = p.current_title || '';
+            if (document.getElementById('current_company')) document.getElementById('current_company').value = p.current_company || '';
+            document.getElementById('years_of_experience').value = p.years_of_experience || '';
+            if (document.getElementById('notice_period')) document.getElementById('notice_period').value = p.notice_period || '';
+            if (document.getElementById('expected_salary')) document.getElementById('expected_salary').value = p.expected_salary || '';
+            
+            // Links
             document.getElementById('linkedin').value = p.linkedin || '';
             document.getElementById('github').value = p.github || '';
             document.getElementById('portfolio').value = p.portfolio || '';
-            document.getElementById('current_title').value = p.current_title || '';
-            document.getElementById('years_of_experience').value = p.years_of_experience || '';
+            
+            // Resume & Skills
+            if (document.getElementById('default_resume')) document.getElementById('default_resume').value = p.default_resume || '';
+            if (document.getElementById('skills')) document.getElementById('skills').value = p.skills || '';
+            
+            // Pre-filled Answers
+            if (document.getElementById('answer_about_you')) document.getElementById('answer_about_you').value = p.answer_about_you || '';
+            if (document.getElementById('answer_why_company')) document.getElementById('answer_why_company').value = p.answer_why_company || '';
+            if (document.getElementById('answer_hire_you')) document.getElementById('answer_hire_you').value = p.answer_hire_you || '';
+            
+            // Job Preferences
+            if (document.getElementById('work_environment')) document.getElementById('work_environment').value = p.work_environment || '';
+            if (document.getElementById('preferred_location')) document.getElementById('preferred_location').value = p.preferred_location || '';
+            if (document.getElementById('work_authorization')) document.getElementById('work_authorization').value = p.work_authorization || '';
 
             console.log('[Popup] Autofill profile loaded:', p);
 
@@ -1485,18 +1523,43 @@ async function handleSaveProfile(e) {
         });
 
         const profileData = {
+            // Personal
             full_name: document.getElementById('full_name').value.trim(),
             first_name: document.getElementById('first_name').value.trim(),
             last_name: document.getElementById('last_name').value.trim(),
             email: document.getElementById('email').value.trim(),
             phone: document.getElementById('phone').value.trim(),
             city: document.getElementById('city').value.trim(),
+            state: document.getElementById('state')?.value.trim() || '',
+            zip: document.getElementById('zip')?.value.trim() || '',
             country: document.getElementById('country').value.trim(),
+            
+            // Professional
+            current_title: document.getElementById('current_title').value.trim(),
+            current_company: document.getElementById('current_company')?.value.trim() || '',
+            years_of_experience: document.getElementById('years_of_experience').value.trim(),
+            notice_period: document.getElementById('notice_period')?.value.trim() || '',
+            expected_salary: document.getElementById('expected_salary')?.value.trim() || '',
+            
+            // Links
             linkedin: document.getElementById('linkedin').value.trim(),
             github: document.getElementById('github').value.trim(),
             portfolio: document.getElementById('portfolio').value.trim(),
-            current_title: document.getElementById('current_title').value.trim(),
-            years_of_experience: document.getElementById('years_of_experience').value.trim(),
+            
+            // Resume & Skills
+            default_resume: document.getElementById('default_resume')?.value.trim() || '',
+            skills: document.getElementById('skills')?.value.trim() || '',
+            
+            // Pre-filled Answers
+            answer_about_you: document.getElementById('answer_about_you')?.value.trim() || '',
+            answer_why_company: document.getElementById('answer_why_company')?.value.trim() || '',
+            answer_hire_you: document.getElementById('answer_hire_you')?.value.trim() || '',
+            
+            // Job Preferences
+            work_environment: document.getElementById('work_environment')?.value || '',
+            preferred_location: document.getElementById('preferred_location')?.value.trim() || '',
+            work_authorization: document.getElementById('work_authorization')?.value.trim() || '',
+            
             custom_fields: customFields
         };
 
@@ -1794,120 +1857,148 @@ function handleAutofillResults(result) {
  */
 
 /**
- * Connect to Job Orbit
+ * Check Job Orbit Connection Status
  */
-async function handleConnectJobOrbit() {
-    const apiKey = document.getElementById('jobOrbitApiKey').value.trim();
-    
-    if (!apiKey) {
-        showNotification('Please enter your Job Orbit API key', 'error');
-        return;
-    }
-    
-    try {
-        PopupState.markTask();
+function checkJobOrbitConnection() {
+    chrome.storage.sync.get(['jobOrbitAuth'], (result) => {
+        const auth = result.jobOrbitAuth;
         
-        // Validate API key by making test request to Job Orbit
-        const response = await fetch('https://api.joborbit.com/v1/applications', {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json'
+        if (auth && auth.accessToken) {
+            showJobOrbitConnected(auth.userEmail);
+        } else {
+            showJobOrbitNotConnected();
+        }
+    });
+}
+
+/**
+ * Show Job Orbit Connected UI
+ */
+function showJobOrbitConnected(email) {
+    const notConnected = document.getElementById('jobOrbitNotConnected');
+    const connected = document.getElementById('jobOrbitConnected');
+    const userEmail = document.getElementById('jobOrbitUserEmail');
+    
+    if (notConnected) notConnected.style.display = 'none';
+    if (connected) connected.style.display = 'block';
+    if (userEmail) userEmail.textContent = email || 'Connected';
+}
+
+/**
+ * Show Job Orbit Not Connected UI
+ */
+function showJobOrbitNotConnected() {
+    const notConnected = document.getElementById('jobOrbitNotConnected');
+    const connected = document.getElementById('jobOrbitConnected');
+    
+    if (notConnected) notConnected.style.display = 'block';
+    if (connected) connected.style.display = 'none';
+}
+
+/**
+ * Handle Job Orbit OAuth Login
+ */
+async function handleJobOrbitLogin() {
+    try {
+        showLoading('Connecting to Job Orbit...');
+        
+        // Get redirect URL for OAuth
+        const redirectUri = chrome.identity.getRedirectURL();
+        
+        // Call backend to initiate OAuth flow
+        const response = await fetch(`${API_BASE_URL}/auth/joborbit/init`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ redirectUri })
+        });
+        
+        if (!response.ok) throw new Error('Failed to initiate OAuth');
+        
+        const data = await response.json();
+        
+        // Launch OAuth flow
+        chrome.identity.launchWebAuthFlow({
+            url: data.authUrl,
+            interactive: true
+        }, (redirectUrl) => {
+            hideLoading();
+            
+            if (chrome.runtime.lastError) {
+                showNotification('Login cancelled', 'error');
+                return;
+            }
+            
+            if (redirectUrl) {
+                // Extract auth code from redirect URL
+                try {
+                    const url = new URL(redirectUrl);
+                    const code = url.searchParams.get('code');
+                    const state = url.searchParams.get('state');
+                    
+                    if (code && state) {
+                        exchangeCodeForToken(code, state);
+                    }
+                } catch (e) {
+                    showNotification('Invalid redirect URL', 'error');
+                }
             }
         });
-        
-        if (!response.ok) {
-            throw new Error('Invalid API key or Job Orbit connection failed');
-        }
-        
-        // Save API key to storage
-        chrome.storage.sync.set({ jobOrbitApiKey: apiKey }, () => {
-            showNotification('✅ Connected to Job Orbit!', 'success');
-            document.getElementById('jobOrbitStatus').style.display = 'block';
-            syncJobTrackingWithOrbit();
-        });
-        
     } catch (error) {
-        console.error('[Popup] Job Orbit connection error:', error);
-        showNotification('Failed to connect: ' + error.message, 'error');
-    } finally {
-        PopupState.unmarkTask();
+        hideLoading();
+        console.error('[Popup] Job Orbit login error:', error);
+        showNotification('Login failed: ' + error.message, 'error');
     }
 }
 
 /**
- * Sync jobs with Job Orbit
+ * Exchange Auth Code for Token
  */
-async function syncJobTrackingWithOrbit() {
+async function exchangeCodeForToken(code, state) {
     try {
-        PopupState.markTask();
+        showLoading('Connecting to Job Orbit...');
         
-        // Get API key from storage
-        const result = await new Promise((resolve) => {
-            chrome.storage.sync.get(['jobOrbitApiKey'], resolve);
-        });
-        
-        if (!result.jobOrbitApiKey) {
-            showNotification('Job Orbit not connected. Please add API key in settings.', 'error');
-            PopupState.unmarkTask();
-            return;
-        }
-        
-        // Get local applications
-        const localResult = await new Promise((resolve) => {
-            chrome.storage.local.get(['applicationHistory'], resolve);
-        });
-        
-        const applications = localResult.applicationHistory || [];
-        
-        if (applications.length === 0) {
-            showNotification('No applications to sync', 'info');
-            PopupState.unmarkTask();
-            return;
-        }
-        
-        // Send to Job Orbit
-        const jobOrbitData = applications.map(app => ({
-            company: app.company,
-            jobTitle: app.jobTitle,
-            location: app.location,
-            salary: app.salary,
-            jobUrl: app.jobUrl,
-            appliedDate: app.timestamp,
-            status: app.status || 'Applied',
-            notes: app.notes,
-            resumeVersion: app.resumeVersion
-        }));
-        
-        const response = await fetch('https://api.joborbit.com/v1/applications/batch', {
+        const response = await fetch(`${API_BASE_URL}/auth/joborbit/callback`, {
             method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${result.jobOrbitApiKey}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                applications: jobOrbitData
-            })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code, state })
         });
         
-        if (response.ok) {
-            const data = await response.json();
-            showNotification(`✅ Synced ${applications.length} applications to Job Orbit!`, 'success');
-            displayJobTracking(applications);
-        } else {
-            throw new Error('Failed to sync applications');
-        }
+        if (!response.ok) throw new Error('Failed to get token');
         
+        const data = await response.json();
+        
+        // Save auth token
+        chrome.storage.sync.set({
+            jobOrbitAuth: {
+                accessToken: data.accessToken,
+                refreshToken: data.refreshToken,
+                userEmail: data.userEmail,
+                expiresAt: data.expiresAt
+            }
+        }, () => {
+            hideLoading();
+            showNotification('✅ Connected to Job Orbit!', 'success');
+            showJobOrbitConnected(data.userEmail);
+        });
     } catch (error) {
-        console.error('[Popup] Job Orbit sync error:', error);
-        showNotification('Sync failed: ' + error.message, 'error');
-    } finally {
-        PopupState.unmarkTask();
+        hideLoading();
+        console.error('[Popup] Token exchange error:', error);
+        showNotification('Connection failed: ' + error.message, 'error');
     }
 }
 
 /**
- * Display job tracking list
+ * Handle Job Orbit Logout
+ */
+function handleJobOrbitLogout() {
+    chrome.storage.sync.remove(['jobOrbitAuth'], () => {
+        showNotification('✅ Logged out from Job Orbit', 'success');
+        showJobOrbitNotConnected();
+    });
+}
+
+/**
+ * Display job tracking list (deprecated - kept for reference but not used)
  */
 function displayJobTracking(applications) {
     const listContainer = document.getElementById('jobTrackingList');
@@ -2108,46 +2199,28 @@ function clearAllData() {
  * Setup Settings Tab event listeners
  */
 function setupSettingsListeners() {
-    // Job Orbit
-    const connectJobOrbitBtn = document.getElementById('connectJobOrbitBtn');
-    if (connectJobOrbitBtn) {
-        connectJobOrbitBtn.addEventListener('click', handleConnectJobOrbit);
+    // Job Orbit login button
+    const joborbitLoginBtn = document.getElementById('joborbitLoginBtn');
+    if (joborbitLoginBtn) {
+        joborbitLoginBtn.addEventListener('click', handleJobOrbitLogin);
     }
     
-    // Job Tracking
-    const syncJobTrackingBtn = document.getElementById('syncJobTrackingBtn');
-    if (syncJobTrackingBtn) {
-        syncJobTrackingBtn.addEventListener('click', syncJobTrackingWithOrbit);
+    // Job Orbit logout button
+    const joborbitLogoutBtn = document.getElementById('joborbitLogoutBtn');
+    if (joborbitLogoutBtn) {
+        joborbitLogoutBtn.addEventListener('click', handleJobOrbitLogout);
     }
     
-    const exportJobsBtn = document.getElementById('exportJobsBtn');
-    if (exportJobsBtn) {
-        exportJobsBtn.addEventListener('click', exportJobsToCSV);
-    }
-    
-    // Settings toggles
-    ['jobOrbitAutoSync', 'autoStartAutofill', 'showFloatingButton', 'enableNotifications'].forEach(id => {
+    // Settings toggles - auto-save
+    ['autoStartAutofill', 'showFloatingButton', 'enableNotifications'].forEach(id => {
         const elem = document.getElementById(id);
         if (elem) {
             elem.addEventListener('change', saveSettings);
         }
     });
     
-    // Data management
-    const exportSettingsBtn = document.getElementById('exportSettingsBtn');
-    if (exportSettingsBtn) {
-        exportSettingsBtn.addEventListener('click', exportAllData);
-    }
-    
-    const importSettingsBtn = document.getElementById('importSettingsBtn');
-    if (importSettingsBtn) {
-        importSettingsBtn.addEventListener('click', importData);
-    }
-    
-    const clearAllDataBtn = document.getElementById('clearAllDataBtn');
-    if (clearAllDataBtn) {
-        clearAllDataBtn.addEventListener('click', clearAllData);
-    }
+    // Check if already connected to Job Orbit
+    checkJobOrbitConnection();
 }
 
 /**
@@ -2163,6 +2236,511 @@ function loadJobTracking() {
             if (result.jobOrbitApiKey) {
                 document.getElementById('jobOrbitStatus').style.display = 'block';
             }
+        });
+    });
+}
+
+/**
+ * Load Dashboard (Home Tab)
+ * Displays auth status, quick stats, and action buttons
+ */
+async function loadDashboard() {
+    try {
+        PopupState.markTask();
+        
+        // Get auth status from GuestModeManager
+        chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' }, (response) => {
+            if (response && response.user) {
+                const userEmail = response.user.email || response.user.id || 'User';
+                const userEmailEl = document.getElementById('userEmail');
+                if (userEmailEl) {
+                    userEmailEl.textContent = userEmail;
+                }
+            }
+        });
+        
+        // Load application statistics
+        chrome.storage.local.get(['applicationHistory'], (result) => {
+            const applications = result.applicationHistory || [];
+            const totalApps = applications.length;
+            const appliedCount = applications.filter(a => a.status === 'Applied').length;
+            
+            const totalAppsEl = document.getElementById('dashboardTotalApps');
+            const appliedEl = document.getElementById('dashboardApplied');
+            
+            if (totalAppsEl) totalAppsEl.textContent = totalApps;
+            if (appliedEl) appliedEl.textContent = appliedCount;
+            
+            // Load recent applications
+            loadDashboardRecentApps(applications);
+        });
+        
+        // Wire up quick action buttons
+        setupDashboardActions();
+        
+        PopupState.unmarkTask();
+    } catch (error) {
+        console.error('[Popup] Error loading dashboard:', error);
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Display recent applications on dashboard
+ */
+function loadDashboardRecentApps(applications) {
+    const container = document.getElementById('dashboardRecentApps');
+    if (!container) return;
+    
+    if (!applications || applications.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; color: #999; padding: 20px 0; font-size: 12px;">
+                No applications yet
+            </div>
+        `;
+        return;
+    }
+    
+    // Show last 5 applications
+    const recent = applications.slice(-5).reverse();
+    const html = recent.map(app => `
+        <div style="padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: 11px;">
+            <div style="font-weight: 600; color: #333;">${escapeHtml(app.company || 'Unknown')}</div>
+            <div style="color: #666; margin: 2px 0;">${escapeHtml(app.jobTitle || 'Unknown Position')}</div>
+            <div style="color: #999; font-size: 10px;">
+                ${app.timestamp ? new Date(app.timestamp).toLocaleDateString() : 'N/A'}
+                ${app.status ? ` • ${app.status}` : ''}
+            </div>
+        </div>
+    `).join('');
+    
+    container.innerHTML = html;
+}
+
+/**
+ * Setup dashboard quick action buttons
+ */
+function setupDashboardActions() {
+    const goToResumeBtn = document.getElementById('goToResumeBtn');
+    if (goToResumeBtn) {
+        goToResumeBtn.addEventListener('click', () => switchTab('resume'));
+    }
+    
+    const goToAutofillBtn = document.getElementById('goToAutofillBtn');
+    if (goToAutofillBtn) {
+        goToAutofillBtn.addEventListener('click', () => switchTab('autofill'));
+    }
+    
+    const viewApplicationsBtn = document.getElementById('viewApplicationsBtn');
+    if (viewApplicationsBtn) {
+        viewApplicationsBtn.addEventListener('click', () => switchTab('account'));
+    }
+}
+
+/**
+ * Load Resume Tab
+ * Displays job detection, resume upload, and analysis panels
+ */
+async function loadResumeTab() {
+    try {
+        PopupState.markTask();
+        
+        // Ensure panels are initialized and visible
+        if (panels && panels.jobDetection) {
+            panels.jobDetection.classList.remove('hidden');
+        }
+        if (panels && panels.resumeUpload) {
+            panels.resumeUpload.classList.remove('hidden');
+        }
+        
+        // Load any saved data
+        loadDetectedJob();
+        loadSavedResume();
+        
+        // Make sure analysis and optimization panels are hidden initially
+        if (panels && panels.analysis) {
+            panels.analysis.classList.add('hidden');
+        }
+        if (panels && panels.optimization) {
+            panels.optimization.classList.add('hidden');
+        }
+        
+        PopupState.unmarkTask();
+    } catch (error) {
+        console.error('[Popup] Error loading resume tab:', error);
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Load Account Tab (AI Hub)
+ * Displays personal AI answer library
+ */
+async function loadAccountTab() {
+    try {
+        PopupState.markTask();
+        
+        // Load AI answers
+        loadAIAnswers();
+        
+        // Setup AI Hub event listeners
+        setupAIHubListeners();
+        
+        PopupState.unmarkTask();
+    } catch (error) {
+        console.error('[Popup] Error loading account tab:', error);
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Load Settings Tab
+ */
+async function loadSettingsTab() {
+    try {
+        PopupState.markTask();
+        
+        // Load settings
+        loadSettings();
+        
+        // Setup listeners
+        setupSettingsListeners();
+        
+        PopupState.unmarkTask();
+    } catch (error) {
+        console.error('[Popup] Error loading settings tab:', error);
+        PopupState.unmarkTask();
+    }
+}
+
+/**
+ * Load AI Answers from storage
+ */
+function loadAIAnswers(filter = 'all', searchTerm = '') {
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        let answers = result.aiAnswers || [];
+        
+        // Filter by category
+        if (filter !== 'all') {
+            answers = answers.filter(a => a.category === filter);
+        }
+        
+        // Filter by search term
+        if (searchTerm) {
+            const term = searchTerm.toLowerCase();
+            answers = answers.filter(a => 
+                a.title.toLowerCase().includes(term) ||
+                a.text.toLowerCase().includes(term)
+            );
+        }
+        
+        displayAIAnswers(answers);
+    });
+}
+
+/**
+ * Display AI Answers
+ */
+function displayAIAnswers(answers) {
+    const container = document.getElementById('aiAnswersList');
+    if (!container) return;
+    
+    if (!answers || answers.length === 0) {
+        container.innerHTML = `
+            <div style="text-align: center; color: #999; padding: 30px 0; font-size: 12px;">
+                <p style="margin: 0;">No answers found</p>
+                <p style="margin: 4px 0 0 0; font-size: 10px;">Try adjusting your filters or search</p>
+            </div>
+        `;
+        return;
+    }
+    
+    const html = answers.map((answer, index) => `
+        <div style="padding: 12px; background: white; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
+                <div style="flex: 1;">
+                    <div style="font-weight: 600; color: #333; font-size: 12px; margin-bottom: 4px;">${escapeHtml(answer.title)}</div>
+                    <div style="font-size: 10px; color: #999;">
+                        <span style="display: inline-block; background: #f0f0f0; padding: 2px 8px; border-radius: 12px; margin-right: 4px;">
+                            ${getCategoryLabel(answer.category)}
+                        </span>
+                    </div>
+                </div>
+                <div style="font-size: 20px;">
+                    ${answer.isFavorite ? '⭐' : '☆'}
+                </div>
+            </div>
+            <div style="background: #f9f9f9; padding: 8px; border-radius: 4px; margin-bottom: 8px; max-height: 80px; overflow: hidden; font-size: 11px; color: #555; line-height: 1.4;">
+                ${escapeHtml(answer.text)}
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                <button class="edit-answer-btn" data-index="${index}" title="Edit" style="padding: 4px 8px; background: #667eea; color: white; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">✏️ Edit</button>
+                <button class="copy-answer-btn" data-index="${index}" title="Copy" style="padding: 4px 8px; background: #4caf50; color: white; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">📋 Copy</button>
+                <button class="regenerate-answer-btn" data-index="${index}" title="Regenerate" style="padding: 4px 8px; background: #2196f3; color: white; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">🔄 Regen</button>
+                <button class="favorite-answer-btn" data-index="${index}" title="Favorite" style="padding: 4px 8px; background: ${answer.isFavorite ? '#ff9800' : '#ddd'}; color: ${answer.isFavorite ? 'white' : '#333'}; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">⭐ Fav</button>
+                <button class="delete-answer-btn" data-index="${index}" title="Delete" style="padding: 4px 8px; background: #f44336; color: white; border: none; border-radius: 4px; font-size: 10px; cursor: pointer;">🗑️ Delete</button>
+            </div>
+        </div>
+    `).join('');
+    
+    container.innerHTML = html;
+    
+    // Attach event listeners to buttons
+    attachAnswerButtonListeners();
+}
+
+/**
+ * Get category label
+ */
+function getCategoryLabel(category) {
+    const labels = {
+        'about-me': 'About Me',
+        'company': 'Why Company?',
+        'hire-you': 'Hire You?',
+        'leadership': 'Leadership',
+        'conflict': 'Conflict',
+        'achievements': 'Achievements',
+        'goals': 'Goals',
+        'technical': 'Technical',
+        'behavioral': 'Behavioral'
+    };
+    return labels[category] || category;
+}
+
+/**
+ * Attach event listeners to answer buttons
+ */
+function attachAnswerButtonListeners() {
+    // Edit buttons
+    document.querySelectorAll('.edit-answer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => editAnswer(parseInt(e.target.dataset.index)));
+    });
+    
+    // Copy buttons
+    document.querySelectorAll('.copy-answer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => copyAnswer(parseInt(e.target.dataset.index)));
+    });
+    
+    // Regenerate buttons
+    document.querySelectorAll('.regenerate-answer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => regenerateAnswer(parseInt(e.target.dataset.index)));
+    });
+    
+    // Favorite buttons
+    document.querySelectorAll('.favorite-answer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => toggleFavorite(parseInt(e.target.dataset.index)));
+    });
+    
+    // Delete buttons
+    document.querySelectorAll('.delete-answer-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => deleteAnswer(parseInt(e.target.dataset.index)));
+    });
+}
+
+/**
+ * Edit Answer
+ */
+function editAnswer(index) {
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        const answers = result.aiAnswers || [];
+        const answer = answers[index];
+        
+        if (!answer) return;
+        
+        // Populate modal
+        document.getElementById('answerCategory').value = answer.category;
+        document.getElementById('answerTitle').value = answer.title;
+        document.getElementById('answerText').value = answer.text;
+        
+        // Show modal
+        document.getElementById('aiAnswerModal').style.display = 'block';
+        
+        // Store current edit index
+        document.getElementById('aiAnswerModal').dataset.editIndex = index;
+    });
+}
+
+/**
+ * Copy Answer to Clipboard
+ */
+function copyAnswer(index) {
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        const answers = result.aiAnswers || [];
+        const answer = answers[index];
+        
+        if (!answer) return;
+        
+        navigator.clipboard.writeText(answer.text).then(() => {
+            showNotification('✅ Answer copied to clipboard!', 'success');
+        }).catch(() => {
+            showNotification('Failed to copy', 'error');
+        });
+    });
+}
+
+/**
+ * Regenerate Answer using AI
+ */
+async function regenerateAnswer(index) {
+    chrome.storage.local.get(['aiAnswers'], async (result) => {
+        const answers = result.aiAnswers || [];
+        const answer = answers[index];
+        
+        if (!answer) return;
+        
+        showLoading('Regenerating answer with AI...');
+        
+        try {
+            const response = await fetch(`${API_BASE_URL}/ai/generate-answer`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: answer.title,
+                    category: answer.category,
+                    previousAnswer: answer.text
+                })
+            });
+            
+            if (!response.ok) throw new Error('Failed to regenerate');
+            
+            const data = await response.json();
+            
+            if (data.success && data.answer) {
+                // Update answer
+                answers[index].text = data.answer;
+                chrome.storage.local.set({ aiAnswers: answers }, () => {
+                    hideLoading();
+                    showNotification('✅ Answer regenerated!', 'success');
+                    loadAIAnswers();
+                });
+            }
+        } catch (error) {
+            hideLoading();
+            showNotification('Failed to regenerate: ' + error.message, 'error');
+        }
+    });
+}
+
+/**
+ * Toggle Favorite
+ */
+function toggleFavorite(index) {
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        const answers = result.aiAnswers || [];
+        if (answers[index]) {
+            answers[index].isFavorite = !answers[index].isFavorite;
+            chrome.storage.local.set({ aiAnswers: answers }, () => {
+                loadAIAnswers();
+            });
+        }
+    });
+}
+
+/**
+ * Delete Answer
+ */
+function deleteAnswer(index) {
+    if (!confirm('Are you sure you want to delete this answer?')) return;
+    
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        const answers = result.aiAnswers || [];
+        answers.splice(index, 1);
+        chrome.storage.local.set({ aiAnswers: answers }, () => {
+            showNotification('✅ Answer deleted', 'success');
+            loadAIAnswers();
+        });
+    });
+}
+
+/**
+ * Setup AI Hub Event Listeners
+ */
+function setupAIHubListeners() {
+    // Add new answer button
+    const addNewAnswerBtn = document.getElementById('addNewAnswerBtn');
+    if (addNewAnswerBtn) {
+        addNewAnswerBtn.addEventListener('click', () => {
+            document.getElementById('aiAnswerModal').style.display = 'block';
+            document.getElementById('aiAnswerModal').dataset.editIndex = -1;
+            document.getElementById('answerCategory').value = 'about-me';
+            document.getElementById('answerTitle').value = '';
+            document.getElementById('answerText').value = '';
+        });
+    }
+    
+    // Cancel button
+    const cancelAnswerBtn = document.getElementById('cancelAnswerBtn');
+    if (cancelAnswerBtn) {
+        cancelAnswerBtn.addEventListener('click', () => {
+            document.getElementById('aiAnswerModal').style.display = 'none';
+        });
+    }
+    
+    // Save answer button
+    const saveAnswerBtn = document.getElementById('saveAnswerBtn');
+    if (saveAnswerBtn) {
+        saveAnswerBtn.addEventListener('click', saveAnswer);
+    }
+    
+    // Category filter buttons
+    document.querySelectorAll('.category-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.category-btn').forEach(b => b.style.background = '#f0f0f0');
+            e.target.style.background = '#667eea';
+            e.target.style.color = 'white';
+            const category = e.target.dataset.category;
+            loadAIAnswers(category);
+        });
+    });
+    
+    // Search
+    const searchInput = document.getElementById('aiHubSearch');
+    if (searchInput) {
+        searchInput.addEventListener('input', debounce((e) => {
+            const searchTerm = e.target.value;
+            const activeCategory = document.querySelector('.category-btn[style*="background: rgb(102, 126, 234)"]')?.dataset.category || 'all';
+            loadAIAnswers(activeCategory, searchTerm);
+        }, 300));
+    }
+}
+
+/**
+ * Save Answer
+ */
+function saveAnswer() {
+    const category = document.getElementById('answerCategory').value;
+    const title = document.getElementById('answerTitle').value.trim();
+    const text = document.getElementById('answerText').value.trim();
+    
+    if (!title || !text) {
+        showNotification('Please fill in all fields', 'error');
+        return;
+    }
+    
+    const editIndex = parseInt(document.getElementById('aiAnswerModal').dataset.editIndex || -1);
+    
+    chrome.storage.local.get(['aiAnswers'], (result) => {
+        let answers = result.aiAnswers || [];
+        
+        const newAnswer = {
+            category,
+            title,
+            text,
+            isFavorite: editIndex !== -1 ? (answers[editIndex]?.isFavorite || false) : false,
+            createdAt: editIndex !== -1 ? answers[editIndex].createdAt : new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+        
+        if (editIndex !== -1) {
+            answers[editIndex] = newAnswer;
+        } else {
+            answers.push(newAnswer);
+        }
+        
+        chrome.storage.local.set({ aiAnswers: answers }, () => {
+            document.getElementById('aiAnswerModal').style.display = 'none';
+            showNotification(editIndex !== -1 ? '✅ Answer updated!' : '✅ Answer saved!', 'success');
+            loadAIAnswers();
         });
     });
 }
