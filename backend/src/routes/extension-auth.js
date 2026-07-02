@@ -169,4 +169,84 @@ router.get('/callback', async (req, res) => {
     }
 });
 
+/**
+ * POST /extension-auth/sync
+ * Sync extension data with Job Orbit backend
+ * This endpoint is called periodically to sync applications, answers, profiles, etc.
+ */
+router.post('/sync', async (req, res) => {
+    try {
+        const { extensionId } = req.body;
+        const authHeader = req.headers.authorization;
+
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                success: false,
+                error: 'Missing authorization header'
+            });
+        }
+
+        const token = authHeader.substring('Bearer '.length);
+        
+        // Verify extension token
+        const { verifyExtensionToken } = require('../utils/extensionJWT');
+        let verified;
+        try {
+            verified = verifyExtensionToken(token);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid or expired token'
+            });
+        }
+
+        const userId = verified.user_id;
+
+        console.log('[ExtensionAuth] Sync initiated for user:', userId);
+
+        // Sync data:
+        // 1. Fetch applications from local storage (via extension) - not applicable here
+        // 2. Fetch AI answers from local storage (via extension) - not applicable here
+        // 3. Update profile if needed
+        // 4. Return sync status
+
+        // Get user profile
+        const profile = await supabaseService.getProfile(userId);
+        
+        if (!profile) {
+            return res.status(404).json({
+                success: false,
+                error: 'User profile not found'
+            });
+        }
+
+        // Get applications count
+        const applications = await supabaseService.getApplications(userId);
+        
+        // Get AI answers count (if table exists)
+        // const answers = await supabaseService.getAIAnswers(userId);
+
+        console.log('[ExtensionAuth] Sync completed. Applications:', applications?.length || 0);
+
+        res.json({
+            success: true,
+            syncStatus: {
+                userId,
+                email: profile.user_id,
+                syncedAt: new Date().toISOString(),
+                applicationsCount: applications?.length || 0,
+                profileUpdated: profile.updated_at
+            },
+            message: 'Sync completed successfully'
+        });
+    } catch (error) {
+        console.error('[ExtensionAuth] Sync error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Sync failed',
+            message: error.message
+        });
+    }
+});
+
 module.exports = router;

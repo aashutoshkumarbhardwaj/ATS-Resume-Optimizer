@@ -42,7 +42,11 @@ function verifyExtensionToken(token) {
             throw new Error('Invalid token type');
         }
 
-        return decoded;
+        return {
+            ...decoded,
+            user_email: decoded.email, // Add email alias for compatibility
+            user_id: decoded.user_id   // Ensure user_id is available
+        };
     } catch (error) {
         console.error('[ExtensionJWT] Verification failed:', error.message);
         throw error;

@@ -167,4 +167,90 @@ router.get('/check', authenticateRequest, async (req, res) => {
     }
 });
 
+/**
+ * GET /api/auth/me
+ * Get current authenticated user info
+ * Works with both Supabase tokens and extension tokens
+ */
+router.get('/me', async (req, res) => {
+    try {
+        const authHeader = req.headers.authorization;
+        
+        console.log('[Auth/me] Request received');
+        console.log('[Auth/me] Auth header present:', !!authHeader);
+        console.log('[Auth/me] Auth header format:', authHeader?.substring(0, 20) + '...');
+        
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            console.log('[Auth/me] ❌ Missing or invalid authorization header');
+            return res.status(401).json({
+                success: false,
+                error: 'Missing or invalid authorization header',
+                authenticated: false
+            });
+        }
+
+        const token = authHeader.substring('Bearer '.length);
+        console.log('[Auth/me] Token received, length:', token.length);
+        console.log('[Auth/me] Token preview:', token.substring(0, 30) + '...');
+
+        // Try extension token first
+        try {
+            const { verifyExtensionToken } = require('../utils/extensionJWT');
+            const verified = verifyExtensionToken(token);
+            
+            console.log('[Auth/me] ✅ Extension token verified for user:', verified.user_id);
+            
+            return res.json({
+                success: true,
+                authenticated: true,
+                tokenType: 'extension',
+                user: {
+                    id: verified.user_id,
+                    email: verified.user_email,
+                    extensionId: verified.extension_id
+                },
+                expiresIn: Math.round((verified.exp * 1000 - Date.now()) / 1000)
+            });
+        } catch (extError) {
+            console.log('[Auth/me] Extension token invalid:', extError.message);
+        }
+
+        // Try Supabase token
+        try {
+            const { verifyToken } = require('../middleware/auth');
+            const verified = await verifyToken(token);
+            
+            console.log('[Auth/me] ✅ Supabase token verified for user:', verified.sub);
+            
+            return res.json({
+                success: true,
+                authenticated: true,
+                tokenType: 'supabase',
+                user: {
+                    id: verified.sub,
+                    email: verified.email,
+                    provider: verified.aud?.[0] || 'unknown'
+                },
+                expiresIn: Math.round((verified.exp * 1000 - Date.now()) / 1000)
+            });
+        } catch (subError) {
+            console.log('[Auth/me] Supabase token invalid:', subError.message);
+        }
+
+        // Token invalid
+        console.log('[Auth/me] ❌ Token validation failed - both extension and Supabase rejected');
+        res.status(401).json({
+            success: false,
+            error: 'Invalid token',
+            authenticated: false
+        });
+    } catch (error) {
+        console.error('[Auth/me] Error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Authentication check failed'
+        });
+    }
+});
+
 module.exports = router;

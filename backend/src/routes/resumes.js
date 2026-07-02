@@ -1,23 +1,75 @@
 /**
  * Resumes Routes
  * Handle resume CRUD operations
+ * Supports both Supabase and extension tokens
  */
 
 const express = require('express');
 const router = express.Router();
 const { authenticateRequest, requireAuth } = require('../middleware/auth');
+const { verifyExtensionToken } = require('../utils/extensionJWT');
 const supabaseService = require('../services/supabaseService');
 
-// Apply authentication middleware to all routes
-router.use(authenticateRequest);
+/**
+ * Helper: Extract user ID from either extension or Supabase token
+ */
+async function extractUserId(req) {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new Error('Missing authorization header');
+    }
+
+    const token = authHeader.substring('Bearer '.length);
+
+    // Try extension token first
+    try {
+        const verified = verifyExtensionToken(token);
+        return verified.user_id;
+    } catch (e) {
+        // Fall through to Supabase
+    }
+
+    // Try Supabase via middleware
+    if (req.user?.id) {
+        return req.user.id;
+    }
+
+    throw new Error('Invalid token');
+}
+
+/**
+ * Middleware: Authenticate extension or Supabase token
+ */
+const authenticateExtensionOrSupabase = async (req, res, next) => {
+    try {
+        await authenticateRequest(req, res, () => {
+            next();
+        });
+    } catch (error) {
+        next();
+    }
+};
+
+router.use(authenticateExtensionOrSupabase);
 
 /**
  * GET /resumes
  * Get all resumes for authenticated user
+ * Works with both extension and Supabase tokens
  */
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const resumes = await supabaseService.getResumes(userId);
 
         res.json({
@@ -37,10 +89,20 @@ router.get('/', requireAuth, async (req, res) => {
 /**
  * POST /resumes
  * Create new resume
+ * Works with both extension and Supabase tokens
  */
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const { title, content, file_format } = req.body;
 
         // Validate required fields
@@ -93,11 +155,21 @@ router.post('/', requireAuth, async (req, res) => {
 /**
  * PATCH /resumes/:id
  * Update resume
+ * Works with both extension and Supabase tokens
  */
-router.patch('/:id', requireAuth, async (req, res) => {
+router.patch('/:id', async (req, res) => {
     try {
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const resumeId = req.params.id;
-        const userId = req.user.id;
         const { title, content, file_format } = req.body;
 
         // Validate at least one field is provided
@@ -151,11 +223,21 @@ router.patch('/:id', requireAuth, async (req, res) => {
 /**
  * DELETE /resumes/:id
  * Delete resume
+ * Works with both extension and Supabase tokens
  */
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', async (req, res) => {
     try {
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const resumeId = req.params.id;
-        const userId = req.user.id;
 
         // Get profile to verify ownership
         const profile = await supabaseService.getProfile(userId);

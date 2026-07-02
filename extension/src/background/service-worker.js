@@ -9,10 +9,125 @@
  * - Single response pattern
  */
 
-const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
+// Import config - CONFIG object will be available globally if config.js is loaded
+// For service worker, we define CONFIG locally since it doesn't load HTML with scripts
+const CONFIG = {
+    API_BASE_URL: 'https://ats-resume-optimizer-359j.onrender.com/api',
+    EXTENSION_ID: chrome.runtime.id
+};
 
 // Track active tabs to detect switches
 let lastActiveTab = null;
+
+// ============================================================================
+// AUTH MESSAGE LISTENER - Handle messages from Job Orbit auth page
+// ============================================================================
+
+// Listen for external messages from Job Orbit auth page
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+    console.log('[ServiceWorker] ⏬ Received external message:', request.type);
+    console.log('[ServiceWorker] From URL:', sender.url);
+    console.log('[ServiceWorker] Request data:', request);
+    
+    if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
+        console.log('[ServiceWorker] ✅ Processing Job Orbit auth response');
+        
+        // Validate required data
+        if (!request.data || !request.data.extensionToken) {
+            console.error('[ServiceWorker] ❌ Missing extensionToken in response');
+            sendResponse({ success: false, error: 'Missing token' });
+            return;
+        }
+        
+        const authData = {
+            extensionToken: request.data.extensionToken,
+            expiresAt: request.data.expiresAt || (Date.now() + ((request.data.expiresIn || 86400) * 1000)),
+            user: request.data.user || null,
+            receivedAt: new Date().toISOString(),
+            state: request.state || null
+        };
+        
+        console.log('[ServiceWorker] 💾 Storing auth data:', {
+            token: authData.extensionToken.substring(0, 20) + '...',
+            expiresAt: new Date(authData.expiresAt).toISOString(),
+            user: authData.user?.email,
+            receivedAt: authData.receivedAt
+        });
+        
+        // Store in SYNC storage (persists across sessions)
+        chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
+            if (chrome.runtime.lastError) {
+                console.error('[ServiceWorker] ❌ Failed to store in sync:', chrome.runtime.lastError);
+                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+                return;
+            }
+            
+            console.log('[ServiceWorker] ✅ Stored in chrome.storage.sync');
+            
+            // Also store in LOCAL storage as backup
+            chrome.storage.local.set({ jobOrbitAuth: authData }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[ServiceWorker] ⚠️ Failed to store in local:', chrome.runtime.lastError);
+                } else {
+                    console.log('[ServiceWorker] ✅ Stored in chrome.storage.local');
+                }
+            });
+            
+            // Notify all windows/tabs that auth was successful
+            chrome.runtime.sendMessage({
+                type: 'EXTENSION_TOKEN_RECEIVED',
+                data: authData
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.log('[ServiceWorker] ℹ️ Popup not open (will update on next open):', chrome.runtime.lastError.message);
+                } else {
+                    console.log('[ServiceWorker] ✅ Popup notified of token arrival');
+                }
+            });
+            
+            // Send success response to auth page
+            sendResponse({ 
+                success: true, 
+                message: 'Token stored successfully',
+                stored: {
+                    sync: true,
+                    local: true,
+                    timestamp: authData.receivedAt
+                }
+            });
+        });
+        
+        return true; // Keep channel open for async response
+    }
+    
+    // Handle other message types
+    console.log('[ServiceWorker] Unknown message type:', request.type);
+    sendResponse({ success: false, error: 'Unknown message type' });
+});
+
+// Also listen for internal messages from popup during auth callback
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
+        console.log('[ServiceWorker] ⏬ Received internal message from:', sender.tab?.url);
+        
+        if (request.data && request.data.extensionToken) {
+            const authData = {
+                extensionToken: request.data.extensionToken,
+                expiresAt: request.data.expiresAt || (Date.now() + ((request.data.expiresIn || 86400) * 1000)),
+                user: request.data.user || null,
+                receivedAt: new Date().toISOString(),
+                state: request.state || null
+            };
+            
+            chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
+                console.log('[ServiceWorker] ✅ Internal: Stored in chrome.storage.sync');
+                sendResponse({ success: true, stored: true });
+            });
+        }
+        
+        return true;
+    }
+});
 
 // Listen for tab changes
 chrome.tabs.onActivated.addListener((activeInfo) => {
@@ -117,7 +232,7 @@ async function processFile(payload, sendResponse) {
         const formData = new FormData();
         formData.append('file', blob, fileName);
         
-        const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}/documents/upload`, {
             method: 'POST',
             body: formData,
             signal: controller.signal
@@ -139,7 +254,7 @@ async function processFile(payload, sendResponse) {
         if (error.name === 'AbortError') {
             errorMessage = 'Upload timed out';
         } else if (error.message.includes('Failed to fetch')) {
-            errorMessage = 'Cannot connect to server at ' + API_BASE_URL;
+            errorMessage = 'Cannot connect to server at ' + CONFIG.API_BASE_URL;
         }
         
         sendResponse({ success: false, error: errorMessage });
@@ -160,7 +275,7 @@ async function parseResume(payload, sendResponse) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
         
-        const response = await fetch(`${API_BASE_URL}/resume/parse`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}/resume/parse`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -202,7 +317,7 @@ async function optimizeResume(payload, sendResponse) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 60000); // 60 second timeout for optimization
 
-        const response = await fetch(`${API_BASE_URL}/analysis/optimize`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}/analysis/optimize`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
@@ -244,7 +359,7 @@ async function generateDocument(payload, sendResponse) {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000);
 
-        const response = await fetch(`${API_BASE_URL}/documents/generate`, {
+        const response = await fetch(`${CONFIG.API_BASE_URL}/documents/generate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),

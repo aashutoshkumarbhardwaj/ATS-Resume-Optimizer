@@ -10,8 +10,7 @@
  * - Proper cleanup on close
  */
 
-// Configuration
-const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
+// Configuration moved to config.js
 
 // Popup state management
 const PopupState = {

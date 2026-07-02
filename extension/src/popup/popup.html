@@ -356,16 +356,22 @@
                         </div>
                         
                         <div id="jobOrbitConnected" style="display: none; padding: 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50;">
-                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
                                 <span style="font-size: 20px;">✓</span>
                                 <div style="flex: 1;">
                                     <p style="margin: 0; font-weight: 600; color: #2e7d32; font-size: 12px;">Already Logged In</p>
                                     <p style="margin: 4px 0 0 0; font-size: 10px; color: #555;" id="jobOrbitUserEmail"></p>
+                                    <p style="margin: 6px 0 0 0; font-size: 9px; color: #888;" id="jobOrbitSyncStatus">Synced</p>
                                 </div>
                             </div>
-                            <button id="joborbitLogoutBtn" class="btn btn-secondary" style="width: 100%; font-size: 11px;">
-                                Logout from Job Orbit
-                            </button>
+                            <div style="display: flex; gap: 8px; flex-direction: column;">
+                                <button id="joborbitSyncBtn" class="btn btn-secondary" style="width: 100%; font-size: 11px;">
+                                    🔄 Sync Now
+                                </button>
+                                <button id="joborbitLogoutBtn" class="btn btn-secondary" style="width: 100%; font-size: 11px;">
+                                    🚪 Logout
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -629,7 +635,11 @@
         </div>
     </div>
 
+    <script src="../config/config.js"></script>
     <script src="../utils/StorageUtil.js"></script>
+    <script src="../utils/TokenVerifier.js"></script>
+    <script src="../utils/ProfileSyncManager.js"></script>
+    <script src="../utils/DataSyncManager.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

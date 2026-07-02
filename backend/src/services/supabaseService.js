@@ -46,8 +46,47 @@ async function initializeTables() {
                         user_id UUID NOT NULL,
                         email TEXT NOT NULL,
                         provider_id TEXT,
+                        
+                        -- Personal Info
+                        full_name TEXT,
+                        first_name TEXT,
+                        last_name TEXT,
+                        phone TEXT,
+                        city TEXT,
+                        state TEXT,
+                        zip TEXT,
+                        country TEXT,
+                        
+                        -- Professional
+                        current_title TEXT,
+                        current_company TEXT,
+                        years_of_experience TEXT,
+                        notice_period TEXT,
+                        expected_salary TEXT,
+                        
+                        -- Links
+                        linkedin TEXT,
+                        github TEXT,
+                        portfolio TEXT,
+                        
+                        -- Resume & Skills
+                        default_resume TEXT,
+                        skills TEXT,
+                        
+                        -- Answers
+                        answer_about_you TEXT,
+                        answer_why_company TEXT,
+                        answer_hire_you TEXT,
+                        
+                        -- Preferences
+                        work_environment TEXT,
+                        preferred_location TEXT,
+                        work_authorization TEXT,
+                        
+                        -- Legacy fields
                         subscription_status TEXT DEFAULT 'free',
                         preferences JSONB DEFAULT '{}'::jsonb,
+                        
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW(),
                         deleted_at TIMESTAMP NULL,

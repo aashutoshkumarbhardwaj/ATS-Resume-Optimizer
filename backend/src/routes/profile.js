@@ -1,39 +1,137 @@
 /**
  * Profile Routes
  * Handle user profile operations
+ * Supports both Supabase and extension tokens
  */
 
 const express = require('express');
 const router = express.Router();
 const { authenticateRequest, requireAuth } = require('../middleware/auth');
+const { verifyExtensionToken } = require('../utils/extensionJWT');
 const supabaseService = require('../services/supabaseService');
 
-// Apply authentication middleware to all routes
-router.use(authenticateRequest);
+/**
+ * Helper: Extract user ID from either extension or Supabase token
+ */
+async function extractUserId(req) {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        throw new Error('Missing authorization header');
+    }
+
+    const token = authHeader.substring('Bearer '.length);
+
+    // Try extension token first
+    try {
+        const verified = verifyExtensionToken(token);
+        return verified.user_id;
+    } catch (e) {
+        // Fall through to Supabase
+    }
+
+    // Try Supabase via middleware
+    if (req.user?.id) {
+        return req.user.id;
+    }
+
+    throw new Error('Invalid token');
+}
+
+/**
+ * Middleware: Authenticate extension or Supabase token
+ */
+const authenticateExtensionOrSupabase = async (req, res, next) => {
+    try {
+        await authenticateRequest(req, res, () => {
+            // After authenticateRequest, try to extract user ID
+            next();
+        });
+    } catch (error) {
+        // Still proceed to handler to check extension token
+        next();
+    }
+};
+
+router.use(authenticateExtensionOrSupabase);
 
 /**
  * GET /profile
  * Retrieve authenticated user's profile
+ * Works with both extension and Supabase tokens
  */
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized: ' + error.message,
+                authenticated: false
+            });
+        }
+
+        console.log('[Profile] GET profile for user:', userId);
 
         // Try to get existing profile
         let profile = await supabaseService.getProfile(userId);
 
         // If profile doesn't exist, create one
         if (!profile) {
+            console.log('[Profile] Creating new profile for user:', userId);
             profile = await supabaseService.createProfile(
                 userId,
-                req.user.email,
-                req.user.provider
+                req.user?.email || 'unknown@example.com',
+                req.user?.provider || 'extension'
             );
         }
 
+        // Enrich profile with autofill fields if available
+        const enrichedProfile = {
+            ...profile,
+            // Personal Info
+            full_name: profile.full_name || null,
+            first_name: profile.first_name || null,
+            last_name: profile.last_name || null,
+            email: profile.email || null,
+            phone: profile.phone || null,
+            city: profile.city || null,
+            state: profile.state || null,
+            zip: profile.zip || null,
+            country: profile.country || null,
+
+            // Professional
+            current_title: profile.current_title || null,
+            current_company: profile.current_company || null,
+            years_of_experience: profile.years_of_experience || null,
+            notice_period: profile.notice_period || null,
+            expected_salary: profile.expected_salary || null,
+
+            // Links
+            linkedin: profile.linkedin || null,
+            github: profile.github || null,
+            portfolio: profile.portfolio || null,
+
+            // Resume & Skills
+            default_resume: profile.default_resume || null,
+            skills: profile.skills || null,
+
+            // Answers
+            answer_about_you: profile.answer_about_you || null,
+            answer_why_company: profile.answer_why_company || null,
+            answer_hire_you: profile.answer_hire_you || null,
+
+            // Preferences
+            work_environment: profile.work_environment || null,
+            preferred_location: profile.preferred_location || null,
+            work_authorization: profile.work_authorization || null
+        };
+
         res.json({
             success: true,
-            profile
+            profile: enrichedProfile
         });
     } catch (error) {
         console.error('[Profile] GET error:', error);
@@ -47,33 +145,63 @@ router.get('/', requireAuth, async (req, res) => {
 /**
  * PATCH /profile
  * Update authenticated user's profile
+ * Works with both extension and Supabase tokens
+ * Accepts all 27 autofill fields
  */
-router.patch('/', requireAuth, async (req, res) => {
+router.patch('/', async (req, res) => {
     try {
-        const userId = req.user.id;
-        const { subscription_status, preferences } = req.body;
-
-        // Validate input
-        if (subscription_status && !['free', 'premium', 'enterprise'].includes(subscription_status)) {
-            return res.status(400).json({
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
                 success: false,
-                error: 'Invalid subscription status'
+                error: 'Unauthorized: ' + error.message,
+                authenticated: false
             });
         }
 
-        // Prepare update object
+        console.log('[Profile] PATCH profile for user:', userId);
+        console.log('[Profile] Updating fields:', Object.keys(req.body));
+
+        // Define allowed fields for autofill profile
+        const allowedFields = [
+            // Personal
+            'full_name', 'first_name', 'last_name', 'email', 'phone',
+            'city', 'state', 'zip', 'country',
+
+            // Professional
+            'current_title', 'current_company', 'years_of_experience',
+            'notice_period', 'expected_salary',
+
+            // Links
+            'linkedin', 'github', 'portfolio',
+
+            // Resume & Skills
+            'default_resume', 'skills',
+
+            // Answers
+            'answer_about_you', 'answer_why_company', 'answer_hire_you',
+
+            // Preferences
+            'work_environment', 'preferred_location', 'work_authorization',
+
+            // Legacy fields
+            'subscription_status', 'preferences'
+        ];
+
+        // Filter updates to only allowed fields
         const updates = {};
-        if (subscription_status !== undefined) {
-            updates.subscription_status = subscription_status;
-        }
-        if (preferences !== undefined) {
-            updates.preferences = preferences;
+        for (const [key, value] of Object.entries(req.body)) {
+            if (allowedFields.includes(key) && value !== undefined && value !== null && value !== '') {
+                updates[key] = value;
+            }
         }
 
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({
                 success: false,
-                error: 'No fields to update'
+                error: 'No valid fields to update'
             });
         }
 
@@ -97,10 +225,20 @@ router.patch('/', requireAuth, async (req, res) => {
 /**
  * GET /profile/subscription
  * Get subscription status
+ * Works with both extension and Supabase tokens
  */
-router.get('/subscription', requireAuth, async (req, res) => {
+router.get('/subscription', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const profile = await supabaseService.getProfile(userId);
 
         if (!profile) {
@@ -126,10 +264,20 @@ router.get('/subscription', requireAuth, async (req, res) => {
 /**
  * GET /profile/preferences
  * Get user preferences
+ * Works with both extension and Supabase tokens
  */
-router.get('/preferences', requireAuth, async (req, res) => {
+router.get('/preferences', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const profile = await supabaseService.getProfile(userId);
 
         if (!profile) {
@@ -155,10 +303,20 @@ router.get('/preferences', requireAuth, async (req, res) => {
 /**
  * PUT /profile/preferences
  * Update user preferences
+ * Works with both extension and Supabase tokens
  */
-router.put('/preferences', requireAuth, async (req, res) => {
+router.put('/preferences', async (req, res) => {
     try {
-        const userId = req.user.id;
+        let userId;
+        try {
+            userId = await extractUserId(req);
+        } catch (error) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized'
+            });
+        }
+
         const preferences = req.body;
 
         // Validate preferences is an object

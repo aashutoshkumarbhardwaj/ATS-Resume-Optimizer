@@ -4,9 +4,6 @@
  * Fixed: Auto-close, focus management, performance optimization
  */
 
-// Configuration
-const API_BASE_URL = 'https://ats-resume-optimizer-359j.onrender.com/api';
-
 // Popup state management
 const PopupState = {
     isOpen: true,
@@ -152,6 +149,16 @@ function setupAutoClose() {
             handleAutofillResults(request.data);
             sendResponse({ success: true });
         }
+        
+        // Handle extension token update from auth page
+        if (request.type === 'EXTENSION_TOKEN_RECEIVED') {
+            console.log('[Popup] Received extension token from auth page');
+            sendResponse({ success: true });
+            // Refresh the connection status
+            setTimeout(() => {
+                checkJobOrbitConnection();
+            }, 100);
+        }
     });
     
     // Cleanup on unload
@@ -214,8 +221,62 @@ async function init() {
     try {
         PopupState.markTask();
         
+        console.log('[Popup] 🚀 Initializing...');
+        
         // Fast initialization - only load what's needed
         setupEventListeners();
+        
+        // CRITICAL: Verify token with backend FIRST
+        console.log('[Popup] 🔐 Step 1: Verifying authentication...');
+        const authResult = await TokenVerifier.fullVerification();
+        
+        if (authResult.authenticated) {
+            console.log('[Popup] ✅ User authenticated:', authResult.user?.email);
+            showJobOrbitConnected(authResult.user?.email || 'Connected');
+            
+            // CRITICAL: Sync profile from Job Orbit
+            console.log('[Popup] 📥 Step 2: Syncing profile from Job Orbit...');
+            const token = await TokenVerifier.getStoredToken();
+            if (token) {
+                const syncResult = await ProfileSyncManager.syncOnLogin(token);
+                if (syncResult.success) {
+                    console.log('[Popup] ✅ Profile synced successfully');
+                    if (syncResult.isNew) {
+                        console.log('[Popup] ℹ️ First login - empty profile');
+                    } else {
+                        console.log('[Popup] ✅ Profile populated with', Object.keys(syncResult.profile || {}).length, 'fields');
+                    }
+                } else {
+                    console.warn('[Popup] ⚠️ Profile sync failed:', syncResult.error);
+                }
+
+                // CRITICAL: Full data sync (resumes, applications, answers)
+                console.log('[Popup] 📥 Step 3: Syncing all data from Job Orbit...');
+                const dataSyncResult = await DataSyncManager.fullSync(token);
+                if (dataSyncResult.success) {
+                    console.log('[Popup] ✅ Full data sync completed');
+                    if (dataSyncResult.errors.length > 0) {
+                        console.warn('[Popup] ⚠️ Some data sync errors:', dataSyncResult.errors);
+                    }
+                } else {
+                    console.warn('[Popup] ⚠️ Full data sync failed:', dataSyncResult.error);
+                }
+            }
+            
+            // Show dashboard with user info
+            loadDashboard();
+            
+            // Check if token is stale and needs refresh
+            if (authResult.isStale) {
+                console.log('[Popup] ⚠️ Token is stale (expiring soon), will refresh on next action');
+            }
+        } else {
+            console.log('[Popup] ❌ User not authenticated:', authResult.reason);
+            showJobOrbitNotConnected();
+            
+            // Show guest mode dashboard
+            showGuestMode();
+        }
         
         // Load dashboard on startup (home tab is active by default)
         loadDashboard();
@@ -246,10 +307,10 @@ async function init() {
         checkAutofillButtonStatus();
         
         PopupState.initialized = true;
-        console.log('[Popup] Initialized');
+        console.log('[Popup] ✅ Initialized');
     } catch (error) {
-        console.error('[Popup] Initialization error:', error);
-        showError('Failed to initialize popup');
+        console.error('[Popup] ❌ Initialization error:', error);
+        showError('Failed to initialize popup: ' + error.message);
     } finally {
         PopupState.unmarkTask();
     }
@@ -283,19 +344,25 @@ function setupEventListeners() {
         btn.addEventListener('click', () => switchTab(btn.dataset.tab));
     });
     
-    // File upload
-    elements.uploadArea.addEventListener('click', () => elements.resumeFile.click());
-    elements.resumeFile.addEventListener('change', handleFileUpload);
-    elements.removeFile.addEventListener('click', removeUploadedFile);
+    // File upload - with null checks
+    if (elements.uploadArea && elements.resumeFile && elements.removeFile) {
+        elements.uploadArea.addEventListener('click', () => elements.resumeFile.click());
+        elements.resumeFile.addEventListener('change', handleFileUpload);
+        elements.removeFile.addEventListener('click', removeUploadedFile);
+        
+        // Drag and drop
+        elements.uploadArea.addEventListener('dragover', handleDragOver);
+        elements.uploadArea.addEventListener('dragleave', handleDragLeave);
+        elements.uploadArea.addEventListener('drop', handleDrop);
+    }
     
-    // Drag and drop
-    elements.uploadArea.addEventListener('dragover', handleDragOver);
-    elements.uploadArea.addEventListener('dragleave', handleDragLeave);
-    elements.uploadArea.addEventListener('drop', handleDrop);
-    
-    // Buttons
-    elements.analyzeBtn.addEventListener('click', handleAnalyze);
-    elements.optimizeBtn.addEventListener('click', handleOptimize);
+    // Buttons - with null checks
+    if (elements.analyzeBtn) {
+        elements.analyzeBtn.addEventListener('click', handleAnalyze);
+    }
+    if (elements.optimizeBtn) {
+        elements.optimizeBtn.addEventListener('click', handleOptimize);
+    }
     
     // Fetch job description button
     const fetchJobDescBtn = document.getElementById('fetchJobDescBtn');
@@ -346,12 +413,14 @@ function setupEventListeners() {
     setupSettingsListeners();
     
     // Listen for storage changes to update UI in real-time
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-        if (areaName === 'sync' && changes.jobOrbitAuth) {
-            console.log('[Popup] Job Orbit auth changed, updating UI');
-            checkJobOrbitConnection();
-        }
-    });
+    if (chrome && chrome.storage) {
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+            if (areaName === 'sync' && changes.jobOrbitAuth) {
+                console.log('[Popup] Job Orbit auth changed, updating UI');
+                checkJobOrbitConnection();
+            }
+        });
+    }
 }
 
 /**
@@ -495,7 +564,7 @@ async function handleFileUpload(event) {
                 fileType: file.type,
                 fileSize: file.size
             }
-        }, (response) => {
+        }, async (response) => {
             try {
                 if (!response) {
                     throw new Error('No response from background script');
@@ -525,19 +594,19 @@ async function handleFileUpload(event) {
                         metadata: data.metadata
                     };
                     
-                    console.log('[Popup] Resume uploaded and saved successfully');
+                    console.log('[Popup] Resume extracted and saved locally');
                     
                     // Parse resume details in background
                     chrome.runtime.sendMessage({
                         type: 'PARSE_RESUME',
                         payload: { resumeText: data.extractedText }
-                    }, (parseResponse) => {
+                    }, async (parseResponse) => {
                         try {
                             if (parseResponse && parseResponse.success) {
                                 const parsed = parseResponse.data;
                                 const c = parsed.contact || {};
                                 
-                                // Fill inputs in the Autofill tab
+                                // Fill ALL autofill form fields
                                 const formFields = {
                                     'full_name': c.name || '',
                                     'first_name': c.first_name || '',
@@ -545,15 +614,19 @@ async function handleFileUpload(event) {
                                     'email': c.email || '',
                                     'phone': c.phone || '',
                                     'city': c.city || '',
+                                    'state': c.state || '',
+                                    'zip': c.zip || '',
                                     'country': c.country || '',
                                     'linkedin': c.linkedin || '',
                                     'github': c.github || '',
                                     'portfolio': c.portfolio || '',
                                     'current_title': parsed.current_title || '',
-                                    'years_of_experience': parsed.years_of_experience || ''
+                                    'current_company': parsed.current_company || '',
+                                    'years_of_experience': parsed.years_of_experience || '',
+                                    'skills': parsed.skills || ''
                                 };
                                 
-                                // Set all fields
+                                // Set all fields in the form
                                 Object.entries(formFields).forEach(([fieldId, value]) => {
                                     const field = document.getElementById(fieldId);
                                     if (field) {
@@ -564,12 +637,41 @@ async function handleFileUpload(event) {
                                 // Save profile to storage
                                 chrome.storage.local.set({ profile: formFields });
                                 
-                                console.log('[Popup] Profile parsed and saved from resume');
+                                console.log('[Popup] Profile parsed from resume');
                                 
-                                // Show success notification
-                                showNotification('✅ Profile populated from resume!', 'success');
+                                // Upload resume to backend if user is authenticated
+                                const token = await TokenVerifier.getStoredToken();
+                                if (token) {
+                                    console.log('[Popup] 📤 Syncing resume to backend...');
+                                    const uploadResult = await DataSyncManager.syncNewResume(token, {
+                                        title: file.name,
+                                        content: data.extractedText,
+                                        file_format: data.metadata.format || 'text'
+                                    });
+                                    
+                                    if (uploadResult.success) {
+                                        console.log('[Popup] ✅ Resume synced to backend');
+                                        showNotification('✅ Resume uploaded to Job Orbit!', 'success');
+                                    } else {
+                                        console.warn('[Popup] ⚠️ Resume sync failed:', uploadResult.error);
+                                        showNotification('⚠️ Resume saved locally (sync failed)', 'info');
+                                    }
+                                    
+                                    // Also sync profile changes to backend
+                                    console.log('[Popup] 📤 Syncing profile to backend...');
+                                    const profileUpload = await ProfileSyncManager.uploadProfile(token, formFields);
+                                    if (profileUpload.success) {
+                                        console.log('[Popup] ✅ Profile synced to backend');
+                                    } else {
+                                        console.warn('[Popup] ⚠️ Profile sync failed:', profileUpload.error);
+                                    }
+                                } else {
+                                    console.log('[Popup] Not authenticated, profile saved locally only');
+                                    showNotification('✅ Profile populated from resume (login to sync)', 'info');
+                                }
                             } else {
                                 console.warn('[Popup] Parse response error:', parseResponse?.error);
+                                showNotification('✅ Resume uploaded (parse failed)', 'info');
                             }
                             
                             hideLoading();
@@ -689,7 +791,11 @@ async function handleAnalyze() {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
         
-        const response = await fetch(`${API_BASE_URL}/analysis/analyze`, {
+        const apiUrl = (typeof CONFIG !== 'undefined' && CONFIG.API_BASE_URL) 
+            ? CONFIG.API_BASE_URL 
+            : 'https://ats-resume-optimizer-359j.onrender.com/api';
+        
+        const response = await fetch(`${apiUrl}/analysis/analyze`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -887,7 +993,11 @@ async function handleOptimize() {
     panels.optimization.classList.add('hidden');
     
     try {
-        const response = await fetch(`${API_BASE_URL}/analysis/optimize`, {
+        const apiUrl = (typeof CONFIG !== 'undefined' && CONFIG.API_BASE_URL) 
+            ? CONFIG.API_BASE_URL 
+            : 'https://ats-resume-optimizer-359j.onrender.com/api';
+        
+        const response = await fetch(`${apiUrl}/analysis/optimize`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1062,7 +1172,11 @@ async function handleDownload(format) {
         }
         
         // For PDF/DOCX, send the optimized text to preserve original structure
-        const response = await fetch(`${API_BASE_URL}/documents/generate`, {
+        const apiUrl = (typeof CONFIG !== 'undefined' && CONFIG.API_BASE_URL) 
+            ? CONFIG.API_BASE_URL 
+            : 'https://ats-resume-optimizer-359j.onrender.com/api';
+        
+        const response = await fetch(`${apiUrl}/documents/generate`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1206,11 +1320,72 @@ async function handleClearHistory() {
 }
 
 /**
+ * Debug Token Status - For troubleshooting
+ */
+function debugTokenStatus() {
+    console.log('\n' + '='.repeat(70));
+    console.log('🔍 JOB ORBIT TOKEN DEBUG REPORT');
+    console.log('='.repeat(70));
+    
+    // Check sync storage
+    chrome.storage.sync.get(['jobOrbitAuth'], (syncResult) => {
+        console.log('\n📋 SYNC STORAGE (chrome.storage.sync):');
+        if (syncResult.jobOrbitAuth) {
+            const auth = syncResult.jobOrbitAuth;
+            console.log('  ✅ Token found');
+            console.log('  Token:', auth.extensionToken ? auth.extensionToken.substring(0, 30) + '...' : 'MISSING');
+            console.log('  User:', auth.user?.email || 'MISSING');
+            console.log('  Received at:', auth.receivedAt || 'MISSING');
+            console.log('  Expires at:', auth.expiresAt ? new Date(auth.expiresAt).toISOString() : 'MISSING');
+            console.log('  Time until expiry:', auth.expiresAt ? Math.round((auth.expiresAt - Date.now()) / 60000) + ' minutes' : 'N/A');
+            console.log('  Source:', auth.source || 'UNKNOWN');
+        } else {
+            console.log('  ❌ NO TOKEN FOUND');
+        }
+        
+        // Check local storage
+        chrome.storage.local.get(['jobOrbitAuth'], (localResult) => {
+            console.log('\n📋 LOCAL STORAGE (chrome.storage.local):');
+            if (localResult.jobOrbitAuth) {
+                const auth = localResult.jobOrbitAuth;
+                console.log('  ✅ Token found (backup)');
+                console.log('  Token:', auth.extensionToken ? auth.extensionToken.substring(0, 30) + '...' : 'MISSING');
+                console.log('  User:', auth.user?.email || 'MISSING');
+                console.log('  Received at:', auth.receivedAt || 'MISSING');
+            } else {
+                console.log('  ℹ️ NO BACKUP TOKEN');
+            }
+            
+            // Check extension ID
+            console.log('\n🆔 EXTENSION INFO:');
+            console.log('  Extension ID:', chrome.runtime.id);
+            
+            // Check service worker status
+            console.log('\n🔧 SERVICE WORKER:');
+            console.log('  Status: Active (handling messages)');
+            console.log('  Message listeners: Registered');
+            console.log('  External messages: Enabled');
+            
+            console.log('\n' + '='.repeat(70));
+            console.log('✅ Debug report complete. Check console logs above.\n');
+        });
+    });
+}
+
+// Make debug function globally accessible
+window.debugJobOrbitToken = debugTokenStatus;
+
+/**
  * Show Loading
  */
 function showLoading(message = 'Processing...') {
-    elements.loadingText.textContent = message;
-    elements.loadingSpinner.classList.remove('hidden');
+    if (elements.loadingSpinner) {
+        elements.loadingSpinner.classList.remove('hidden');
+    }
+    if (elements.loadingText && message) {
+        elements.loadingText.textContent = message;
+    }
+    console.log('[Popup] Loading:', message);
 }
 
 /**
@@ -1586,6 +1761,18 @@ async function handleSaveProfile(e) {
         if (saveResult.success) {
             showAutofillStatus('Profile saved successfully! ✨', 'success');
             
+            // Sync to backend if user is authenticated
+            const token = await TokenVerifier.getStoredToken();
+            if (token) {
+                console.log('[Popup] 📤 Syncing profile to backend...');
+                const syncResult = await ProfileSyncManager.uploadProfile(token, profileData);
+                if (syncResult.success) {
+                    console.log('[Popup] ✅ Profile synced to backend');
+                } else {
+                    console.warn('[Popup] ⚠️ Backend sync failed (profile saved locally):', syncResult.error);
+                }
+            }
+            
             // Notify content script of settings update so it can add/remove the badge in real-time
             chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
                 if (tabs[0]) {
@@ -1866,23 +2053,76 @@ function handleAutofillResults(result) {
 
 /**
  * Check Job Orbit Connection Status
+ * This function verifies token exists, is valid, and not expired
  */
 function checkJobOrbitConnection() {
-    chrome.storage.sync.get(['jobOrbitAuth'], (result) => {
-        const auth = result.jobOrbitAuth;
+    console.log('[Popup] 🔍 Checking Job Orbit connection...');
+    
+    // Check SYNC storage first (primary)
+    chrome.storage.sync.get(['jobOrbitAuth'], (syncResult) => {
+        const syncAuth = syncResult.jobOrbitAuth;
+        console.log('[Popup] Sync storage:', syncAuth ? '✅ Token found' : '❌ No token');
         
-        if (auth && auth.extensionToken) {
-            // Check if token is expired
-            if (auth.expiresAt && Date.now() > auth.expiresAt) {
-                // Token expired, show not connected
-                showJobOrbitNotConnected();
-            } else {
-                // Token valid, show connected
-                showJobOrbitConnected(auth.user?.email || 'Connected');
-            }
-        } else {
-            showJobOrbitNotConnected();
+        if (syncAuth && syncAuth.extensionToken) {
+            console.log('[Popup] 📋 Token details:', {
+                token: syncAuth.extensionToken.substring(0, 20) + '...',
+                expiresAt: syncAuth.expiresAt ? new Date(syncAuth.expiresAt).toISOString() : 'N/A',
+                user: syncAuth.user?.email,
+                receivedAt: syncAuth.receivedAt
+            });
         }
+        
+        // Check LOCAL storage as backup
+        chrome.storage.local.get(['jobOrbitAuth'], (localResult) => {
+            const localAuth = localResult.jobOrbitAuth;
+            console.log('[Popup] Local storage:', localAuth ? '✅ Token found' : '❌ No token');
+            
+            // Use whichever is more recent
+            const auth = syncAuth || localAuth;
+            
+            if (!auth) {
+                console.log('[Popup] ❌ No token in either storage');
+                showJobOrbitNotConnected();
+                return;
+            }
+            
+            if (!auth.extensionToken) {
+                console.error('[Popup] ❌ Token object missing extensionToken');
+                showJobOrbitNotConnected();
+                return;
+            }
+            
+            // Check if token is expired
+            const now = Date.now();
+            const expiresAt = auth.expiresAt || (now + 86400000); // Default to 24h if not set
+            
+            console.log('[Popup] ⏰ Token expiry check:', {
+                now: new Date(now).toISOString(),
+                expiresAt: new Date(expiresAt).toISOString(),
+                expiresInMs: expiresAt - now,
+                expiresInMinutes: Math.round((expiresAt - now) / 60000)
+            });
+            
+            if (now > expiresAt) {
+                console.log('[Popup] ❌ Token expired, clearing auth');
+                chrome.storage.sync.remove(['jobOrbitAuth']);
+                chrome.storage.local.remove(['jobOrbitAuth']);
+                showJobOrbitNotConnected();
+                return;
+            }
+            
+            // Token valid
+            console.log('[Popup] ✅ Token valid, showing connected state');
+            showJobOrbitConnected(auth.user?.email || 'Connected');
+            
+            // Check if token is expiring soon (within 1 hour) for proactive refresh
+            const timeToExpiry = expiresAt - now;
+            const oneHourInMs = 60 * 60 * 1000;
+            
+            if (timeToExpiry < oneHourInMs && timeToExpiry > 0) {
+                console.log('[Popup] ⚠️ Token expiring in', Math.round(timeToExpiry / 60000), 'minutes');
+            }
+        });
     });
 }
 
@@ -1895,8 +2135,18 @@ function showJobOrbitConnected(email) {
     const userEmail = document.getElementById('jobOrbitUserEmail');
     
     if (notConnected) notConnected.style.display = 'none';
-    if (connected) connected.style.display = 'block';
+    if (connected) {
+        connected.style.display = 'block';
+        // Update timestamp
+        const syncStatusEl = connected.querySelector('[id="jobOrbitSyncStatus"]');
+        if (syncStatusEl) {
+            const now = new Date();
+            syncStatusEl.textContent = `Last synced: ${now.toLocaleTimeString()}`;
+        }
+    }
     if (userEmail) userEmail.textContent = email || 'Connected';
+    
+    console.log('[Popup] Showing connected state for:', email);
 }
 
 /**
@@ -1908,6 +2158,41 @@ function showJobOrbitNotConnected() {
     
     if (notConnected) notConnected.style.display = 'block';
     if (connected) connected.style.display = 'none';
+}
+
+/**
+ * Show Guest Mode UI
+ */
+function showGuestMode() {
+    console.log('[Popup] 👤 Showing guest mode');
+    
+    const authStatus = document.getElementById('authStatus');
+    if (authStatus) {
+        authStatus.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 20px;">👤</span>
+                <div style="flex: 1;">
+                    <p style="margin: 0; font-weight: 600; color: #666; font-size: 12px;">Guest Mode</p>
+                    <p style="margin: 4px 0 0 0; font-size: 10px; color: #999;">Login to access all features</p>
+                </div>
+            </div>
+        `;
+        authStatus.style.background = '#f5f5f5';
+        authStatus.style.borderLeft = '4px solid #999';
+    }
+    
+    // Update quick actions to show login
+    const goToResumeBtn = document.getElementById('goToResumeBtn');
+    if (goToResumeBtn) {
+        goToResumeBtn.innerHTML = '🔗 Login to Continue';
+        goToResumeBtn.onclick = () => {
+            switchTab('account');
+            setTimeout(() => {
+                const loginBtn = document.getElementById('joborbitLoginBtn');
+                if (loginBtn) loginBtn.click();
+            }, 100);
+        };
+    }
 }
 
 /**
@@ -1984,7 +2269,10 @@ async function handleJobOrbitLogin() {
  * Handle Job Orbit Auth Response
  */
 function handleJobOrbitAuthResponse(authData, tabId) {
+    console.log('[Popup] 📥 Processing auth response:', authData);
+    
     if (!authData || !authData.extensionToken) {
+        console.error('[Popup] ❌ Authentication failed: No token received');
         showNotification('Authentication failed: No token received', 'error');
         return;
     }
@@ -1994,33 +2282,73 @@ function handleJobOrbitAuthResponse(authData, tabId) {
         const expiresIn = authData.expiresIn || 86400; // Default 24 hours
         const expiresAt = Date.now() + (expiresIn * 1000);
         
+        console.log('[Popup] ⏰ Token expiry:', {
+            expiresIn: expiresIn,
+            expiresAt: new Date(expiresAt).toISOString()
+        });
+        
         // Prepare auth object
         const jobOrbitAuth = {
             extensionToken: authData.extensionToken,
             expiresAt: expiresAt,
-            // User information (optional)
             user: authData.user ? {
                 id: authData.user.id,
                 email: authData.user.email,
                 name: authData.user.name,
                 avatar: authData.user.avatar
-            } : null
+            } : null,
+            receivedAt: new Date().toISOString(),
+            source: 'popup-response'
         };
         
-        // Store in chrome storage
+        console.log('[Popup] 💾 Storing auth object...');
+        console.log('[Popup] Token preview:', jobOrbitAuth.extensionToken.substring(0, 30) + '...');
+        console.log('[Popup] User:', jobOrbitAuth.user?.email);
+        
+        // Store in SYNC storage (primary - syncs across Chrome profile)
         chrome.storage.sync.set({ jobOrbitAuth }, () => {
+            if (chrome.runtime.lastError) {
+                console.error('[Popup] ❌ Sync storage failed:', chrome.runtime.lastError);
+                showNotification('Failed to save authentication (sync): ' + chrome.runtime.lastError.message, 'error');
+                return;
+            }
+            
+            console.log('[Popup] ✅ Stored in chrome.storage.sync');
+            
+            // Also store in LOCAL storage as backup
+            chrome.storage.local.set({ jobOrbitAuth }, () => {
+                if (chrome.runtime.lastError) {
+                    console.warn('[Popup] ⚠️ Local storage failed:', chrome.runtime.lastError);
+                } else {
+                    console.log('[Popup] ✅ Stored in chrome.storage.local');
+                }
+            });
+            
+            // Verify storage by reading back immediately
+            setTimeout(() => {
+                chrome.storage.sync.get(['jobOrbitAuth'], (result) => {
+                    if (result.jobOrbitAuth && result.jobOrbitAuth.extensionToken) {
+                        console.log('[Popup] ✅ Verification: Token successfully stored and retrieved');
+                    } else {
+                        console.error('[Popup] ❌ Verification failed: Could not retrieve stored token');
+                    }
+                });
+            }, 100);
+            
             showNotification('✅ Connected to Job Orbit!', 'success');
             showJobOrbitConnected(authData.user?.email || 'Connected');
             
+            console.log('[Popup] 🔄 Auth tab will close in 1 second...');
             // Close the auth tab after a short delay
             setTimeout(() => {
                 chrome.tabs.remove(tabId);
+                console.log('[Popup] ✅ Auth tab closed');
                 // Refresh the settings UI immediately
                 checkJobOrbitConnection();
             }, 1000);
         });
     } catch (error) {
-        console.error('[Popup] Error processing auth response:', error);
+        console.error('[Popup] ❌ Error processing auth response:', error);
         showNotification('Failed to save authentication: ' + error.message, 'error');
     }
 }
@@ -2050,6 +2378,69 @@ function handleJobOrbitLogout() {
     chrome.storage.sync.remove(['jobOrbitAuth'], () => {
         showNotification('✅ Logged out from Job Orbit', 'success');
         showJobOrbitNotConnected();
+    });
+}
+
+/**
+ * Handle Job Orbit Sync
+ */
+function handleJobOrbitSync() {
+    const syncBtn = document.getElementById('joborbitSyncBtn');
+    if (!syncBtn) return;
+    
+    // Disable button and show syncing status
+    syncBtn.disabled = true;
+    syncBtn.textContent = '⏳ Syncing...';
+    
+    // Get current auth token
+    chrome.storage.sync.get(['jobOrbitAuth'], async (result) => {
+        const auth = result.jobOrbitAuth;
+        
+        if (!auth || !auth.extensionToken) {
+            syncBtn.disabled = false;
+            syncBtn.textContent = '🔄 Sync Now';
+            showNotification('Not authenticated. Please login first.', 'error');
+            return;
+        }
+        
+        try {
+            console.log('[Popup] Starting sync with Job Orbit...');
+            
+            // Call backend to trigger sync
+            // This would sync applications, answers, etc.
+            const response = await fetch('https://ats-resume-optimizer-359j.onrender.com/api/extension-auth/sync', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${auth.extensionToken}`
+                },
+                body: JSON.stringify({
+                    extensionId: chrome.runtime.id
+                })
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                console.log('[Popup] Sync completed:', data);
+                showNotification('✅ Synced with Job Orbit!', 'success');
+                
+                // Update sync timestamp
+                const syncStatusEl = document.getElementById('jobOrbitSyncStatus');
+                if (syncStatusEl) {
+                    const now = new Date();
+                    syncStatusEl.textContent = `Last synced: ${now.toLocaleTimeString()}`;
+                }
+            } else {
+                console.error('[Popup] Sync failed:', response.status);
+                showNotification('Sync failed. Try again.', 'error');
+            }
+        } catch (error) {
+            console.error('[Popup] Sync error:', error);
+            showNotification('Sync error: ' + error.message, 'error');
+        } finally {
+            syncBtn.disabled = false;
+            syncBtn.textContent = '🔄 Sync Now';
+        }
     });
 }
 
@@ -2256,6 +2647,12 @@ function setupSettingsListeners() {
     const joborbitLoginBtn = document.getElementById('joborbitLoginBtn');
     if (joborbitLoginBtn) {
         joborbitLoginBtn.addEventListener('click', handleJobOrbitLogin);
+    }
+    
+    // Job Orbit sync button
+    const joborbitSyncBtn = document.getElementById('joborbitSyncBtn');
+    if (joborbitSyncBtn) {
+        joborbitSyncBtn.addEventListener('click', handleJobOrbitSync);
     }
     
     // Job Orbit logout button
@@ -2644,7 +3041,11 @@ async function regenerateAnswer(index) {
         showLoading('Regenerating answer with AI...');
         
         try {
-            const response = await fetch(`${API_BASE_URL}/ai/generate-answer`, {
+            const apiUrl = (typeof CONFIG !== 'undefined' && CONFIG.API_BASE_URL) 
+                ? CONFIG.API_BASE_URL 
+                : 'https://ats-resume-optimizer-359j.onrender.com/api';
+            
+            const response = await fetch(`${apiUrl}/ai/generate-answer`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
