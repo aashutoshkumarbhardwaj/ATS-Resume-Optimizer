@@ -222,12 +222,24 @@ async function init() {
         PopupState.markTask();
         
         console.log('[Popup] 🚀 Initializing...');
+        console.log('[Popup] ⏰ Timestamp:', new Date().toISOString());
+        
+        // Initialize DOM elements FIRST
+        console.log('[Popup] 📦 Step 0: Initializing DOM elements...');
+        initializeDOMElements();
+        console.log('[Popup] ✅ DOM elements initialized');
         
         // Fast initialization - only load what's needed
+        console.log('[Popup] 🔌 Step 1: Setting up event listeners...');
         setupEventListeners();
+        console.log('[Popup] ✅ Event listeners attached');
+        
+        // Manually test tab switching
+        console.log('[Popup] 🧪 Testing tab switching...');
+        testTabSwitching();
         
         // CRITICAL: Verify token with backend FIRST
-        console.log('[Popup] 🔐 Step 1: Verifying authentication...');
+        console.log('[Popup] 🔐 Step 2: Verifying authentication...');
         const authResult = await TokenVerifier.fullVerification();
         
         if (authResult.authenticated) {
@@ -235,7 +247,7 @@ async function init() {
             showJobOrbitConnected(authResult.user?.email || 'Connected');
             
             // CRITICAL: Sync profile from Job Orbit
-            console.log('[Popup] 📥 Step 2: Syncing profile from Job Orbit...');
+            console.log('[Popup] 📥 Step 3: Syncing profile from Job Orbit...');
             const token = await TokenVerifier.getStoredToken();
             if (token) {
                 const syncResult = await ProfileSyncManager.syncOnLogin(token);
@@ -251,7 +263,7 @@ async function init() {
                 }
 
                 // CRITICAL: Full data sync (resumes, applications, answers)
-                console.log('[Popup] 📥 Step 3: Syncing all data from Job Orbit...');
+                console.log('[Popup] 📥 Step 4: Syncing all data from Job Orbit...');
                 const dataSyncResult = await DataSyncManager.fullSync(token);
                 if (dataSyncResult.success) {
                     console.log('[Popup] ✅ Full data sync completed');
@@ -310,10 +322,37 @@ async function init() {
         console.log('[Popup] ✅ Initialized');
     } catch (error) {
         console.error('[Popup] ❌ Initialization error:', error);
+        console.error('[Popup] Stack:', error.stack);
         showError('Failed to initialize popup: ' + error.message);
     } finally {
         PopupState.unmarkTask();
     }
+}
+
+/**
+ * Test tab switching functionality
+ */
+function testTabSwitching() {
+    console.log('[Popup] 🧪 Testing tab switching...');
+    
+    const tabIds = ['home', 'resume', 'autofill', 'ai', 'account'];
+    
+    tabIds.forEach(tabId => {
+        const tabElement = document.getElementById(`${tabId}Tab`);
+        if (tabElement) {
+            console.log(`[Popup] ✅ Tab element found: ${tabId}Tab`);
+        } else {
+            console.error(`[Popup] ❌ Tab element NOT found: ${tabId}Tab`);
+        }
+    });
+    
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    console.log(`[Popup] Found ${tabButtons.length} tab buttons`);
+    
+    tabButtons.forEach((btn, i) => {
+        const dataTab = btn.dataset.tab;
+        console.log(`[Popup] Button ${i + 1}: data-tab="${dataTab}", text="${btn.textContent.trim()}"`);
+    });
 }
 
 /**
@@ -336,17 +375,40 @@ function setupLazyTabLoading() {
 }
 
 /**
- * Setup Event Listeners
+ * Setup Event Listeners - Enhanced with tab switching fix
  */
 function setupEventListeners() {
-    // Tab switching
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    console.log('[Popup] 🔧 Setting up event listeners...');
+    
+    // Tab switching - with null checks
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    console.log('[Popup] Found', tabButtons.length, 'tab buttons for switching');
+    
+    if (tabButtons.length === 0) {
+        console.warn('[Popup] ⚠️ No tab buttons found - tab switching will not work!');
+    }
+    
+    tabButtons.forEach((btn, index) => {
+        const tabName = btn.dataset.tab;
+        console.log(`[Popup] Setting up tab button ${index + 1}: ${tabName}`);
+        
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[Popup] 👆 Tab button clicked:', tabName);
+            switchTab(tabName);
+        });
     });
+    
+    console.log('[Popup] ✅ Tab switching listeners attached');
     
     // File upload - with null checks
     if (elements.uploadArea && elements.resumeFile && elements.removeFile) {
-        elements.uploadArea.addEventListener('click', () => elements.resumeFile.click());
+        console.log('[Popup] Setting up file upload listeners');
+        elements.uploadArea.addEventListener('click', () => {
+            console.log('[Popup] Upload area clicked');
+            elements.resumeFile.click();
+        });
         elements.resumeFile.addEventListener('change', handleFileUpload);
         elements.removeFile.addEventListener('click', removeUploadedFile);
         
@@ -354,19 +416,26 @@ function setupEventListeners() {
         elements.uploadArea.addEventListener('dragover', handleDragOver);
         elements.uploadArea.addEventListener('dragleave', handleDragLeave);
         elements.uploadArea.addEventListener('drop', handleDrop);
+        
+        console.log('[Popup] ✅ File upload listeners attached');
+    } else {
+        console.warn('[Popup] ⚠️ Upload elements missing, file upload disabled');
     }
     
     // Buttons - with null checks
     if (elements.analyzeBtn) {
+        console.log('[Popup] Setting up analyze button');
         elements.analyzeBtn.addEventListener('click', handleAnalyze);
     }
     if (elements.optimizeBtn) {
+        console.log('[Popup] Setting up optimize button');
         elements.optimizeBtn.addEventListener('click', handleOptimize);
     }
     
     // Fetch job description button
     const fetchJobDescBtn = document.getElementById('fetchJobDescBtn');
     if (fetchJobDescBtn) {
+        console.log('[Popup] Setting up fetch job description button');
         fetchJobDescBtn.addEventListener('click', handleFetchJobDescription);
     }
     
@@ -378,34 +447,44 @@ function setupEventListeners() {
     // Copy optimized text button
     const copyOptimizedBtn = document.getElementById('copyOptimizedBtn');
     if (copyOptimizedBtn) {
+        console.log('[Popup] Setting up copy optimized button');
         copyOptimizedBtn.addEventListener('click', handleCopyOptimized);
     }
 
     // Autofill event listeners
     const addCustomFieldBtn = document.getElementById('addCustomFieldBtn');
     if (addCustomFieldBtn) {
+        console.log('[Popup] Setting up add custom field button');
         addCustomFieldBtn.addEventListener('click', () => addCustomFieldRow());
     }
     
     const autofillForm = document.getElementById('autofillForm');
     if (autofillForm) {
+        console.log('[Popup] Setting up autofill form submit');
         autofillForm.addEventListener('submit', handleSaveProfile);
+    } else {
+        console.warn('[Popup] ⚠️ Autofill form not found');
     }
     
     const autofillActiveTabBtn = document.getElementById('autofillActiveTabBtn');
     if (autofillActiveTabBtn) {
+        console.log('[Popup] Setting up autofill active tab button');
         autofillActiveTabBtn.addEventListener('click', handleAutofillTab);
+    } else {
+        console.warn('[Popup] ⚠️ Autofill active tab button not found');
     }
 
     // Show autofill button again
     const showAutofillButtonBtn = document.getElementById('showAutofillButtonBtn');
     if (showAutofillButtonBtn) {
+        console.log('[Popup] Setting up show autofill button');
         showAutofillButtonBtn.addEventListener('click', handleShowAutofillButton);
     }
 
     // Dismiss autofill notice
     const dismissAutofillNoticeBtn = document.getElementById('dismissAutofillNoticeBtn');
     if (dismissAutofillNoticeBtn) {
+        console.log('[Popup] Setting up dismiss autofill notice button');
         dismissAutofillNoticeBtn.addEventListener('click', handleDismissAutofillNotice);
     }
     
@@ -414,6 +493,7 @@ function setupEventListeners() {
     
     // Listen for storage changes to update UI in real-time
     if (chrome && chrome.storage) {
+        console.log('[Popup] Setting up storage change listener');
         chrome.storage.onChanged.addListener((changes, areaName) => {
             if (areaName === 'sync' && changes.jobOrbitAuth) {
                 console.log('[Popup] Job Orbit auth changed, updating UI');
@@ -421,42 +501,80 @@ function setupEventListeners() {
             }
         });
     }
+    
+    console.log('[Popup] ✅ All event listeners setup complete');
 }
 
 /**
- * Tab Switching
+ * Tab Switching - Enhanced with better error handling
  */
 function switchTab(tabName) {
-    // Update tab buttons
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.tab === tabName);
-    });
+    console.log('[Popup] 📑 Switching to tab:', tabName);
     
-    // Update tab content
-    Object.keys(tabs).forEach(key => {
-        if (tabs[key]) {
-            tabs[key].classList.toggle('active', key === tabName);
+    try {
+        // Ensure tabs object is initialized
+        if (!tabs) {
+            console.error('[Popup] ❌ Tabs object not initialized');
+            return;
         }
-    });
-    
-    // Load content based on tab
-    if (tabName === 'home') {
-        loadDashboard();
+        
+        // Update tab buttons
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        console.log('[Popup] Found', tabButtons.length, 'tab buttons');
+        
+        tabButtons.forEach(btn => {
+            const isActive = btn.dataset.tab === tabName;
+            btn.classList.toggle('active', isActive);
+            if (isActive) {
+                console.log('[Popup] ✅ Activated button for tab:', tabName);
+            }
+        });
+        
+        // Update tab content - check all possible tabs
+        const tabIds = ['home', 'resume', 'autofill', 'ai', 'account'];
+        console.log('[Popup] 🔍 Checking tab panels:', tabIds);
+        
+        tabIds.forEach(key => {
+            const tabElement = document.getElementById(`${key}Tab`);
+            if (tabElement) {
+                const shouldBeActive = key === tabName;
+                tabElement.classList.toggle('active', shouldBeActive);
+                
+                if (shouldBeActive) {
+                    console.log('[Popup] ✅ Showed panel for:', key);
+                    // Ensure panel is visible
+                    tabElement.style.display = 'block';
+                } else {
+                    console.log('[Popup] ⬜ Hid panel for:', key);
+                    tabElement.style.display = 'none';
+                }
+            } else {
+                console.warn('[Popup] ⚠️ Tab element not found:', `${key}Tab`);
+            }
+        });
+        
+        // Load content based on tab
+        console.log('[Popup] 📥 Loading content for tab:', tabName);
+        
+        if (tabName === 'home') {
+            loadDashboard();
+        } else if (tabName === 'resume') {
+            loadResumeTab();
+        } else if (tabName === 'autofill') {
+            loadAutofillProfile();
+        } else if (tabName === 'account') {
+            loadAccountTab();
+        } else if (tabName === 'ai') {
+            loadSettingsTab();
+        }
+        
+        PopupState.activeTab = tabName;
+        console.log('[Popup] ✅ Tab switch complete:', tabName);
+        
+    } catch (error) {
+        console.error('[Popup] ❌ Error switching tab:', error);
+        console.error('[Popup] Stack:', error.stack);
     }
-    
-    if (tabName === 'resume') {
-        loadResumeTab();
-    }
-    
-    if (tabName === 'account') {
-        loadAccountTab();
-    }
-    
-    if (tabName === 'ai') {
-        loadSettingsTab();
-    }
-    
-    PopupState.activeTab = tabName;
 }
 
 /**

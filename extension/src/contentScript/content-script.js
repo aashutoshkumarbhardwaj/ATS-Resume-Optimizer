@@ -1863,7 +1863,7 @@ function performAutofill(profile) {
 }
 
 /**
- * Fill Google Forms fields
+ * Fill Google Forms fields - ENHANCED VERSION
  * Google Forms use a different structure with divs instead of input elements
  * Improved: Better field detection, proper event triggering, and retry logic
  */
@@ -1871,53 +1871,66 @@ function fillGoogleFormFields(profile, missedFields) {
     let filledCount = 0;
     
     try {
-        console.log('[Content] Starting Google Forms autofill...');
+        console.log('[Content] ⭐ Starting Google Forms autofill (ENHANCED)...');
         
-        // Strategy 1: Find inputs with aria-label (main method)
-        const googleFormInputs = document.querySelectorAll(
-            'input[aria-label]:not([type="hidden"]):not([type="submit"]):not([type="button"]), ' +
-            'textarea[aria-label]:not([type="hidden"]), ' +
-            'input[jsname]:not([type="hidden"]):not([type="submit"]):not([type="button"])'
-        );
+        // Detect if this is actually a Google Form
+        const isGoogleForm = document.querySelector('form[method="POST"][action*="formResponse"]') ||
+                            document.querySelector('[role="form"]') ||
+                            window.location.href.includes('docs.google.com/forms') ||
+                            document.querySelector('[data-spreadsheet-id]');
         
-        console.log(`[Content] Found ${googleFormInputs.length} Google Form input fields`);
+        if (!isGoogleForm) {
+            console.log('[Content] ℹ️ This does not appear to be a Google Form, skipping enhanced detection');
+        }
         
-        googleFormInputs.forEach((input, index) => {
-            // Skip disabled or invisible inputs
-            if (input.disabled || input.type === 'hidden') {
-                return;
-            }
+        // Strategy 1: Find ALL input/textarea elements with any labels
+        console.log('[Content] 🔍 Strategy 1: Looking for all input/textarea elements...');
+        const allInputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea');
+        console.log(`[Content] Found ${allInputs.length} input/textarea elements`);
+        
+        allInputs.forEach((input, index) => {
+            // Skip disabled or truly invisible inputs
+            if (input.disabled) return;
             
-            // Check visibility more thoroughly
             const style = window.getComputedStyle(input);
             if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
                 return;
             }
             
+            // Get all possible labels
             const ariaLabel = input.getAttribute('aria-label') || '';
-            if (!ariaLabel) return;
+            const placeholder = input.getAttribute('placeholder') || '';
+            const name = input.getAttribute('name') || '';
+            const id = input.getAttribute('id') || '';
             
-            console.log(`[Content] Processing field ${index + 1}: "${ariaLabel}"`);
+            const allLabels = [ariaLabel, placeholder, name, id].filter(l => l).join(' | ');
             
-            const fieldType = detectGoogleFormFieldType(ariaLabel);
+            if (!allLabels) {
+                console.log(`[Content] Field ${index}: No labels found, skipping`);
+                return;
+            }
+            
+            console.log(`[Content] Field ${index}: Labels: "${allLabels}"`);
+            
+            const fieldType = detectGoogleFormFieldType(ariaLabel || placeholder || name);
             let valueToFill = null;
             
             // Check standard profile fields
             if (fieldType && profile[fieldType]) {
                 valueToFill = profile[fieldType];
-                console.log(`[Content]   Matched standard field: ${fieldType} = "${valueToFill}"`);
+                console.log(`[Content]   ✅ Matched standard field: ${fieldType} = "${valueToFill}"`);
             }
             
-            // Check custom fields if not filled
+            // Check custom fields
             if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
                 const matchedCustom = profile.custom_fields.find(field => {
                     const cleanKey = field.key.trim().toLowerCase();
-                    const labelLower = ariaLabel.toLowerCase();
+                    const labelLower = (ariaLabel + placeholder + name).toLowerCase();
                     return cleanKey && (labelLower.includes(cleanKey) || cleanKey.includes(labelLower.split(' ')[0]));
                 });
                 if (matchedCustom) {
                     valueToFill = matchedCustom.value;
-                    console.log(`[Content]   Matched custom field: ${matchedCustom.key} = "${valueToFill}"`);
+                    console.log(`[Content]   ✅ Matched custom field: ${matchedCustom.key} = "${valueToFill}"`);
                 }
             }
             
@@ -1931,15 +1944,50 @@ function fillGoogleFormFields(profile, missedFields) {
                     console.log(`[Content]   ❌ Failed to fill`);
                 }
             } else if (valueToFill && input.value) {
-                console.log(`[Content]   Skipped (already has value: "${input.value}")`);
+                console.log(`[Content]   ⏭️ Skipped (already has value: "${input.value}")`);
             } else {
-                console.log(`[Content]   No matching profile data`);
+                console.log(`[Content]   ⚠️ No matching profile data`);
             }
         });
         
-        // Strategy 2: Look for Google Forms contenteditable divs (some forms use these)
-        const editableDivs = document.querySelectorAll('[contenteditable="true"][aria-label]');
-        console.log(`[Content] Found ${editableDivs.length} contenteditable fields`);
+        // Strategy 2: Look for Google Forms specific selectors
+        console.log('[Content] 🔍 Strategy 2: Looking for Google Forms specific selectors...');
+        const googleFormInputs = document.querySelectorAll('[data-value], [jsaction*="setValue"], [role="textbox"], [role="listbox"]');
+        console.log(`[Content] Found ${googleFormInputs.length} Google Forms specific elements`);
+        
+        googleFormInputs.forEach((element) => {
+            if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
+                // Already handled in Strategy 1
+                return;
+            }
+            
+            // Handle special Google Forms elements
+            const ariaLabel = element.getAttribute('aria-label') || '';
+            if (!ariaLabel) return;
+            
+            // Check if this is likely a radio button or checkbox
+            if (element.getAttribute('role') === 'option') {
+                console.log(`[Content] Skipping role=option element (likely radio/checkbox): ${ariaLabel}`);
+                return;
+            }
+            
+            const fieldType = detectGoogleFormFieldType(ariaLabel);
+            if (!fieldType || !profile[fieldType]) return;
+            
+            const valueToFill = profile[fieldType];
+            
+            // Try to click if it matches the value
+            if (ariaLabel.toLowerCase().includes(valueToFill.toLowerCase())) {
+                element.click();
+                filledCount++;
+                console.log(`[Content] Clicked element: ${ariaLabel}`);
+            }
+        });
+        
+        // Strategy 3: Look for contenteditable divs
+        console.log('[Content] 🔍 Strategy 3: Looking for contenteditable divs...');
+        const editableDivs = document.querySelectorAll('[contenteditable="true"]');
+        console.log(`[Content] Found ${editableDivs.length} contenteditable divs`);
         
         editableDivs.forEach((div) => {
             const ariaLabel = div.getAttribute('aria-label') || '';
@@ -1963,10 +2011,11 @@ function fillGoogleFormFields(profile, missedFields) {
             }
         });
         
-        console.log(`[Content] Google Forms autofill completed: ${filledCount} fields filled`);
+        console.log(`[Content] ✅ Google Forms autofill completed: ${filledCount} fields filled`);
         
     } catch (error) {
-        console.error('[Content] Error filling Google Forms:', error);
+        console.error('[Content] ❌ Error filling Google Forms:', error);
+        console.error('[Content] Stack:', error.stack);
     }
     
     return filledCount;
