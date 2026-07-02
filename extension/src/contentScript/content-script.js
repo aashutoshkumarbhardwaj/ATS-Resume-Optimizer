@@ -1782,17 +1782,31 @@ function fillField(input, value) {
 }
 
 function performAutofill(profile) {
-    if (!profile) return { success: false, filledCount: 0, missedFields: [] };
+    if (!profile || typeof profile !== 'object') {
+        console.error('[Content] Invalid profile data:', profile);
+        return { success: false, filledCount: 0, missedFields: [] };
+    }
+    
+    console.log('[Content] 🔄 Starting autofill with profile:', {
+        hasFullName: !!profile.full_name,
+        hasEmail: !!profile.email,
+        fieldCount: Object.keys(profile).length,
+        hasCustomFields: Array.isArray(profile.custom_fields) && profile.custom_fields.length > 0
+    });
     
     // Try both traditional forms and Google Forms
     let filledCount = 0;
     const missedFields = [];
     
     // Strategy 1: Traditional HTML inputs
+    console.log('[Content] 📝 Filling traditional HTML form fields...');
     const inputs = document.querySelectorAll('input, textarea, select');
-    inputs.forEach(input => {
+    let traditionalCount = 0;
+    
+    inputs.forEach((input, index) => {
         // Skip hidden inputs, buttons, submits, search, etc.
-        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button' || input.type === 'image' || input.type === 'search') {
+        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button' || 
+            input.type === 'image' || input.type === 'search' || input.disabled) {
             return;
         }
         
@@ -1816,15 +1830,17 @@ function performAutofill(profile) {
             }
         }
         
-        // Fill field if match found
-        if (valueToFill) {
+        // Fill field if match found and it's empty
+        if (valueToFill && !input.value) {
             const filled = fillField(input, valueToFill);
             if (filled) {
                 filledCount++;
+                traditionalCount++;
             }
-        } else {
+        } else if (!valueToFill) {
             // Track unfilled/missed fields
-            if (!input.value && (input.tagName === 'TEXTAREA' || input.tagName === 'SELECT' || ['text', 'email', 'tel', 'url', 'number'].includes(input.type))) {
+            if (!input.value && (input.tagName === 'TEXTAREA' || input.tagName === 'SELECT' || 
+                ['text', 'email', 'tel', 'url', 'number'].includes(input.type))) {
                 const label = getCleanLabel(input);
                 if (label && !missedFields.includes(label)) {
                     missedFields.push(label);
@@ -1833,9 +1849,15 @@ function performAutofill(profile) {
         }
     });
     
+    console.log(`[Content] ✅ Traditional forms: ${traditionalCount} fields filled out of ${inputs.length}`);
+    
     // Strategy 2: Google Forms (iframe-based form fields)
+    console.log('[Content] 📋 Filling Google Forms fields...');
     const googleFormCount = fillGoogleFormFields(profile, missedFields);
     filledCount += googleFormCount;
+    
+    console.log(`[Content] ✅ Google Forms: ${googleFormCount} fields filled`);
+    console.log(`[Content] 🏁 Autofill complete: Total ${filledCount} fields filled, ${missedFields.length} fields missed`);
     
     return { success: true, filledCount, missedFields };
 }
@@ -1843,53 +1865,108 @@ function performAutofill(profile) {
 /**
  * Fill Google Forms fields
  * Google Forms use a different structure with divs instead of input elements
+ * Improved: Better field detection, proper event triggering, and retry logic
  */
 function fillGoogleFormFields(profile, missedFields) {
     let filledCount = 0;
     
     try {
-        // Find all Google Form input fields with aria-label
-        const formInputs = document.querySelectorAll('input[aria-label], input[jsname], textarea[aria-label], textarea[jsname]');
+        console.log('[Content] Starting Google Forms autofill...');
         
-        formInputs.forEach(input => {
-            // Skip hidden or disabled inputs
-            if (input.type === 'hidden' || input.disabled || input.style.display === 'none') {
+        // Strategy 1: Find inputs with aria-label (main method)
+        const googleFormInputs = document.querySelectorAll(
+            'input[aria-label]:not([type="hidden"]):not([type="submit"]):not([type="button"]), ' +
+            'textarea[aria-label]:not([type="hidden"]), ' +
+            'input[jsname]:not([type="hidden"]):not([type="submit"]):not([type="button"])'
+        );
+        
+        console.log(`[Content] Found ${googleFormInputs.length} Google Form input fields`);
+        
+        googleFormInputs.forEach((input, index) => {
+            // Skip disabled or invisible inputs
+            if (input.disabled || input.type === 'hidden') {
+                return;
+            }
+            
+            // Check visibility more thoroughly
+            const style = window.getComputedStyle(input);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
                 return;
             }
             
             const ariaLabel = input.getAttribute('aria-label') || '';
-            const fieldType = detectGoogleFormFieldType(ariaLabel);
+            if (!ariaLabel) return;
             
+            console.log(`[Content] Processing field ${index + 1}: "${ariaLabel}"`);
+            
+            const fieldType = detectGoogleFormFieldType(ariaLabel);
             let valueToFill = null;
             
-            // Check standard fields
+            // Check standard profile fields
+            if (fieldType && profile[fieldType]) {
+                valueToFill = profile[fieldType];
+                console.log(`[Content]   Matched standard field: ${fieldType} = "${valueToFill}"`);
+            }
+            
+            // Check custom fields if not filled
+            if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
+                const matchedCustom = profile.custom_fields.find(field => {
+                    const cleanKey = field.key.trim().toLowerCase();
+                    const labelLower = ariaLabel.toLowerCase();
+                    return cleanKey && (labelLower.includes(cleanKey) || cleanKey.includes(labelLower.split(' ')[0]));
+                });
+                if (matchedCustom) {
+                    valueToFill = matchedCustom.value;
+                    console.log(`[Content]   Matched custom field: ${matchedCustom.key} = "${valueToFill}"`);
+                }
+            }
+            
+            // Fill if match found and field is empty
+            if (valueToFill && !input.value) {
+                const filled = fillField(input, valueToFill);
+                if (filled) {
+                    filledCount++;
+                    console.log(`[Content]   ✅ Filled successfully`);
+                } else {
+                    console.log(`[Content]   ❌ Failed to fill`);
+                }
+            } else if (valueToFill && input.value) {
+                console.log(`[Content]   Skipped (already has value: "${input.value}")`);
+            } else {
+                console.log(`[Content]   No matching profile data`);
+            }
+        });
+        
+        // Strategy 2: Look for Google Forms contenteditable divs (some forms use these)
+        const editableDivs = document.querySelectorAll('[contenteditable="true"][aria-label]');
+        console.log(`[Content] Found ${editableDivs.length} contenteditable fields`);
+        
+        editableDivs.forEach((div) => {
+            const ariaLabel = div.getAttribute('aria-label') || '';
+            if (!ariaLabel || div.textContent.trim()) {
+                return; // Skip if empty label or already filled
+            }
+            
+            const fieldType = detectGoogleFormFieldType(ariaLabel);
+            let valueToFill = null;
+            
             if (fieldType && profile[fieldType]) {
                 valueToFill = profile[fieldType];
             }
             
-            // Check custom fields
-            if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
-                const matchedCustom = profile.custom_fields.find(field => {
-                    const cleanKey = field.key.trim().toLowerCase();
-                    return cleanKey && ariaLabel.toLowerCase().includes(cleanKey);
-                });
-                if (matchedCustom) {
-                    valueToFill = matchedCustom.value;
-                }
-            }
-            
-            // Fill if match found
-            if (valueToFill && !input.value) {
-                // Try to fill the input
-                if (fillField(input, valueToFill)) {
-                    filledCount++;
-                    console.log(`[Content] Filled Google Form field: ${ariaLabel}`);
-                }
+            if (valueToFill) {
+                div.textContent = valueToFill;
+                div.dispatchEvent(new Event('input', { bubbles: true }));
+                div.dispatchEvent(new Event('change', { bubbles: true }));
+                filledCount++;
+                console.log(`[Content] Filled contenteditable div: ${ariaLabel}`);
             }
         });
         
+        console.log(`[Content] Google Forms autofill completed: ${filledCount} fields filled`);
+        
     } catch (error) {
-        console.warn('[Content] Error filling Google Forms:', error);
+        console.error('[Content] Error filling Google Forms:', error);
     }
     
     return filledCount;

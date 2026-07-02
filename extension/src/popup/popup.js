@@ -1597,19 +1597,128 @@ async function loadAutofillProfile() {
     try {
         PopupState.markTask();
         
+        console.log('[Popup] 📥 Loading autofill profile...');
+        
+        // First, verify profile still exists
+        const verification = await StorageUtil.verifyProfileExists();
+        if (!verification.anyExists) {
+            console.warn('[Popup] ⚠️ Profile not found in storage!');
+            showNotification('⚠️ Profile data missing. Attempting to restore from backup...', 'warning');
+            
+            // Try to restore from backup
+            const restore = await StorageUtil.restoreProfileFromBackup();
+            if (!restore.restored) {
+                console.warn('[Popup] ❌ Could not restore profile - it may have been deleted');
+                showNotification('Profile was lost. Please fill out your profile again.', 'error');
+                return;
+            }
+        }
+        
+        // Load profile
         const result = await StorageUtil.getAutofillProfile();
-        if (result.success && result.profile) {
+        
+        if (result.success && result.profile && Object.keys(result.profile).length > 0) {
             const p = result.profile;
             
+            console.log('[Popup] ✅ Profile loaded from', result.source, 'storage');
+            console.log('[Popup] Profile data:', { 
+                hasEmail: !!p.email, 
+                hasName: !!p.full_name,
+                fields: Object.keys(p).length 
+            });
+            
             // Personal fields
-            document.getElementById('full_name').value = p.full_name || '';
-            document.getElementById('first_name').value = p.first_name || '';
-            document.getElementById('last_name').value = p.last_name || '';
-            document.getElementById('email').value = p.email || '';
-            document.getElementById('phone').value = p.phone || '';
-            document.getElementById('city').value = p.city || '';
-            if (document.getElementById('state')) document.getElementById('state').value = p.state || '';
-            if (document.getElementById('zip')) document.getElementById('zip').value = p.zip || '';
+            const fullNameEl = document.getElementById('full_name');
+            if (fullNameEl) fullNameEl.value = p.full_name || '';
+            
+            const firstNameEl = document.getElementById('first_name');
+            if (firstNameEl) firstNameEl.value = p.first_name || '';
+            
+            const lastNameEl = document.getElementById('last_name');
+            if (lastNameEl) lastNameEl.value = p.last_name || '';
+            
+            const emailEl = document.getElementById('email');
+            if (emailEl) emailEl.value = p.email || '';
+            
+            const phoneEl = document.getElementById('phone');
+            if (phoneEl) phoneEl.value = p.phone || '';
+            
+            const cityEl = document.getElementById('city');
+            if (cityEl) cityEl.value = p.city || '';
+            
+            const stateEl = document.getElementById('state');
+            if (stateEl) stateEl.value = p.state || '';
+            
+            const zipEl = document.getElementById('zip');
+            if (zipEl) zipEl.value = p.zip || '';
+            
+            const countryEl = document.getElementById('country');
+            if (countryEl) countryEl.value = p.country || '';
+            
+            // Professional fields
+            const currentTitleEl = document.getElementById('current_title');
+            if (currentTitleEl) currentTitleEl.value = p.current_title || '';
+            
+            const currentCompanyEl = document.getElementById('current_company');
+            if (currentCompanyEl) currentCompanyEl.value = p.current_company || '';
+            
+            const yearsEl = document.getElementById('years_of_experience');
+            if (yearsEl) yearsEl.value = p.years_of_experience || '';
+            
+            const noticePeriodEl = document.getElementById('notice_period');
+            if (noticePeriodEl) noticePeriodEl.value = p.notice_period || '';
+            
+            const salaryEl = document.getElementById('expected_salary');
+            if (salaryEl) salaryEl.value = p.expected_salary || '';
+            
+            // Links
+            const linkedinEl = document.getElementById('linkedin');
+            if (linkedinEl) linkedinEl.value = p.linkedin || '';
+            
+            const githubEl = document.getElementById('github');
+            if (githubEl) githubEl.value = p.github || '';
+            
+            const portfolioEl = document.getElementById('portfolio');
+            if (portfolioEl) portfolioEl.value = p.portfolio || '';
+            
+            // Resume & Skills
+            const resumeEl = document.getElementById('default_resume');
+            if (resumeEl) resumeEl.value = p.default_resume || '';
+            
+            const skillsEl = document.getElementById('skills');
+            if (skillsEl) skillsEl.value = p.skills || '';
+            
+            // Answers
+            const answerAboutEl = document.getElementById('answer_about_you');
+            if (answerAboutEl) answerAboutEl.value = p.answer_about_you || '';
+            
+            const answerWhyEl = document.getElementById('answer_why_company');
+            if (answerWhyEl) answerWhyEl.value = p.answer_why_company || '';
+            
+            const answerHireEl = document.getElementById('answer_hire_you');
+            if (answerHireEl) answerHireEl.value = p.answer_hire_you || '';
+            
+            // Preferences
+            const workEnvEl = document.getElementById('work_environment');
+            if (workEnvEl) workEnvEl.value = p.work_environment || '';
+            
+            const locationEl = document.getElementById('preferred_location');
+            if (locationEl) locationEl.value = p.preferred_location || '';
+            
+            const authEl = document.getElementById('work_authorization');
+            if (authEl) authEl.value = p.work_authorization || '';
+            
+            console.log('[Popup] ✅ All available profile fields populated');
+        } else {
+            console.log('[Popup] ℹ️ No autofill profile found (first time or deleted)');
+        }
+    } catch (error) {
+        console.error('[Popup] Error loading autofill profile:', error);
+        showNotification('Error loading profile: ' + error.message, 'error');
+    } finally {
+        PopupState.unmarkTask();
+    }
+}
             document.getElementById('country').value = p.country || '';
             
             // Professional fields
@@ -1686,6 +1795,7 @@ function addCustomFieldRow(key = '', value = '') {
 
 /**
  * Handle save profile form submit
+ * Saves to BOTH sync and local storage for redundancy
  */
 async function handleSaveProfile(e) {
     if (e) e.preventDefault();
@@ -1694,6 +1804,8 @@ async function handleSaveProfile(e) {
     messageEl.className = 'autofill-status-message hidden';
     
     try {
+        showLoading('Saving profile...');
+        
         // Collect custom fields
         const customFields = [];
         const rows = document.querySelectorAll('.custom-field-row');
@@ -1746,8 +1858,55 @@ async function handleSaveProfile(e) {
             custom_fields: customFields
         };
 
-        // Save profile
+        console.log('[Popup] 💾 Saving profile with', Object.keys(profileData).length, 'fields');
+
+        // Save profile (to both sync and local)
         const saveResult = await StorageUtil.saveAutofillProfile(profileData);
+
+        if (saveResult.success) {
+            console.log('[Popup] ✅ Profile saved to', saveResult.stored);
+            
+            // Verify it was actually saved
+            const verification = await StorageUtil.verifyProfileExists();
+            console.log('[Popup] Verification result:', verification);
+            
+            if (verification.anyExists) {
+                hideLoading();
+                showNotification('✅ Profile saved successfully! Data synced to both storages.', 'success');
+                messageEl.innerHTML = '✅ Profile saved successfully!';
+                messageEl.className = 'autofill-status-message success';
+                
+                // Also sync to backend if authenticated
+                const token = await TokenVerifier.getStoredToken();
+                if (token) {
+                    console.log('[Popup] 📤 Syncing profile to backend...');
+                    const syncResult = await ProfileSyncManager.uploadProfile(token, profileData);
+                    if (syncResult.success) {
+                        console.log('[Popup] ✅ Profile synced to backend');
+                        showNotification('✅ Profile synced to Job Orbit!', 'success');
+                    } else {
+                        console.warn('[Popup] ⚠️ Backend sync failed (will retry later):', syncResult.error);
+                    }
+                }
+                
+                // Hide message after 3 seconds
+                setTimeout(() => {
+                    messageEl.className = 'autofill-status-message hidden';
+                }, 3000);
+            } else {
+                throw new Error('Profile save verification failed - data may not have persisted');
+            }
+        } else {
+            throw new Error('Failed to save profile');
+        }
+    } catch (error) {
+        console.error('[Popup] Error saving profile:', error);
+        hideLoading();
+        showNotification('❌ Error saving profile: ' + error.message, 'error');
+        messageEl.innerHTML = '❌ ' + error.message;
+        messageEl.className = 'autofill-status-message error';
+    }
+}
         
         // Save settings
         const settingsResult = await StorageUtil.getSettings();
