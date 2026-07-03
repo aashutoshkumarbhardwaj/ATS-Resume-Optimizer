@@ -67,9 +67,14 @@ const JD_EXTRACTION_CONFIG = {
 let detectedJob = null;
 
 /**
- * Extension Context Validation & Safe Messaging
- * Handles extension reload/invalidation gracefully
+ * Extension Context Validation & Safe Messaging with Reconnection
+ * Handles extension reload/invalidation gracefully with automatic reconnection
  */
+
+// Track connection state
+let isContextValid = true;
+let messageQueue = [];
+let isReconnecting = false;
 
 function isExtensionContextValid() {
     try {
@@ -80,24 +85,129 @@ function isExtensionContextValid() {
     }
 }
 
-function safeSendMessage(message, callback) {
+// Connection keep-alive - prevents service worker from being terminated
+function startKeepAliveInterval() {
+    let consecutiveFailures = 0;
+    
+    // DON'T start pinging if context is already invalid
     if (!isExtensionContextValid()) {
-        console.warn('[Content] ⚠️ Extension context invalidated');
-        if (callback) callback({ error: 'Extension context invalidated' });
+        console.warn('[Content] ⚠️ Extension context invalid at startup, keep-alive disabled');
+        return;
+    }
+    
+    setInterval(() => {
+        // Silently skip if context invalid - don't spam logs
+        if (!isExtensionContextValid()) {
+            consecutiveFailures++;
+            return;
+        }
+        
+        consecutiveFailures = 0;
+        
+        try {
+            chrome.runtime.sendMessage({ type: 'PING', silent: true }, (response) => {
+                if (chrome.runtime.lastError) {
+                    // Silently ignore - don't spam console
+                }
+            });
+        } catch (e) {
+            // Silently ignore
+        }
+    }, 30000);
+}
+
+// Attempt to reconnect when context becomes invalid
+async function reconnectToExtension() {
+    if (isReconnecting) return; // Prevent concurrent reconnection attempts
+    isReconnecting = true;
+    
+    const maxRetries = 5;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+        try {
+            // Try to send a test message
+            await new Promise((resolve, reject) => {
+                chrome.runtime.sendMessage({ type: 'PING', silent: true }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        reject(new Error(chrome.runtime.lastError.message));
+                    } else {
+                        resolve(response);
+                    }
+                });
+            });
+            
+            // Connection restored
+            isContextValid = true;
+            isReconnecting = false;
+            console.log('[Content] ✅ Context reconnected successfully');
+            
+            // Flush queued messages
+            while (messageQueue.length > 0) {
+                const { message, callback } = messageQueue.shift();
+                safeSendMessage(message, callback);
+            }
+            
+            return true;
+        } catch (error) {
+            retryCount++;
+            if (retryCount < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount)); // Exponential backoff
+            }
+        }
+    }
+    
+    isReconnecting = false;
+    console.error('[Content] ❌ Failed to reconnect after 5 attempts');
+    return false;
+}
+
+function safeSendMessage(message, callback) {
+    // Check context validity
+    if (!isExtensionContextValid()) {
+        console.warn('[Content] ⚠️ Extension context invalid, attempting reconnection...');
+        isContextValid = false;
+        
+        // Queue the message for retry
+        messageQueue.push({ message, callback });
+        
+        // Try to reconnect
+        reconnectToExtension().then((reconnected) => {
+            if (!reconnected && callback) {
+                callback({ error: 'Extension context invalidated and reconnection failed' });
+            }
+        });
         return;
     }
     
     try {
         chrome.runtime.sendMessage(message, (response) => {
+            // Check context again in callback
             if (!isExtensionContextValid()) {
-                console.warn('[Content] ⚠️ Context invalidated during callback');
+                console.warn('[Content] ⚠️ Context invalidated in callback, queuing for retry');
+                messageQueue.push({ message, callback });
+                if (!isReconnecting) {
+                    reconnectToExtension();
+                }
                 return;
             }
+            
             if (chrome.runtime.lastError) {
                 console.warn('[Content] Message error:', chrome.runtime.lastError.message);
-                if (callback) callback({ error: chrome.runtime.lastError.message });
+                
+                // Handle specific errors
+                if (chrome.runtime.lastError.message.includes('context')) {
+                    isContextValid = false;
+                    messageQueue.push({ message, callback });
+                    if (!isReconnecting) {
+                        reconnectToExtension();
+                    }
+                } else if (callback) {
+                    callback({ error: chrome.runtime.lastError.message });
+                }
                 return;
             }
+            
             if (callback) callback(response);
         });
     } catch (error) {
@@ -106,8 +216,16 @@ function safeSendMessage(message, callback) {
     }
 }
 
+// Start keep-alive when script loads
+startKeepAliveInterval();
+
+// Setup message listener
+console.log('[Content] 📡 Setting up message listener...');
+
 // Listen for messages from the background script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    console.log('[Content] 📬 Message received. Type:', request.type, 'Sender:', sender.id ? 'Extension' : 'Content');
+    
     // Validate context at start of listener
     if (!isExtensionContextValid()) {
         console.warn('[Content] ⚠️ Extension context invalidated in message listener');
@@ -115,41 +233,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return;
     }
     
-    try {
-        if (request.type === 'EXTRACT_RESUME') {
+    if (request.type === 'EXTRACT_RESUME') {
+        try {
             const resumeText = extractResumeContent();
             sendResponse({ success: true, resumeText });
+        } catch (err) {
+            console.error('[Content] Error extracting resume:', err);
+            sendResponse({ success: false, message: err.message });
         }
-
-        if (request.type === 'HIGHLIGHT_KEYWORDS') {
+    } else if (request.type === 'HIGHLIGHT_KEYWORDS') {
+        try {
             highlightKeywords(request.keywords);
             sendResponse({ success: true });
+        } catch (err) {
+            console.error('[Content] Error highlighting keywords:', err);
+            sendResponse({ success: false, message: err.message });
         }
-
-        if (request.type === 'DETECT_JOB') {
+    } else if (request.type === 'DETECT_JOB') {
+        try {
             const jobData = detectJobDescription();
             sendResponse(jobData);
+        } catch (err) {
+            console.error('[Content] Error detecting job:', err);
+            sendResponse({ success: false, message: err.message });
         }
-
-        if (request.type === 'GET_DETECTED_JOB') {
-            sendResponse({ success: true, job: detectedJob });
-        }
-
-        if (request.type === 'PERFORM_AUTOFILL') {
-            try {
-                const result = performAutofill(request.profile);
-                
-                // Handle async response (from Google Forms)
-                if (result instanceof Promise) {
-                    result.then((response) => {
-                        if (!isExtensionContextValid()) {
-                            console.warn('[Content] Context invalidated in async response');
-                            return;
-                        }
-                        console.log('[Content] Async autofill completed:', response);
-                        sendResponse({ 
-                            success: true, 
-                            filledCount: response.filledCount,
+    } else if (request.type === 'GET_DETECTED_JOB') {
+        sendResponse({ success: true, job: detectedJob });
+    } else if (request.type === 'PERFORM_AUTOFILL') {
+        try {
+            const result = performAutofill(request.profile);
+            
+            // Handle async response (from Google Forms)
+            if (result instanceof Promise) {
+                result.then((response) => {
+                    if (!isExtensionContextValid()) {
+                        console.warn('[Content] Context invalidated in async response');
+                        return;
+                    }
+                    console.log('[Content] Async autofill completed:', response);
+                    sendResponse({ 
+                        success: true, 
+                        filledCount: response.filledCount,
                         missedFields: response.missedFields
                     });
                 }).catch((error) => {
@@ -170,18 +294,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, message: err.message });
         }
         return true; // Keep channel open for async
-    }
-
-    if (request.type === 'SETTINGS_UPDATED') {
-        if (request.settings && request.settings.showAutofillBadge === false) {
-            removeAutofillBadge();
-        } else {
-            initAutofillBadge();
+    } else if (request.type === 'SETTINGS_UPDATED') {
+        try {
+            if (request.settings && request.settings.showAutofillBadge === false) {
+                removeAutofillBadge();
+            } else {
+                // Show the button if it exists
+                const btn = document.getElementById('ats-unified-autofill-button');
+                if (btn) {
+                    btn.classList.remove('hidden');
+                    console.log('[Content] ✅ Autofill button shown');
+                }
+            }
+            sendResponse({ success: true });
+        } catch (err) {
+            console.error('[Content] Error updating settings:', err);
+            sendResponse({ success: false, message: err.message });
         }
-        sendResponse({ success: true });
-    }
-
-    if (request.type === 'SHOW_AUTOFILL_BUTTON') {
+    } else if (request.type === 'SHOW_AUTOFILL_BUTTON') {
         // User clicked "Show Autofill Button" in popup
         if (isExtensionContextValid()) {
             chrome.storage.local.set({ autofillButtonHidden: false }, () => {
@@ -189,15 +319,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     console.warn('[Content] Context invalidated in storage callback');
                     return;
                 }
-                console.log('[Content] Autofill button re-enabled by user');
-                initAutofillBadge();
+                // Show the button if it exists
+                const btn = document.getElementById('ats-unified-autofill-button');
+                if (btn) {
+                    btn.classList.remove('hidden');
+                    console.log('[Content] ✅ Autofill button re-enabled by user');
+                }
                 sendResponse({ success: true });
             });
         }
         return true;
-    }
-
-    if (request.type === 'FETCH_JOB_DESCRIPTION') {
+    } else if (request.type === 'FETCH_JOB_DESCRIPTION') {
         // User clicked "Fetch Job Description" button in popup
         try {
             const jobData = detectJobDescription();
@@ -205,20 +337,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // Save to storage so popup can access it
                 if (isExtensionContextValid()) {
                     chrome.storage.local.set({
-                    currentJob: jobData,
-                    manuallyFetched: true
-                }, () => {
-                    if (!isExtensionContextValid()) {
-                        console.warn('[Content] Context invalidated in storage callback');
-                        return;
-                    }
-                    console.log('[Content] Job description fetched and saved');
-                    sendResponse({ 
-                        success: true, 
-                        job: jobData,
-                        message: 'Job description fetched successfully!' 
+                        currentJob: jobData,
+                        manuallyFetched: true
+                    }, () => {
+                        if (!isExtensionContextValid()) {
+                            console.warn('[Content] Context invalidated in storage callback');
+                            return;
+                        }
+                        console.log('[Content] Job description fetched and saved');
+                        sendResponse({ 
+                            success: true, 
+                            job: jobData,
+                            message: 'Job description fetched successfully!' 
+                        });
                     });
-                });
+                } else {
+                    sendResponse({ 
+                        success: false, 
+                        message: 'Could not find job description on this page' 
+                    });
+                }
             } else {
                 sendResponse({ 
                     success: false, 
@@ -233,11 +371,112 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         }
         return true;
+    } else if (request.type === 'TRIGGER_AUTOFILL_FROM_POPUP' || request.type === 'TRIGGER_AUTOFILL_FROM_BUTTON') {
+        // Handle autofill trigger from popup or button
+        console.log('[Content] 📬 Received autofill trigger:', request.type);
+        
+        try {
+            if (typeof AutofillOrchestrator === 'undefined') {
+                console.error('[Content] ❌ AutofillOrchestrator not available');
+                sendResponse({ success: false, error: 'AutofillOrchestrator not loaded', filledCount: 0 });
+                return true;
+            }
+            
+            // Get profile from request or storage
+            let profile = request.profile;
+            
+            if (!profile) {
+                console.log('[Content] 🔍 No profile in message, loading from storage...');
+                // Load profile from storage if not in request
+                chrome.storage.local.get(['autofillProfile'], (storageResult) => {
+                    if (!isExtensionContextValid()) {
+                        console.warn('[Content] Context invalidated during storage read');
+                        sendResponse({ success: false, error: 'Extension context invalidated', filledCount: 0 });
+                        return;
+                    }
+                    
+                    profile = storageResult.autofillProfile;
+                    console.log('[Content] 📦 Loaded profile from storage. Keys:', profile ? Object.keys(profile).length : 0);
+                    executeAutofill(profile);
+                });
+            } else {
+                console.log('[Content] 📦 Profile from message. Keys:', Object.keys(profile).length);
+                executeAutofill(profile);
+            }
+            
+            function executeAutofill(userProfile) {
+                console.log('[Content] 🚀 Executing autofill with profile:', userProfile ? 'present' : 'MISSING');
+                
+                if (!userProfile || Object.keys(userProfile).length === 0) {
+                    console.warn('[Content] ⚠️ No profile data available for autofill');
+                    sendResponse({ 
+                        success: false, 
+                        error: 'No profile saved. Please save your profile first in the popup.',
+                        filledCount: 0,
+                        missedFields: []
+                    });
+                    return;
+                }
+                
+                try {
+                    const orchestrator = new AutofillOrchestrator();
+                    
+                    console.log('[Content] 🎯 Starting orchestrator with profile...');
+                    orchestrator.start({ profile: userProfile }).then(result => {
+                        console.log('[Content] ✅ Autofill complete:', result);
+                        
+                        // Extract count from result
+                        let filledCount = 0;
+                        let missedFields = [];
+                        
+                        if (result && result.data) {
+                            filledCount = result.data.filled || 0;
+                            missedFields = result.data.missedFields || [];
+                        }
+                        
+                        sendResponse({ 
+                            success: true, 
+                            result,
+                            filledCount,
+                            missedFields
+                        });
+                    }).catch(error => {
+                        console.error('[Content] ❌ Autofill orchestrator error:', error);
+                        sendResponse({ 
+                            success: false, 
+                            error: error.message,
+                            filledCount: 0,
+                            missedFields: []
+                        });
+                    });
+                } catch (error) {
+                    console.error('[Content] ❌ Error creating orchestrator:', error);
+                    sendResponse({ 
+                        success: false, 
+                        error: error.message,
+                        filledCount: 0,
+                        missedFields: []
+                    });
+                }
+            }
+            
+            return true; // Keep channel open for async
+        } catch (error) {
+            console.error('[Content] ❌ Error triggering autofill:', error);
+            sendResponse({ 
+                success: false, 
+                error: error.message,
+                filledCount: 0,
+                missedFields: []
+            });
+            return true;
+        }
+    } else {
+        // Unknown message type - log it but don't error
+        console.log('[Content] ℹ️ Received unknown message type:', request.type);
+        sendResponse({ error: 'Unknown message type: ' + request.type });
+        return false;
     }
-        return true;
-    }
-
-    return true;
 });
 
 /**
@@ -1562,7 +1801,8 @@ function autoDetectJob() {
                     safeSendMessage({
                         type: 'JOB_DETECTED',
                         payload: result.payload
-                });
+                    });
+                }
             } else {
                 console.log('Resume Fixer: Job detection failed or low confidence', result.confidence);
                 // For debugging: log partial data if available
@@ -1804,8 +2044,8 @@ new MutationObserver(() => {
     if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
         autoDetectJob();
-        // Retry badge injection on URL changes for SPA career sites
-        setTimeout(initAutofillBadge, 1000);
+        // Note: Button is initialized once at startup and persists across URL changes
+        // No need to re-inject on URL changes
     }
 }).observe(document, { subtree: true, childList: true });
 
@@ -2767,62 +3007,87 @@ function injectAutofillBadge() {
     console.log('[Content] Badge injection delegated to UnifiedAutofillButton');
 }
 
-// Run on load
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    setTimeout(initAutofillBadge, 1000);
-} else {
-    window.addEventListener('load', () => {
-        if (isExtensionContextValid()) {
-            setTimeout(initAutofillBadge, 1000);
-        }
-    });
-}
-// Initialize FloatingButtonManager for new orchestrator flow
-// IMPORTANT: Only initialize once to prevent duplicate buttons
-try {
-    if (typeof FloatingButtonManager !== 'undefined' && typeof window.__autofillButtonInitialized === 'undefined') {
-        window.__autofillButtonInitialized = true;  // Flag to prevent re-initialization
+// ============================================
+// UNIFIED BUTTON INITIALIZATION - SINGLE POINT
+// ============================================
+// Initialize UnifiedAutofillButton ONCE and ONLY ONCE
+// Uses synchronous initialization to ensure deterministic execution
+
+function initializeAutofillButton() {
+    // Guard: Prevent multiple initialization attempts
+    if (window.__autofillButtonInitialized) {
+        console.log('[Content] ℹ️ Autofill button already initialized, skipping duplicate');
+        return;
+    }
+    window.__autofillButtonInitialized = true;
+    
+    console.log('[Content] 🔍 Starting autofill button initialization...');
+    
+    // Wait for class to be available with retry logic
+    let attempts = 0;
+    const maxAttempts = 50; // 50 attempts * 100ms = 5 seconds
+    
+    function checkAndInitialize() {
+        attempts++;
         
-        if (FloatingButtonManager.isApplicationForm()) {
-            const floatingButtonManager = new FloatingButtonManager();
-            floatingButtonManager.init().catch(err => 
-                console.error('[Content] FloatingButton init error:', err)
-            );
+        // Verify UnifiedAutofillButton class is available
+        if (typeof window.UnifiedAutofillButton === 'undefined') {
+            if (attempts % 10 === 0) {
+                console.log(`[Content] ⏳ Still waiting for UnifiedAutofillButton (attempt ${attempts}/${maxAttempts})`);
+            }
+            
+            if (attempts < maxAttempts) {
+                // Class not available yet, retry soon
+                setTimeout(checkAndInitialize, 100);
+                return;
+            } else {
+                // Gave up after 5 seconds
+                console.error('[Content] ❌ FATAL: UnifiedAutofillButton class not found after 5 seconds');
+                console.error('[Content] ❌ Check: floatingButtonManager.js loads BEFORE content-script.js in manifest.json');
+                console.error('[Content] Available on window:', Object.keys(window).filter(k => k.includes('Button') || k.includes('Autofill')));
+                return;
+            }
+        }
+        
+        console.log('[Content] ✅ UnifiedAutofillButton class is available');
+        createButton();
+    }
+    
+    // Create button when DOM is ready
+    function createButton() {
+        try {
+            if (window.__unifiedAutofillButtonInstance) {
+                console.log('[Content] ℹ️ Button instance already exists, skipping creation');
+                return;
+            }
+            
+            console.log('[Content] 🔨 Creating new UnifiedAutofillButton instance...');
+            
+            // Create and initialize button
+            const unifiedButton = new window.UnifiedAutofillButton();
+            unifiedButton.init().catch((err) => {
+                console.error('[Content] ❌ Error initializing button:', err);
+            });
+            
+            console.log('[Content] ✅ UnifiedAutofillButton initialized successfully');
+        } catch (err) {
+            console.error('[Content] ❌ Error creating UnifiedAutofillButton:', err);
+            console.error('[Content] Stack:', err.stack);
         }
     }
-} catch (error) {
-    console.error('[Content] Error initializing FloatingButtonManager:', error);
+    
+    // Check class availability
+    console.log('[Content] Checking if UnifiedAutofillButton is available...');
+    console.log('[Content] typeof window.UnifiedAutofillButton:', typeof window.UnifiedAutofillButton);
+    checkAndInitialize();
 }
 
-// Handle autofill trigger from popup
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === 'TRIGGER_AUTOFILL_FROM_POPUP') {
-        console.log('[Content] Received TRIGGER_AUTOFILL_FROM_POPUP message');
-        
-        try {
-            if (typeof AutofillOrchestrator !== 'undefined') {
-                const orchestrator = new AutofillOrchestrator();
-                orchestrator.start().then(result => {
-                    console.log('[Content] Autofill complete:', result);
-                    if (isExtensionContextValid()) {
-                        safeSendMessage({
-                            type: 'AUTOFILL_COMPLETE',
-                            data: result
-                    }).catch(err => console.error('[Content] Error sending result:', err));
-                    
-                    sendResponse({ success: true, result });
-                }).catch(error => {
-                    console.error('[Content] Autofill error:', error);
-                    sendResponse({ success: false, error: error.message });
-                });
-                return true;
-            } else {
-                sendResponse({ success: false, error: 'AutofillOrchestrator not loaded' });
-            }
-        } catch (error) {
-            console.error('[Content] Error triggering autofill:', error);
-            sendResponse({ success: false, error: error.message });
-        }
-    }
-});
+// Call at script load time - but ensure DOM is ready first
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeAutofillButton);
+} else {
+    // DOM is already ready
+    initializeAutofillButton();
+}
+
 })();

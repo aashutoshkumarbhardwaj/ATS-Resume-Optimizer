@@ -1,38 +1,102 @@
 /**
  * Storage Utilities
  * Handles all Chrome storage operations for autofill profile, analysis, and history
+ * With robustness against extension context invalidation errors
  */
+
+// Helper function to safely check if chrome API is available
+const isChromeStorageAvailable = () => {
+    try {
+        if (typeof chrome === 'undefined' || !chrome.storage) {
+            console.warn('[StorageUtil] ⚠️ chrome.storage is unavailable');
+            return false;
+        }
+        // Test if we can access storage without throwing
+        chrome.storage.local;
+        return true;
+    } catch (e) {
+        console.warn('[StorageUtil] ⚠️ Chrome storage access failed:', e.message);
+        return false;
+    }
+};
 
 const StorageUtil = {
     /**
-     * Save autofill profile to storage - with fallback to local if sync fails
+     * Save autofill profile to storage - with guarantee of completion
      */
     saveAutofillProfile: async (profileData) => {
-        return new Promise((resolve) => {
-            // Always save to BOTH sync and local storage for redundancy
-            const dataToSave = {
-                autofillProfile: profileData,
-                lastSavedAt: new Date().toISOString()
-            };
-            
-            // Primary: sync storage (persists across devices)
-            chrome.storage.sync.set(dataToSave, () => {
-                if (chrome.runtime.lastError) {
-                    console.warn('[StorageUtil] Sync storage failed, using local:', chrome.runtime.lastError);
-                    // Fallback to local storage
-                    chrome.storage.local.set(dataToSave, () => {
-                        resolve({ success: true, stored: 'local' });
-                    });
-                } else {
-                    console.log('[StorageUtil] Profile saved to sync storage');
-                    
-                    // Also save to local as backup
-                    chrome.storage.local.set(dataToSave, () => {
-                        console.log('[StorageUtil] Profile backed up to local storage');
-                        resolve({ success: true, stored: 'sync+local' });
-                    });
+        return new Promise(async (resolve) => {
+            try {
+                if (!isChromeStorageAvailable()) {
+                    console.error('[StorageUtil] ❌ Chrome storage unavailable - cannot save profile');
+                    resolve({ success: false, error: 'Extension context invalidated' });
+                    return;
                 }
-            });
+
+                // Save to both storages in parallel
+                const syncSave = new Promise((resolveSync) => {
+                    const dataToSave = {
+                        autofillProfile: profileData,
+                        lastSavedAt: new Date().toISOString()
+                    };
+                    
+                    chrome.storage.sync.set(dataToSave, () => {
+                        if (chrome.runtime.lastError) {
+                            console.warn('[StorageUtil] Sync storage write failed:', chrome.runtime.lastError.message);
+                            resolveSync({ success: false });
+                        } else {
+                            console.log('[StorageUtil] Profile saved to sync storage');
+                            resolveSync({ success: true });
+                        }
+                    });
+                });
+                
+                const localSave = new Promise((resolveLocal) => {
+                    const dataToSave = {
+                        autofillProfile: profileData,
+                        lastSavedAt: new Date().toISOString()
+                    };
+                    
+                    chrome.storage.local.set(dataToSave, () => {
+                        if (chrome.runtime.lastError) {
+                            console.warn('[StorageUtil] Local storage write failed:', chrome.runtime.lastError.message);
+                            resolveLocal({ success: false });
+                        } else {
+                            console.log('[StorageUtil] Profile saved to local storage (backup)');
+                            resolveLocal({ success: true });
+                        }
+                    });
+                });
+                
+                // Wait for both saves to complete
+                const [syncResult, localResult] = await Promise.all([syncSave, localSave]);
+                
+                // Verify at least one save succeeded
+                if (!syncResult.success && !localResult.success) {
+                    console.error('[StorageUtil] ❌ Both storage writes failed');
+                    resolve({ success: false, error: 'Failed to save profile to any storage' });
+                    return;
+                }
+                
+                // Verify profile was actually saved
+                const verified = await StorageUtil.verifyProfileExists();
+                if (!verified.anyExists) {
+                    console.error('[StorageUtil] ❌ Profile verification failed after save');
+                    resolve({ success: false, error: 'Profile save failed verification' });
+                    return;
+                }
+                
+                console.log('[StorageUtil] ✅ Profile saved and verified');
+                resolve({ 
+                    success: true, 
+                    stored: syncResult.success && localResult.success ? 'sync+local' : (syncResult.success ? 'sync' : 'local'),
+                    verified: true
+                });
+                
+            } catch (error) {
+                console.error('[StorageUtil] ❌ Error saving profile:', error);
+                resolve({ success: false, error: error.message });
+            }
         });
     },
 
@@ -41,31 +105,52 @@ const StorageUtil = {
      */
     getAutofillProfile: async () => {
         return new Promise((resolve) => {
-            // Try sync storage first
-            chrome.storage.sync.get(['autofillProfile'], (syncResult) => {
-                if (chrome.runtime.lastError) {
-                    console.warn('[StorageUtil] Sync storage read failed');
-                }
-                
-                if (syncResult.autofillProfile) {
-                    console.log('[StorageUtil] Profile loaded from sync storage');
-                    resolve({ success: true, profile: syncResult.autofillProfile, source: 'sync' });
+            try {
+                if (!isChromeStorageAvailable()) {
+                    console.error('[StorageUtil] ❌ Chrome storage unavailable - cannot get profile');
+                    resolve({ success: false, profile: {}, error: 'Extension context invalidated' });
                     return;
                 }
-                
-                // Fallback to local storage
-                chrome.storage.local.get(['autofillProfile'], (localResult) => {
-                    if (localResult.autofillProfile) {
-                        console.log('[StorageUtil] Profile loaded from local storage (sync was empty)');
-                        // Re-sync to sync storage for future
-                        chrome.storage.sync.set({ autofillProfile: localResult.autofillProfile });
-                        resolve({ success: true, profile: localResult.autofillProfile, source: 'local' });
-                    } else {
-                        console.log('[StorageUtil] No autofill profile found in either storage');
-                        resolve({ success: true, profile: {}, source: 'none' });
+
+                // Try sync storage first
+                chrome.storage.sync.get(['autofillProfile'], (syncResult) => {
+                    try {
+                        if (chrome.runtime.lastError) {
+                            console.warn('[StorageUtil] Sync storage read failed');
+                        }
+                        
+                        if (syncResult && syncResult.autofillProfile) {
+                            console.log('[StorageUtil] Profile loaded from sync storage');
+                            resolve({ success: true, profile: syncResult.autofillProfile, source: 'sync' });
+                            return;
+                        }
+                        
+                        // Fallback to local storage
+                        chrome.storage.local.get(['autofillProfile'], (localResult) => {
+                            try {
+                                if (localResult && localResult.autofillProfile) {
+                                    console.log('[StorageUtil] Profile loaded from local storage (sync was empty)');
+                                    // Re-sync to sync storage for future
+                                    chrome.storage.sync.set({ autofillProfile: localResult.autofillProfile });
+                                    resolve({ success: true, profile: localResult.autofillProfile, source: 'local' });
+                                } else {
+                                    console.log('[StorageUtil] No autofill profile found in either storage');
+                                    resolve({ success: true, profile: {}, source: 'none' });
+                                }
+                            } catch (e) {
+                                console.error('[StorageUtil] ❌ Error reading local storage:', e);
+                                resolve({ success: true, profile: {}, source: 'none', error: e.message });
+                            }
+                        });
+                    } catch (e) {
+                        console.error('[StorageUtil] ❌ Error in sync storage callback:', e);
+                        resolve({ success: true, profile: {}, source: 'none', error: e.message });
                     }
                 });
-            });
+            } catch (error) {
+                console.error('[StorageUtil] ❌ Error getting profile:', error);
+                resolve({ success: false, profile: {}, error: error.message });
+            }
         });
     },
 
@@ -180,27 +265,34 @@ const StorageUtil = {
      */
     verifyProfileExists: async () => {
         return new Promise((resolve) => {
-            chrome.storage.sync.get(['autofillProfile'], (syncResult) => {
-                const syncExists = !!syncResult.autofillProfile && Object.keys(syncResult.autofillProfile).length > 0;
-                
-                chrome.storage.local.get(['autofillProfile'], (localResult) => {
-                    const localExists = !!localResult.autofillProfile && Object.keys(localResult.autofillProfile).length > 0;
+            try {
+                // Check sync storage
+                chrome.storage.sync.get(['autofillProfile'], (syncResult) => {
+                    const syncExists = !!(syncResult?.autofillProfile && Object.keys(syncResult.autofillProfile).length > 0);
                     
-                    const result = {
-                        success: true,
-                        syncExists,
-                        localExists,
-                        anyExists: syncExists || localExists,
-                        status: syncExists && localExists ? 'Both' : syncExists ? 'Sync only' : localExists ? 'Local only' : 'None'
-                    };
-                    
-                    if (!result.anyExists) {
-                        console.warn('[StorageUtil] ⚠️ Profile data not found in either storage!');
-                    }
-                    
-                    resolve(result);
+                    // Also check local storage
+                    chrome.storage.local.get(['autofillProfile'], (localResult) => {
+                        const localExists = !!(localResult?.autofillProfile && Object.keys(localResult.autofillProfile).length > 0);
+                        
+                        const result = {
+                            success: true,
+                            syncExists,
+                            localExists,
+                            anyExists: syncExists || localExists,
+                            status: syncExists && localExists ? 'Both' : syncExists ? 'Sync only' : localExists ? 'Local only' : 'None'
+                        };
+                        
+                        if (!result.anyExists) {
+                            console.warn('[StorageUtil] ⚠️ Profile data not found in either storage!');
+                        }
+                        
+                        resolve(result);
+                    });
                 });
-            });
+            } catch (error) {
+                console.error('[StorageUtil] Error verifying profile:', error);
+                resolve({ success: false, anyExists: false, error: error.message });
+            }
         });
     },
 

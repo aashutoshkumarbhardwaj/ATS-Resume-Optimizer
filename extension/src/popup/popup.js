@@ -32,6 +32,39 @@ function initializeDOMElements() {
     if (elements) return; // Already initialized
     
     try {
+        // Wait for all elements to be available
+        const waitForElements = (timeout = 2000) => {
+            return new Promise((resolve) => {
+                const startTime = Date.now();
+                
+                const check = () => {
+                    const jobDesc = document.getElementById('jobDescription');
+                    const resumeText = document.getElementById('resumeText');
+                    const analyzeBtn = document.getElementById('analyzeBtn');
+                    
+                    if (jobDesc && resumeText && analyzeBtn) {
+                        resolve(true);
+                    } else if (Date.now() - startTime > timeout) {
+                        console.warn('[Popup] Timeout waiting for DOM elements');
+                        resolve(false);
+                    } else {
+                        requestAnimationFrame(check);
+                    }
+                };
+                
+                check();
+            });
+        };
+        
+        // This is synchronous since we're already in DOMContentLoaded, but just in case
+        const allReady = document.getElementById('jobDescription') && 
+                        document.getElementById('resumeText') && 
+                        document.getElementById('analyzeBtn');
+        
+        if (!allReady) {
+            console.warn('[Popup] ⚠️ Some critical elements not ready, waiting...');
+        }
+        
         tabs = {
             home: document.getElementById('homeTab'),
             resume: document.getElementById('resumeTab'),
@@ -96,12 +129,49 @@ function initializeDOMElements() {
         const missing = criticalElements.filter(key => !elements[key]);
         
         if (missing.length > 0) {
-            console.warn('[Popup] Missing critical DOM elements:', missing);
-            throw new Error(`Missing DOM elements: ${missing.join(', ')}`);
+            console.error('[Popup] ❌ CRITICAL: Missing DOM elements:', missing);
+            console.error('[Popup] Available elements:', Object.keys(elements).filter(k => elements[k]));
+            throw new Error(`Missing critical DOM elements: ${missing.join(', ')}`);
         }
+        
+        console.log('[Popup] ✅ All DOM elements initialized successfully');
     } catch (error) {
-        console.error('[Popup] Failed to initialize DOM elements:', error);
-        throw error;
+        console.error('[Popup] ❌ Failed to initialize DOM elements:', error);
+        // Don't throw - allow popup to partially work
+        elements = {};
+    }
+}
+
+/**
+ * Safe DOM manipulation helper - prevents null reference errors
+ */
+function setElementHTML(element, html) {
+    if (element) {
+        element.innerHTML = html;
+        return true;
+    } else {
+        console.warn('[Popup] Attempted to set innerHTML on null element');
+        return false;
+    }
+}
+
+function setElementText(element, text) {
+    if (element) {
+        element.textContent = text;
+        return true;
+    } else {
+        console.warn('[Popup] Attempted to set textContent on null element');
+        return false;
+    }
+}
+
+function setElementValue(element, value) {
+    if (element) {
+        element.value = value;
+        return true;
+    } else {
+        console.warn('[Popup] Attempted to set value on null element');
+        return false;
     }
 }
 
@@ -1089,43 +1159,43 @@ async function handleFetchJobDescription() {
  */
 function displayAnalysisResults(data) {
     // ATS Score
-    elements.atsScore.textContent = data.atsScore || 0;
+    if (elements.atsScore) elements.atsScore.textContent = data.atsScore || 0;
     
     // Score breakdown
     if (data.breakdown) {
-        elements.keywordBar.style.width = `${(data.breakdown.keywordMatch * 100)}%`;
-        elements.experienceBar.style.width = `${(data.breakdown.experienceRelevance * 100)}%`;
-        elements.skillsBar.style.width = `${(data.breakdown.skillsAlignment * 100)}%`;
+        if (elements.keywordBar) elements.keywordBar.style.width = `${(data.breakdown.keywordMatch * 100)}%`;
+        if (elements.experienceBar) elements.experienceBar.style.width = `${(data.breakdown.experienceRelevance * 100)}%`;
+        if (elements.skillsBar) elements.skillsBar.style.width = `${(data.breakdown.skillsAlignment * 100)}%`;
     }
     
     // Matched keywords
-    elements.matchedKeywords.innerHTML = '';
+    setElementHTML(elements.matchedKeywords, '');
     if (data.matchedKeywords && data.matchedKeywords.length > 0) {
         data.matchedKeywords.slice(0, 10).forEach(keyword => {
             const tag = document.createElement('span');
             tag.className = 'keyword-tag matched';
             tag.textContent = keyword;
-            elements.matchedKeywords.appendChild(tag);
+            elements.matchedKeywords?.appendChild(tag);
         });
     } else {
-        elements.matchedKeywords.innerHTML = '<span style="color: #999; font-size: 11px;">None</span>';
+        setElementHTML(elements.matchedKeywords, '<span style="color: #999; font-size: 11px;">None</span>');
     }
     
     // Missing keywords
-    elements.missingKeywords.innerHTML = '';
+    setElementHTML(elements.missingKeywords, '');
     if (data.missingKeywords && data.missingKeywords.length > 0) {
         data.missingKeywords.slice(0, 10).forEach(keyword => {
             const tag = document.createElement('span');
             tag.className = 'keyword-tag missing';
             tag.textContent = keyword;
-            elements.missingKeywords.appendChild(tag);
+            elements.missingKeywords?.appendChild(tag);
         });
     } else {
-        elements.missingKeywords.innerHTML = '<span style="color: #999; font-size: 11px;">None</span>';
+        setElementHTML(elements.missingKeywords, '<span style="color: #999; font-size: 11px;">None</span>');
     }
     
     // Suggestions
-    elements.suggestionsList.innerHTML = '';
+    setElementHTML(elements.suggestionsList, '');
     if (data.suggestions && data.suggestions.length > 0) {
         data.suggestions.forEach(suggestion => {
             const item = document.createElement('div');
@@ -1202,15 +1272,17 @@ async function handleOptimize() {
  */
 function displayOptimizationResults(data) {
     // Scores
-    elements.originalScore.textContent = data.originalScore || 0;
-    elements.optimizedScore.textContent = data.optimizedScore || 0;
+    if (elements.originalScore) elements.originalScore.textContent = data.originalScore || 0;
+    if (elements.optimizedScore) elements.optimizedScore.textContent = data.optimizedScore || 0;
     
     const improvement = (data.optimizedScore || 0) - (data.originalScore || 0);
-    elements.scoreImprovement.textContent = improvement > 0 ? `+${improvement}` : improvement;
-    elements.scoreImprovement.style.background = improvement > 0 ? '#4caf50' : '#999';
+    if (elements.scoreImprovement) {
+        elements.scoreImprovement.textContent = improvement > 0 ? `+${improvement}` : improvement;
+        elements.scoreImprovement.style.background = improvement > 0 ? '#4caf50' : '#999';
+    }
     
     // Update resume text area with optimized version
-    if (data.optimizedText) {
+    if (data.optimizedText && elements.resumeText) {
         elements.resumeText.value = data.optimizedText;
         elements.resumeText.classList.add('optimized');
         
@@ -1228,7 +1300,7 @@ function displayOptimizationResults(data) {
     }
     
     // Changes
-    elements.changesList.innerHTML = '';
+    setElementHTML(elements.changesList, '');
     if (data.changes && data.changes.length > 0) {
         // Add summary
         const summary = document.createElement('div');
@@ -1416,10 +1488,10 @@ async function loadHistory() {
  * Display History
  */
 function displayHistory(history) {
-    elements.historyList.innerHTML = '';
+    setElementHTML(elements.historyList, '');
     
     if (!history || history.length === 0) {
-        elements.historyList.innerHTML = '<p style="color: #999; text-align: center; padding: 20px;">No optimization history yet</p>';
+        setElementHTML(elements.historyList, '<p style="color: #999; text-align: center; padding: 20px;">No optimization history yet</p>');
         return;
     }
     
@@ -2012,47 +2084,89 @@ async function handleSaveProfile(e) {
 
         console.log('[Popup] 💾 Saving profile with', Object.keys(profileData).length, 'fields');
 
-        // Save profile (to both sync and local)
-        const saveResult = await StorageUtil.saveAutofillProfile(profileData);
-
-        if (saveResult.success) {
-            console.log('[Popup] ✅ Profile saved to', saveResult.stored);
-            
-            // Verify it was actually saved
-            const verification = await StorageUtil.verifyProfileExists();
-            console.log('[Popup] Verification result:', verification);
-            
-            if (verification.anyExists) {
-                hideLoading();
-                showNotification('✅ Profile saved successfully! Data synced to both storages.', 'success');
-                messageEl.innerHTML = '✅ Profile saved successfully!';
-                messageEl.className = 'autofill-status-message success';
-                
-                // Also sync to backend if authenticated
-                const token = await TokenVerifier.getStoredToken();
-                if (token) {
-                    console.log('[Popup] 📤 Syncing profile to backend...');
-                    const syncResult = await ProfileSyncManager.uploadProfile(token, profileData);
-                    if (syncResult.success) {
-                        console.log('[Popup] ✅ Profile synced to backend');
-                        showNotification('✅ Profile synced to Job Orbit!', 'success');
-                    } else {
-                        console.warn('[Popup] ⚠️ Backend sync failed (will retry later):', syncResult.error);
+        // DIRECT SAVE - bypass StorageUtil for reliability
+        // Save to BOTH local and sync storage with explicit error handling
+        const directSaveResult = await new Promise((resolve) => {
+            try {
+                // Step 1: Save to local storage (primary)
+                chrome.storage.local.set({ autofillProfile: profileData, profileSavedAt: Date.now() }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error('[Popup] ❌ Local storage write failed:', chrome.runtime.lastError);
+                        resolve({ success: false, error: chrome.runtime.lastError.message, location: 'local' });
+                        return;
                     }
-                }
-                
-                // Hide message after 3 seconds
-                setTimeout(() => {
-                    messageEl.className = 'autofill-status-message hidden';
-                }, 3000);
-            } else {
-                throw new Error('Profile save verification failed - data may not have persisted');
+                    
+                    console.log('[Popup] ✅ Profile saved to local storage');
+                    
+                    // Step 2: Also save to sync storage (backup)
+                    chrome.storage.sync.set({ autofillProfile: profileData, profileSavedAt: Date.now() }, () => {
+                        if (chrome.runtime.lastError) {
+                            console.warn('[Popup] ⚠️  Sync storage write had error:', chrome.runtime.lastError);
+                            // Still resolve success since local saved
+                            resolve({ success: true, location: 'local', syncError: chrome.runtime.lastError.message });
+                            return;
+                        }
+                        
+                        console.log('[Popup] ✅ Profile saved to sync storage (backup)');
+                        resolve({ success: true, location: 'local+sync' });
+                    });
+                });
+            } catch (error) {
+                console.error('[Popup] ❌ Error in direct save:', error);
+                resolve({ success: false, error: error.message });
             }
-        } else {
-            throw new Error('Failed to save profile');
+        });
+
+        if (!directSaveResult.success) {
+            throw new Error(directSaveResult.error || 'Failed to save profile to storage');
         }
+
+        console.log('[Popup] ✅ Profile saved to', directSaveResult.location);
+        
+        // Verify it was actually saved by reading it back
+        const verifyRead = await new Promise((resolve) => {
+            chrome.storage.local.get(['autofillProfile'], (result) => {
+                if (result.autofillProfile) {
+                    resolve({ verified: true, keys: Object.keys(result.autofillProfile).length });
+                } else {
+                    resolve({ verified: false });
+                }
+            });
+        });
+
+        if (!verifyRead.verified) {
+            throw new Error('Profile verification failed - data was not persisted');
+        }
+
+        console.log('[Popup] ✅ Profile verified in storage with', verifyRead.keys, 'fields');
+
+        hideLoading();
+        showNotification('✅ Profile saved successfully!', 'success');
+        messageEl.innerHTML = '✅ Profile saved successfully!';
+        messageEl.className = 'autofill-status-message success';
+        
+        // Also sync to backend if authenticated (but don't fail if it does)
+        try {
+            const token = await TokenVerifier.getStoredToken();
+            if (token) {
+                console.log('[Popup] 📤 Syncing profile to backend...');
+                const syncResult = await ProfileSyncManager.uploadProfile(token, profileData);
+                if (syncResult.success) {
+                    console.log('[Popup] ✅ Profile synced to backend');
+                    showNotification('✅ Profile synced to Job Orbit!', 'success');
+                }
+            }
+        } catch (backendError) {
+            console.warn('[Popup] ⚠️  Backend sync error (local save still succeeded):', backendError);
+        }
+        
+        // Hide message after 3 seconds
+        setTimeout(() => {
+            messageEl.className = 'autofill-status-message hidden';
+        }, 3000);
+        
     } catch (error) {
-        console.error('[Popup] Error saving profile:', error);
+        console.error('[Popup] ❌ Error saving profile:', error);
         hideLoading();
         showNotification('❌ Error saving profile: ' + error.message, 'error');
         messageEl.innerHTML = '❌ ' + error.message;
@@ -2437,17 +2551,6 @@ function checkJobOrbitConnection() {
         } else {
             showJobOrbitNotConnected();
         }
-    });
-}
-            
-            // Check if token is expiring soon (within 1 hour) for proactive refresh
-            const timeToExpiry = expiresAt - now;
-            const oneHourInMs = 60 * 60 * 1000;
-            
-            if (timeToExpiry < oneHourInMs && timeToExpiry > 0) {
-                console.log('[Popup] ⚠️ Token expiring in', Math.round(timeToExpiry / 60000), 'minutes');
-            }
-        });
     });
 }
 

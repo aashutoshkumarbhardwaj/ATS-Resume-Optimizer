@@ -14,6 +14,17 @@ class TokenRefreshScheduler {
     }
 
     /**
+     * Static initialize method - called from service worker
+     */
+    static initialize() {
+        if (typeof tokenRefreshScheduler !== 'undefined' && tokenRefreshScheduler) {
+            tokenRefreshScheduler.start();
+        } else {
+            console.error('[TokenRefresh] Global instance not available');
+        }
+    }
+
+    /**
      * Start the refresh scheduler
      */
     start() {
