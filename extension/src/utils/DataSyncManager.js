@@ -106,14 +106,22 @@ class DataSyncManager {
      */
     static async syncProfile(token) {
         try {
-            const response = await fetch(`${this.getApiConfig().apiUrl}/profile`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: this.getApiConfig().timeout
-            });
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.getApiConfig().timeout);
+
+            let response;
+            try {
+                response = await fetch(`${this.getApiConfig().apiUrl}/profile`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    signal: controller.signal
+                });
+            } finally {
+                clearTimeout(timeout);
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -131,6 +139,13 @@ class DataSyncManager {
                 throw new Error(data.error || 'No profile data');
             }
         } catch (error) {
+            if (error.name === 'AbortError') {
+                console.error('[DataSync] Profile sync timeout');
+                return {
+                    success: false,
+                    error: 'Request timeout'
+                };
+            }
             console.error('[DataSync] Profile sync error:', error.message);
             return {
                 success: false,
@@ -145,14 +160,22 @@ class DataSyncManager {
      */
     static async syncResumes(token) {
         try {
-            const response = await fetch(`${this.getApiConfig().apiUrl}/resumes`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: this.getApiConfig().timeout
-            });
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.getApiConfig().timeout);
+
+            let response;
+            try {
+                response = await fetch(`${this.getApiConfig().apiUrl}/resumes`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    signal: controller.signal
+                });
+            } finally {
+                clearTimeout(timeout);
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -170,6 +193,13 @@ class DataSyncManager {
                 throw new Error(data.error || 'No resumes data');
             }
         } catch (error) {
+            if (error.name === 'AbortError') {
+                console.error('[DataSync] Resumes sync timeout');
+                return {
+                    success: false,
+                    error: 'Request timeout'
+                };
+            }
             console.error('[DataSync] Resumes sync error:', error.message);
             return {
                 success: false,
@@ -184,14 +214,22 @@ class DataSyncManager {
      */
     static async syncApplications(token) {
         try {
-            const response = await fetch(`${this.getApiConfig().apiUrl}/applications`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: this.getApiConfig().timeout
-            });
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.getApiConfig().timeout);
+
+            let response;
+            try {
+                response = await fetch(`${this.getApiConfig().apiUrl}/applications`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    signal: controller.signal
+                });
+            } finally {
+                clearTimeout(timeout);
+            }
 
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
@@ -209,6 +247,13 @@ class DataSyncManager {
                 throw new Error(data.error || 'No applications data');
             }
         } catch (error) {
+            if (error.name === 'AbortError') {
+                console.error('[DataSync] Applications sync timeout');
+                return {
+                    success: false,
+                    error: 'Request timeout'
+                };
+            }
             console.error('[DataSync] Applications sync error:', error.message);
             return {
                 success: false,

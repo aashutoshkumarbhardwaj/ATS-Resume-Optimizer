@@ -66,35 +66,110 @@ const JD_EXTRACTION_CONFIG = {
 // Current detected job data
 let detectedJob = null;
 
+/**
+ * Extension Context Validation & Safe Messaging
+ * Handles extension reload/invalidation gracefully
+ */
+
+function isExtensionContextValid() {
+    try {
+        void chrome.runtime.id;
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function safeSendMessage(message, callback) {
+    if (!isExtensionContextValid()) {
+        console.warn('[Content] ⚠️ Extension context invalidated');
+        if (callback) callback({ error: 'Extension context invalidated' });
+        return;
+    }
+    
+    try {
+        chrome.runtime.sendMessage(message, (response) => {
+            if (!isExtensionContextValid()) {
+                console.warn('[Content] ⚠️ Context invalidated during callback');
+                return;
+            }
+            if (chrome.runtime.lastError) {
+                console.warn('[Content] Message error:', chrome.runtime.lastError.message);
+                if (callback) callback({ error: chrome.runtime.lastError.message });
+                return;
+            }
+            if (callback) callback(response);
+        });
+    } catch (error) {
+        console.error('[Content] Error sending message:', error.message);
+        if (callback) callback({ error: error.message });
+    }
+}
+
 // Listen for messages from the background script or popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.type === 'EXTRACT_RESUME') {
-        const resumeText = extractResumeContent();
-        sendResponse({ success: true, resumeText });
+    // Validate context at start of listener
+    if (!isExtensionContextValid()) {
+        console.warn('[Content] ⚠️ Extension context invalidated in message listener');
+        sendResponse({ error: 'Extension context invalidated' });
+        return;
     }
+    
+    try {
+        if (request.type === 'EXTRACT_RESUME') {
+            const resumeText = extractResumeContent();
+            sendResponse({ success: true, resumeText });
+        }
 
-    if (request.type === 'HIGHLIGHT_KEYWORDS') {
-        highlightKeywords(request.keywords);
-        sendResponse({ success: true });
-    }
+        if (request.type === 'HIGHLIGHT_KEYWORDS') {
+            highlightKeywords(request.keywords);
+            sendResponse({ success: true });
+        }
 
-    if (request.type === 'DETECT_JOB') {
-        const jobData = detectJobDescription();
-        sendResponse(jobData);
-    }
+        if (request.type === 'DETECT_JOB') {
+            const jobData = detectJobDescription();
+            sendResponse(jobData);
+        }
 
-    if (request.type === 'GET_DETECTED_JOB') {
-        sendResponse({ success: true, job: detectedJob });
-    }
+        if (request.type === 'GET_DETECTED_JOB') {
+            sendResponse({ success: true, job: detectedJob });
+        }
 
-    if (request.type === 'PERFORM_AUTOFILL') {
-        try {
-            const count = performAutofill(request.profile);
-            sendResponse({ success: true, filledCount: count });
+        if (request.type === 'PERFORM_AUTOFILL') {
+            try {
+                const result = performAutofill(request.profile);
+                
+                // Handle async response (from Google Forms)
+                if (result instanceof Promise) {
+                    result.then((response) => {
+                        if (!isExtensionContextValid()) {
+                            console.warn('[Content] Context invalidated in async response');
+                            return;
+                        }
+                        console.log('[Content] Async autofill completed:', response);
+                        sendResponse({ 
+                            success: true, 
+                            filledCount: response.filledCount,
+                        missedFields: response.missedFields
+                    });
+                }).catch((error) => {
+                    console.error('[Content] Async autofill error:', error);
+                    sendResponse({ success: false, message: error.message });
+                });
+                return true; // Keep channel open for async
+            } else {
+                // Sync response
+                sendResponse({ 
+                    success: true, 
+                    filledCount: result.filledCount,
+                    missedFields: result.missedFields
+                });
+            }
         } catch (err) {
-            console.error('Autofill error:', err);
+            console.error('[Content] Autofill error:', err);
             sendResponse({ success: false, message: err.message });
         }
+        return true; // Keep channel open for async
     }
 
     if (request.type === 'SETTINGS_UPDATED') {
@@ -108,11 +183,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.type === 'SHOW_AUTOFILL_BUTTON') {
         // User clicked "Show Autofill Button" in popup
-        chrome.storage.local.set({ autofillButtonHidden: false }, () => {
-            console.log('[Content] Autofill button re-enabled by user');
-            initAutofillBadge();
-            sendResponse({ success: true });
-        });
+        if (isExtensionContextValid()) {
+            chrome.storage.local.set({ autofillButtonHidden: false }, () => {
+                if (!isExtensionContextValid()) {
+                    console.warn('[Content] Context invalidated in storage callback');
+                    return;
+                }
+                console.log('[Content] Autofill button re-enabled by user');
+                initAutofillBadge();
+                sendResponse({ success: true });
+            });
+        }
         return true;
     }
 
@@ -122,10 +203,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const jobData = detectJobDescription();
             if (jobData && jobData.success) {
                 // Save to storage so popup can access it
-                chrome.storage.local.set({
+                if (isExtensionContextValid()) {
+                    chrome.storage.local.set({
                     currentJob: jobData,
                     manuallyFetched: true
                 }, () => {
+                    if (!isExtensionContextValid()) {
+                        console.warn('[Content] Context invalidated in storage callback');
+                        return;
+                    }
                     console.log('[Content] Job description fetched and saved');
                     sendResponse({ 
                         success: true, 
@@ -146,6 +232,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 message: 'Error: ' + error.message 
             });
         }
+        return true;
+    }
         return true;
     }
 
@@ -1374,8 +1462,12 @@ function injectExtractButton() {
     });
 
     button.addEventListener('click', () => {
+        if (!isExtensionContextValid()) {
+            console.warn('[Content] Extension context invalid, skipping');
+            return;
+        }
         const text = extractResumeContent();
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             type: 'SAVE_EXTRACTED_TEXT',
             payload: {
                 resumeText: text,
@@ -1436,8 +1528,12 @@ function injectJobDetectionIndicator() {
     });
 
     indicator.addEventListener('click', () => {
+        if (!isExtensionContextValid()) {
+            console.warn('[Content] Extension context invalid, skipping');
+            return;
+        }
         // Send message to open popup
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             type: 'OPEN_POPUP',
             payload: detectedJob
         });
@@ -1462,9 +1558,10 @@ function autoDetectJob() {
                 injectJobDetectionIndicator();
                 
                 // Notify service worker
-                chrome.runtime.sendMessage({
-                    type: 'JOB_DETECTED',
-                    payload: result.payload
+                if (isExtensionContextValid()) {
+                    safeSendMessage({
+                        type: 'JOB_DETECTED',
+                        payload: result.payload
                 });
             } else {
                 console.log('Resume Fixer: Job detection failed or low confidence', result.confidence);
@@ -1851,174 +1948,657 @@ function performAutofill(profile) {
     
     console.log(`[Content] ✅ Traditional forms: ${traditionalCount} fields filled out of ${inputs.length}`);
     
-    // Strategy 2: Google Forms (iframe-based form fields)
-    console.log('[Content] 📋 Filling Google Forms fields...');
-    const googleFormCount = fillGoogleFormFields(profile, missedFields);
-    filledCount += googleFormCount;
+    // Strategy 2: Google Forms (iframe-based form fields) - now async with retry logic
+    console.log('[Content] 📋 Starting Google Forms autofill (async)...');
     
-    console.log(`[Content] ✅ Google Forms: ${googleFormCount} fields filled`);
-    console.log(`[Content] 🏁 Autofill complete: Total ${filledCount} fields filled, ${missedFields.length} fields missed`);
-    
-    return { success: true, filledCount, missedFields };
+    // Return a promise that handles both traditional and Google Forms
+    return fillGoogleFormFieldsAsync(profile, missedFields).then((googleFormCount) => {
+        filledCount += googleFormCount;
+        console.log(`[Content] ✅ Google Forms: ${googleFormCount} fields filled`);
+        console.log(`[Content] 🏁 Autofill complete: Total ${filledCount} fields filled, ${missedFields.length} fields missed`);
+        
+        return { success: true, filledCount, missedFields };
+    }).catch((error) => {
+        console.error('[Content] Error during Google Forms autofill:', error);
+        console.log(`[Content] 🏁 Autofill complete (partial): Total ${filledCount} fields filled, ${missedFields.length} fields missed`);
+        
+        return { success: true, filledCount, missedFields };
+    });
 }
 
 /**
- * Fill Google Forms fields - ENHANCED VERSION
- * Google Forms use a different structure with divs instead of input elements
- * Improved: Better field detection, proper event triggering, and retry logic
+ * Async wrapper for Google Forms autofill
+ */
+function fillGoogleFormFieldsAsync(profile, missedFields) {
+    return new Promise(async (resolve) => {
+        try {
+            const googleFormCount = await performGoogleFormAutofill(profile, missedFields);
+            resolve(googleFormCount || 0);
+        } catch (error) {
+            console.error('[Content] Error in fillGoogleFormFieldsAsync:', error);
+            resolve(0);
+        }
+    });
+}
+
+/**
+ * Fill Google Forms fields - ENTERPRISE VERSION
+ * Handles:
+ * - Lazy-loaded form questions
+ * - React-controlled inputs
+ * - Dynamic field detection
+ * - All field types (text, textarea, select, radio, checkbox, date, etc.)
+ * - Visible label matching instead of dynamic IDs
+ * - Retry mechanism when new fields appear
  */
 function fillGoogleFormFields(profile, missedFields) {
     let filledCount = 0;
+    const startTime = Date.now();
+    const maxRetries = 5;
+    let retryCount = 0;
     
     try {
-        console.log('[Content] ⭐ Starting Google Forms autofill (ENHANCED)...');
+        console.log('[Content] ⭐ Starting Google Forms autofill (ENTERPRISE)...');
         
-        // Detect if this is actually a Google Form
-        const isGoogleForm = document.querySelector('form[method="POST"][action*="formResponse"]') ||
-                            document.querySelector('[role="form"]') ||
-                            window.location.href.includes('docs.google.com/forms') ||
-                            document.querySelector('[data-spreadsheet-id]');
-        
-        if (!isGoogleForm) {
-            console.log('[Content] ℹ️ This does not appear to be a Google Form, skipping enhanced detection');
-        }
-        
-        // Strategy 1: Find ALL input/textarea elements with any labels
-        console.log('[Content] 🔍 Strategy 1: Looking for all input/textarea elements...');
-        const allInputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea');
-        console.log(`[Content] Found ${allInputs.length} input/textarea elements`);
-        
-        allInputs.forEach((input, index) => {
-            // Skip disabled or truly invisible inputs
-            if (input.disabled) return;
-            
-            const style = window.getComputedStyle(input);
-            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
-                return;
-            }
-            
-            // Get all possible labels
-            const ariaLabel = input.getAttribute('aria-label') || '';
-            const placeholder = input.getAttribute('placeholder') || '';
-            const name = input.getAttribute('name') || '';
-            const id = input.getAttribute('id') || '';
-            
-            const allLabels = [ariaLabel, placeholder, name, id].filter(l => l).join(' | ');
-            
-            if (!allLabels) {
-                console.log(`[Content] Field ${index}: No labels found, skipping`);
-                return;
-            }
-            
-            console.log(`[Content] Field ${index}: Labels: "${allLabels}"`);
-            
-            const fieldType = detectGoogleFormFieldType(ariaLabel || placeholder || name);
-            let valueToFill = null;
-            
-            // Check standard profile fields
-            if (fieldType && profile[fieldType]) {
-                valueToFill = profile[fieldType];
-                console.log(`[Content]   ✅ Matched standard field: ${fieldType} = "${valueToFill}"`);
-            }
-            
-            // Check custom fields
-            if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
-                const matchedCustom = profile.custom_fields.find(field => {
-                    const cleanKey = field.key.trim().toLowerCase();
-                    const labelLower = (ariaLabel + placeholder + name).toLowerCase();
-                    return cleanKey && (labelLower.includes(cleanKey) || cleanKey.includes(labelLower.split(' ')[0]));
-                });
-                if (matchedCustom) {
-                    valueToFill = matchedCustom.value;
-                    console.log(`[Content]   ✅ Matched custom field: ${matchedCustom.key} = "${valueToFill}"`);
-                }
-            }
-            
-            // Fill if match found and field is empty
-            if (valueToFill && !input.value) {
-                const filled = fillField(input, valueToFill);
-                if (filled) {
-                    filledCount++;
-                    console.log(`[Content]   ✅ Filled successfully`);
-                } else {
-                    console.log(`[Content]   ❌ Failed to fill`);
-                }
-            } else if (valueToFill && input.value) {
-                console.log(`[Content]   ⏭️ Skipped (already has value: "${input.value}")`);
-            } else {
-                console.log(`[Content]   ⚠️ No matching profile data`);
-            }
+        // Wait for Google Form to be fully rendered
+        return waitForGoogleFormReady().then(() => {
+            return performGoogleFormAutofill(profile, missedFields);
+        }).catch(error => {
+            console.error('[Content] ❌ Google Forms autofill error:', error);
+            return 0;
         });
-        
-        // Strategy 2: Look for Google Forms specific selectors
-        console.log('[Content] 🔍 Strategy 2: Looking for Google Forms specific selectors...');
-        const googleFormInputs = document.querySelectorAll('[data-value], [jsaction*="setValue"], [role="textbox"], [role="listbox"]');
-        console.log(`[Content] Found ${googleFormInputs.length} Google Forms specific elements`);
-        
-        googleFormInputs.forEach((element) => {
-            if (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA') {
-                // Already handled in Strategy 1
-                return;
-            }
-            
-            // Handle special Google Forms elements
-            const ariaLabel = element.getAttribute('aria-label') || '';
-            if (!ariaLabel) return;
-            
-            // Check if this is likely a radio button or checkbox
-            if (element.getAttribute('role') === 'option') {
-                console.log(`[Content] Skipping role=option element (likely radio/checkbox): ${ariaLabel}`);
-                return;
-            }
-            
-            const fieldType = detectGoogleFormFieldType(ariaLabel);
-            if (!fieldType || !profile[fieldType]) return;
-            
-            const valueToFill = profile[fieldType];
-            
-            // Try to click if it matches the value
-            if (ariaLabel.toLowerCase().includes(valueToFill.toLowerCase())) {
-                element.click();
-                filledCount++;
-                console.log(`[Content] Clicked element: ${ariaLabel}`);
-            }
-        });
-        
-        // Strategy 3: Look for contenteditable divs
-        console.log('[Content] 🔍 Strategy 3: Looking for contenteditable divs...');
-        const editableDivs = document.querySelectorAll('[contenteditable="true"]');
-        console.log(`[Content] Found ${editableDivs.length} contenteditable divs`);
-        
-        editableDivs.forEach((div) => {
-            const ariaLabel = div.getAttribute('aria-label') || '';
-            if (!ariaLabel || div.textContent.trim()) {
-                return; // Skip if empty label or already filled
-            }
-            
-            const fieldType = detectGoogleFormFieldType(ariaLabel);
-            let valueToFill = null;
-            
-            if (fieldType && profile[fieldType]) {
-                valueToFill = profile[fieldType];
-            }
-            
-            if (valueToFill) {
-                div.textContent = valueToFill;
-                div.dispatchEvent(new Event('input', { bubbles: true }));
-                div.dispatchEvent(new Event('change', { bubbles: true }));
-                filledCount++;
-                console.log(`[Content] Filled contenteditable div: ${ariaLabel}`);
-            }
-        });
-        
-        console.log(`[Content] ✅ Google Forms autofill completed: ${filledCount} fields filled`);
         
     } catch (error) {
-        console.error('[Content] ❌ Error filling Google Forms:', error);
-        console.error('[Content] Stack:', error.stack);
+        console.error('[Content] ❌ Error initializing Google Forms autofill:', error);
+        return filledCount;
+    }
+}
+
+/**
+ * Wait for Google Form to be fully loaded and ready
+ */
+async function waitForGoogleFormReady() {
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            console.log('[Content] ⚠️ Google Forms timeout - proceeding anyway');
+            resolve();
+        }, 5000);
+        
+        // Check if form is already ready
+        const isFormReady = () => {
+            const formContainer = document.querySelector('[role="form"]') || 
+                                 document.querySelector('form[method="POST"][action*="formResponse"]') ||
+                                 document.querySelector('[data-form-id]');
+            return !!formContainer;
+        };
+        
+        if (isFormReady()) {
+            clearTimeout(timeout);
+            console.log('[Content] ✅ Google Form detected and ready');
+            resolve();
+            return;
+        }
+        
+        // Wait for form to appear
+        const observer = new MutationObserver(() => {
+            if (isFormReady()) {
+                observer.disconnect();
+                clearTimeout(timeout);
+                console.log('[Content] ✅ Google Form loaded (via MutationObserver)');
+                resolve();
+            }
+        });
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: false
+        });
+    });
+}
+
+/**
+ * Perform the actual autofill with retry logic for lazy-loaded fields
+ */
+async function performGoogleFormAutofill(profile, missedFields, retryCount = 0) {
+    let filledCount = 0;
+    const maxRetries = 5;
+    const retryDelay = 1000; // 1 second between retries
+    
+    console.log(`[Content] 🔄 Google Forms autofill attempt ${retryCount + 1}/${maxRetries + 1}`);
+    
+    // Detect if this is actually a Google Form
+    const isGoogleForm = document.querySelector('form[method="POST"][action*="formResponse"]') ||
+                        document.querySelector('[role="form"]') ||
+                        window.location.href.includes('docs.google.com/forms') ||
+                        document.querySelector('[data-spreadsheet-id]');
+    
+    if (!isGoogleForm) {
+        console.log('[Content] ℹ️ Not a Google Form, skipping');
+        return 0;
+    }
+    
+    // Get all visible form fields using multiple detection strategies
+    const fieldsToFill = detectAllGoogleFormFields();
+    console.log(`[Content] 🔍 Detected ${fieldsToFill.length} form fields`);
+    
+    const initialFieldCount = fieldsToFill.length;
+    
+    // Fill each detected field
+    for (const field of fieldsToFill) {
+        const result = fillGoogleFormField(field, profile, missedFields);
+        if (result.filled) {
+            filledCount++;
+        }
+    }
+    
+    console.log(`[Content] ✅ Filled ${filledCount} fields on this pass`);
+    
+    // Wait a moment and check if new fields appeared (lazy loading)
+    if (retryCount < maxRetries) {
+        await delay(retryDelay);
+        
+        const newFieldsCount = detectAllGoogleFormFields().length;
+        if (newFieldsCount > initialFieldCount) {
+            console.log(`[Content] 🔄 New fields detected (${initialFieldCount} → ${newFieldsCount}), retrying...`);
+            const additionalFilled = await performGoogleFormAutofill(profile, missedFields, retryCount + 1);
+            filledCount += additionalFilled;
+        }
     }
     
     return filledCount;
+}
+
+/**
+ * Detect all Google Form fields using multiple strategies
+ */
+function detectAllGoogleFormFields() {
+    const fields = [];
+    const seen = new Set();
+    
+    // Strategy 1: Traditional input/textarea/select elements
+    console.log('[Content] 🔍 Strategy 1: HTML form elements');
+    const htmlElements = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select');
+    htmlElements.forEach(element => {
+        if (!seen.has(element) && isElementVisible(element) && !element.disabled) {
+            fields.push({
+                type: 'html',
+                element: element,
+                label: extractVisibleLabel(element),
+                ariaLabel: element.getAttribute('aria-label'),
+                placeholder: element.getAttribute('placeholder')
+            });
+            seen.add(element);
+        }
+    });
+    console.log(`[Content] Found ${htmlElements.length} HTML elements`);
+    
+    // Strategy 2: Google Forms specific divs with data attributes
+    console.log('[Content] 🔍 Strategy 2: Google Forms data attributes');
+    const dataElements = document.querySelectorAll('[data-value], [data-spreadsheet-id], [jsaction*="setValue"]');
+    dataElements.forEach(element => {
+        if (!seen.has(element) && isElementVisible(element)) {
+            fields.push({
+                type: 'data-attr',
+                element: element,
+                label: extractVisibleLabel(element),
+                ariaLabel: element.getAttribute('aria-label')
+            });
+            seen.add(element);
+        }
+    });
+    console.log(`[Content] Found ${dataElements.length} data-attribute elements`);
+    
+    // Strategy 3: Contenteditable divs (text inputs in Google Forms)
+    console.log('[Content] 🔍 Strategy 3: Contenteditable divs');
+    const editableDivs = document.querySelectorAll('[contenteditable="true"]');
+    editableDivs.forEach(div => {
+        if (!seen.has(div) && isElementVisible(div)) {
+            fields.push({
+                type: 'contenteditable',
+                element: div,
+                label: extractVisibleLabel(div),
+                ariaLabel: div.getAttribute('aria-label')
+            });
+            seen.add(div);
+        }
+    });
+    console.log(`[Content] Found ${editableDivs.length} contenteditable divs`);
+    
+    // Strategy 4: Role-based elements (radio buttons, checkboxes, etc.)
+    console.log('[Content] 🔍 Strategy 4: Role-based elements');
+    const roleElements = document.querySelectorAll('[role="radio"], [role="checkbox"], [role="option"]');
+    roleElements.forEach(element => {
+        if (!seen.has(element) && isElementVisible(element)) {
+            fields.push({
+                type: 'role',
+                element: element,
+                label: extractVisibleLabel(element),
+                ariaLabel: element.getAttribute('aria-label')
+            });
+            seen.add(element);
+        }
+    });
+    console.log(`[Content] Found ${roleElements.length} role-based elements`);
+    
+    // Strategy 5: Form question containers with embedded fields
+    console.log('[Content] 🔍 Strategy 5: Form question containers');
+    const questionContainers = document.querySelectorAll('[role="listitem"], [data-question-id], .freebirdFormviewerComponentsQuestionBaseRoot');
+    questionContainers.forEach(container => {
+        const input = container.querySelector('input, textarea, select, [contenteditable], [role="textbox"]');
+        if (input && !seen.has(input) && isElementVisible(input) && !input.disabled) {
+            fields.push({
+                type: 'container-input',
+                element: input,
+                label: extractVisibleLabel(container),
+                ariaLabel: input.getAttribute('aria-label') || container.getAttribute('aria-label')
+            });
+            seen.add(input);
+        }
+    });
+    console.log(`[Content] Found ${questionContainers.length} question containers`);
+    
+    console.log(`[Content] Total unique fields detected: ${fields.length}`);
+    return fields;
+}
+
+/**
+ * Fill a single Google Form field
+ */
+function fillGoogleFormField(fieldInfo, profile, missedFields) {
+    try {
+        const { element, type, label, ariaLabel } = fieldInfo;
+        const visibleLabel = label || ariaLabel || element.innerText || element.textContent;
+        
+        console.log(`[Content] 📌 Processing field: "${visibleLabel}"`);
+        
+        // Detect field type from label
+        const fieldType = detectGoogleFormFieldType(visibleLabel);
+        
+        // Get value to fill
+        let valueToFill = null;
+        let fieldMatchKey = null;
+        
+        if (fieldType && profile[fieldType]) {
+            valueToFill = profile[fieldType];
+            fieldMatchKey = fieldType;
+            console.log(`[Content]   ✅ Matched standard field: ${fieldType}`);
+        } else if (profile.custom_fields && Array.isArray(profile.custom_fields)) {
+            // Check custom fields
+            const matchedCustom = profile.custom_fields.find(field => {
+                const cleanKey = field.key.trim().toLowerCase();
+                const labelLower = visibleLabel.toLowerCase();
+                return cleanKey && (labelLower.includes(cleanKey) || cleanKey.includes(labelLower.split(' ')[0]));
+            });
+            if (matchedCustom) {
+                valueToFill = matchedCustom.value;
+                fieldMatchKey = matchedCustom.key;
+                console.log(`[Content]   ✅ Matched custom field: ${fieldMatchKey}`);
+            }
+        }
+        
+        // If no value found, track as missed field
+        if (!valueToFill) {
+            const cleanLabel = visibleLabel.trim().substring(0, 50);
+            if (cleanLabel && !missedFields.includes(cleanLabel)) {
+                missedFields.push(cleanLabel);
+                console.log(`[Content]   ⚠️ No matching data, added to missed fields`);
+            }
+            return { filled: false };
+        }
+        
+        // Fill the field based on its type
+        return fillFieldByType(element, type, valueToFill);
+        
+    } catch (error) {
+        console.error('[Content] Error filling field:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill field by its type
+ */
+function fillFieldByType(element, fieldType, value) {
+    try {
+        if (fieldType === 'html') {
+            return fillHtmlElement(element, value);
+        } else if (fieldType === 'contenteditable') {
+            return fillContenteditableDiv(element, value);
+        } else if (fieldType === 'data-attr') {
+            return fillDataAttributeElement(element, value);
+        } else if (fieldType === 'role') {
+            return fillRoleElement(element, value);
+        } else if (fieldType === 'container-input') {
+            return fillHtmlElement(element, value);
+        }
+        return { filled: false };
+    } catch (error) {
+        console.error('[Content] Error in fillFieldByType:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill standard HTML elements (input, textarea, select)
+ */
+function fillHtmlElement(element, value) {
+    try {
+        if (!value) return { filled: false };
+        
+        const tagName = element.tagName.toLowerCase();
+        
+        if (tagName === 'select') {
+            return fillSelect(element, value);
+        } else if (tagName === 'textarea') {
+            return fillTextarea(element, value);
+        } else {
+            const inputType = element.getAttribute('type') || 'text';
+            
+            if (inputType === 'checkbox' || inputType === 'radio') {
+                return fillCheckboxOrRadio(element, value);
+            } else if (inputType === 'date') {
+                return fillDateInput(element, value);
+            } else {
+                return fillInput(element, value);
+            }
+        }
+    } catch (error) {
+        console.error('[Content] Error filling HTML element:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill text input with React event support
+ */
+function fillInput(element, value) {
+    try {
+        if (element.value === value) {
+            return { filled: false };
+        }
+        
+        element.focus();
+        
+        // Use property descriptor for React compatibility
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (descriptor?.set) {
+            descriptor.set.call(element, value);
+        } else {
+            element.value = value;
+        }
+        
+        // Trigger all necessary events
+        ['input', 'change', 'blur', 'keyup', 'keydown', 'keypress'].forEach(eventType => {
+            element.dispatchEvent(new Event(eventType, { bubbles: true }));
+        });
+        
+        animateFilledField(element);
+        element.blur();
+        
+        console.log(`[Content]   ✅ Filled input`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling input:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill textarea with React event support
+ */
+function fillTextarea(element, value) {
+    try {
+        if (element.value === value) {
+            return { filled: false };
+        }
+        
+        element.focus();
+        
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        if (descriptor?.set) {
+            descriptor.set.call(element, value);
+        } else {
+            element.value = value;
+        }
+        
+        ['input', 'change', 'blur'].forEach(eventType => {
+            element.dispatchEvent(new Event(eventType, { bubbles: true }));
+        });
+        
+        animateFilledField(element);
+        element.blur();
+        
+        console.log(`[Content]   ✅ Filled textarea`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling textarea:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill select dropdown
+ */
+function fillSelect(element, value) {
+    try {
+        // Find matching option
+        let option = Array.from(element.options).find(opt => 
+            opt.text.toLowerCase().includes(value.toLowerCase()) ||
+            opt.value.toLowerCase().includes(value.toLowerCase())
+        );
+        
+        if (!option) {
+            console.log(`[Content]   ⚠️ No matching option found for: ${value}`);
+            return { filled: false };
+        }
+        
+        element.value = option.value;
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log(`[Content]   ✅ Filled select with: ${option.text}`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling select:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill checkbox or radio button
+ */
+function fillCheckboxOrRadio(element, value) {
+    try {
+        // Check if label matches the value
+        const label = element.getAttribute('aria-label') || element.nextElementSibling?.textContent || '';
+        const shouldCheck = label.toLowerCase().includes(value.toLowerCase()) ||
+                           value.toLowerCase() === 'true' ||
+                           value.toLowerCase() === 'yes';
+        
+        if (element.type === 'checkbox') {
+            element.checked = shouldCheck;
+        } else if (element.type === 'radio') {
+            element.checked = shouldCheck;
+        }
+        
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log(`[Content]   ✅ Filled ${element.type}: ${shouldCheck ? 'checked' : 'unchecked'}`);
+        return { filled: shouldCheck };
+    } catch (error) {
+        console.error('[Content] Error filling checkbox/radio:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill date input
+ */
+function fillDateInput(element, value) {
+    try {
+        // Parse date - support multiple formats
+        let dateValue = value;
+        if (typeof value === 'string') {
+            // Try to parse YYYY-MM-DD
+            if (!value.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                // Try to convert common formats
+                const date = new Date(value);
+                if (!isNaN(date.getTime())) {
+                    dateValue = date.toISOString().split('T')[0];
+                }
+            }
+        }
+        
+        element.value = dateValue;
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log(`[Content]   ✅ Filled date: ${dateValue}`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling date:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill contenteditable div
+ */
+function fillContenteditableDiv(element, value) {
+    try {
+        if (element.textContent.trim()) {
+            return { filled: false };
+        }
+        
+        element.focus();
+        element.textContent = value;
+        
+        ['input', 'change', 'blur'].forEach(eventType => {
+            element.dispatchEvent(new Event(eventType, { bubbles: true }));
+        });
+        
+        element.blur();
+        
+        console.log(`[Content]   ✅ Filled contenteditable div`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling contenteditable:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill data-attribute element
+ */
+function fillDataAttributeElement(element, value) {
+    try {
+        // For Google Forms specific elements
+        element.setAttribute('data-value', value);
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log(`[Content]   ✅ Filled data-attribute element`);
+        return { filled: true };
+    } catch (error) {
+        console.error('[Content] Error filling data-attribute element:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Fill role-based element (radio, checkbox, etc.)
+ */
+function fillRoleElement(element, value) {
+    try {
+        const role = element.getAttribute('role');
+        const label = element.getAttribute('aria-label') || element.innerText || '';
+        
+        if (role === 'radio' || role === 'checkbox') {
+            const shouldSelect = label.toLowerCase().includes(value.toLowerCase());
+            if (shouldSelect) {
+                element.click();
+                console.log(`[Content]   ✅ Clicked ${role}: ${label}`);
+                return { filled: true };
+            }
+        } else if (role === 'option') {
+            if (label.toLowerCase().includes(value.toLowerCase())) {
+                element.click();
+                console.log(`[Content]   ✅ Clicked option: ${label}`);
+                return { filled: true };
+            }
+        }
+        
+        return { filled: false };
+    } catch (error) {
+        console.error('[Content] Error filling role element:', error);
+        return { filled: false };
+    }
+}
+
+/**
+ * Extract visible label from element and its context
+ */
+function extractVisibleLabel(element) {
+    try {
+        const labels = [];
+        
+        // Direct attributes
+        if (element.getAttribute('aria-label')) {
+            labels.push(element.getAttribute('aria-label'));
+        }
+        if (element.placeholder) {
+            labels.push(element.placeholder);
+        }
+        if (element.title) {
+            labels.push(element.title);
+        }
+        
+        // Associated label
+        if (element.id) {
+            const label = document.querySelector(`label[for="${element.id}"]`);
+            if (label) {
+                labels.push(label.textContent.trim());
+            }
+        }
+        
+        // Parent label
+        const parentLabel = element.closest('label');
+        if (parentLabel) {
+            labels.push(parentLabel.textContent.trim());
+        }
+        
+        // Nearby question text
+        let parent = element.parentElement;
+        for (let i = 0; i < 5 && parent; i++) {
+            const text = parent.innerText || parent.textContent;
+            if (text && text.length > 0 && text.length < 200) {
+                labels.push(text.trim());
+            }
+            parent = parent.parentElement;
+        }
+        
+        return labels.filter(l => l && l.length > 0).join(' | ');
+    } catch (error) {
+        return '';
+    }
+}
+
+/**
+ * Check if element is visible
+ */
+function isElementVisible(element) {
+    try {
+        if (element.offsetParent === null) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+    } catch (error) {
+        return true; // Assume visible if check fails
+    }
+}
+
+/**
+ * Utility delay function
+ */
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -2147,264 +2727,68 @@ function animateFilledField(input) {
     }, 1500);
 }
 
+/**
+ * Unified Autofill Badge Management
+ * These functions are kept for backward compatibility
+ * All functionality is now handled by UnifiedAutofillButton
+ */
+
 async function initAutofillBadge() {
-    try {
-        return new Promise((resolve) => {
-            // Use proper chrome.storage API with error handling
-            chrome.storage.local.get(['settings', 'profile', 'autofillButtonHidden'], (result) => {
-                try {
-                    // Check for chrome errors
-                    if (chrome.runtime.lastError) {
-                        console.error('[Content] Storage error:', chrome.runtime.lastError);
-                        resolve();
-                        return;
-                    }
-                    
-                    // Check if autofill button was hidden by user
-                    if (result.autofillButtonHidden === true) {
-                        console.log('[Content] Autofill button is hidden by user');
-                        resolve();
-                        return;
-                    }
-                    
-                    const settings = result.settings || { showAutofillBadge: true };
-                    const profile = result.profile;
-                    
-                    if (settings.showAutofillBadge === false) {
-                        removeAutofillBadge();
-                        resolve();
-                        return;
-                    }
-                    
-                    // Check if profile exists and has data
-                    if (!profile || typeof profile !== 'object') {
-                        console.log('[Content] No profile found for autofill badge');
-                        resolve();
-                        return;
-                    }
-                    
-                    // Check for input fields
-                    const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="radio"]):not([type="checkbox"]), textarea, select');
-                    if (inputs.length < 2 && !document.querySelector('form')) {
-                        console.log('[Content] Insufficient form fields for autofill badge');
-                        resolve();
-                        return;
-                    }
-                    
-                    // Check if badge already exists
-                    if (document.getElementById('resume-fixer-autofill-widget')) {
-                        console.log('[Content] Autofill badge already exists');
-                        resolve();
-                        return;
-                    }
-                    
-                    // Safe injection
-                    try {
-                        injectAutofillBadge();
-                        console.log('[Content] Autofill badge injected successfully');
-                    } catch (injectError) {
-                        console.error('[Content] Error injecting autofill badge:', injectError);
-                    }
-                    
-                    resolve();
-                } catch (e) {
-                    console.error('[Content] Error in storage callback:', e);
-                    resolve();
-                }
-            });
-        });
-    } catch (e) {
-        console.error('[Content] Error initializing autofill badge:', e);
-    }
+    console.log('[Content] Badge initialization delegated to UnifiedAutofillButton');
+    // Unified button will be initialized separately
+    return;
 }
 
 function removeAutofillBadge() {
+    // Remove old badge if it exists
     try {
-        const el = document.getElementById('resume-fixer-autofill-widget');
-        if (el) {
-            el.remove();
-            console.log('[Content] Autofill badge removed');
+        const oldBadge = document.getElementById('resume-fixer-autofill-widget');
+        if (oldBadge) {
+            oldBadge.remove();
         }
     } catch (e) {
-        console.error('[Content] Error removing autofill badge:', e);
+        console.error('[Content] Error removing old badge:', e);
+    }
+    
+    // Also hide unified button if it exists
+    try {
+        const unifiedBtn = document.getElementById('ats-unified-autofill-button');
+        if (unifiedBtn) {
+            unifiedBtn.classList.add('hidden');
+        }
+    } catch (e) {
+        console.error('[Content] Error hiding unified button:', e);
     }
 }
 
 function injectAutofillBadge() {
-    const widgetContainer = document.createElement('div');
-    widgetContainer.id = 'resume-fixer-autofill-widget';
-    widgetContainer.style.position = 'fixed';
-    widgetContainer.style.bottom = '20px';
-    widgetContainer.style.right = '20px';
-    widgetContainer.style.zIndex = '999999';
-    widgetContainer.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-    
-    const shadow = widgetContainer.attachShadow({ mode: 'open' });
-    
-    const style = document.createElement('style');
-    style.textContent = `
-        .badge-wrapper {
-            display: flex;
-            align-items: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 8px 14px;
-            border-radius: 30px;
-            box-shadow: 0 4px 12px rgba(118, 75, 162, 0.3);
-            cursor: pointer;
-            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            user-select: none;
-            position: relative;
-            font-size: 13px;
-            font-weight: 600;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
-        .badge-wrapper:hover {
-            transform: translateY(-2px) scale(1.03);
-            box-shadow: 0 6px 16px rgba(118, 75, 162, 0.4);
-        }
-        
-        .badge-wrapper:active {
-            transform: translateY(0) scale(0.98);
-        }
-        
-        .badge-icon {
-            margin-right: 6px;
-            font-size: 15px;
-        }
-        
-        .badge-text {
-            white-space: nowrap;
-        }
-        
-        .btn-close {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 18px;
-            height: 18px;
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: none;
-            border-radius: 50%;
-            margin-left: 8px;
-            cursor: pointer;
-            font-size: 9px;
-            transition: background 0.2s;
-            font-weight: bold;
-        }
-        
-        .btn-close:hover {
-            background: rgba(255, 255, 255, 0.4);
-        }
-
-        .toast-message {
-            position: absolute;
-            bottom: 45px;
-            right: 0;
-            background: #2d3748;
-            color: white;
-            padding: 8px 12px;
-            border-radius: 8px;
-            font-size: 12px;
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
-            pointer-events: none;
-            opacity: 0;
-            transform: translateY(10px);
-            transition: all 0.3s ease;
-            white-space: nowrap;
-            font-weight: normal;
-        }
-
-        .toast-message.show {
-            opacity: 1;
-            transform: translateY(0);
-        }
-    `;
-    
-    const wrapper = document.createElement('div');
-    wrapper.className = 'badge-wrapper';
-    
-    const icon = document.createElement('span');
-    icon.className = 'badge-icon';
-    icon.textContent = '⚡';
-    
-    const text = document.createElement('span');
-    text.className = 'badge-text';
-    text.textContent = 'Autofill Form';
-    
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'btn-close';
-    closeBtn.textContent = '✕';
-    closeBtn.title = 'Dismiss for this session';
-    
-    const toast = document.createElement('div');
-    toast.className = 'toast-message';
-    toast.textContent = 'Autofill complete!';
-    
-    wrapper.appendChild(icon);
-    wrapper.appendChild(text);
-    wrapper.appendChild(closeBtn);
-    wrapper.appendChild(toast);
-    
-    shadow.appendChild(style);
-    shadow.appendChild(wrapper);
-    document.body.appendChild(widgetContainer);
-    
-    wrapper.addEventListener('click', (e) => {
-        if (e.target === closeBtn) return;
-        
-        chrome.storage.local.get(['profile'], (result) => {
-            const currentProfile = result.profile;
-            if (!currentProfile) {
-                toast.textContent = 'Please fill out your profile in the popup first!';
-                toast.classList.add('show');
-                setTimeout(() => toast.classList.remove('show'), 3000);
-                return;
-            }
-            
-            const res = performAutofill(currentProfile);
-            const count = res.filledCount;
-            
-            toast.textContent = count > 0 ? `Filled ${count} fields! ⚡` : 'No matching fields to fill.';
-            toast.classList.add('show');
-            
-            setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
-        });
-    });
-    
-    closeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        
-        // Save the state that autofill button was hidden by user
-        chrome.storage.local.set({ 
-            autofillButtonHidden: true,
-            autofillHiddenAt: new Date().toISOString()
-        }, () => {
-            console.log('[Content] Autofill button hidden by user');
-        });
-        
-        widgetContainer.remove();
-    });
+    // Unified button is now injected by UnifiedAutofillButton
+    // This function kept for backward compatibility
+    console.log('[Content] Badge injection delegated to UnifiedAutofillButton');
 }
 
 // Run on load
 if (document.readyState === 'complete' || document.readyState === 'interactive') {
     setTimeout(initAutofillBadge, 1000);
 } else {
-    window.addEventListener('load', () => setTimeout(initAutofillBadge, 1000));
+    window.addEventListener('load', () => {
+        if (isExtensionContextValid()) {
+            setTimeout(initAutofillBadge, 1000);
+        }
+    });
 }
-
 // Initialize FloatingButtonManager for new orchestrator flow
+// IMPORTANT: Only initialize once to prevent duplicate buttons
 try {
-    if (typeof FloatingButtonManager !== 'undefined') {
-        const floatingButtonManager = new FloatingButtonManager();
-        floatingButtonManager.init().catch(err => 
-            console.error('[Content] FloatingButton init error:', err)
-        );
+    if (typeof FloatingButtonManager !== 'undefined' && typeof window.__autofillButtonInitialized === 'undefined') {
+        window.__autofillButtonInitialized = true;  // Flag to prevent re-initialization
+        
+        if (FloatingButtonManager.isApplicationForm()) {
+            const floatingButtonManager = new FloatingButtonManager();
+            floatingButtonManager.init().catch(err => 
+                console.error('[Content] FloatingButton init error:', err)
+            );
+        }
     }
 } catch (error) {
     console.error('[Content] Error initializing FloatingButtonManager:', error);
@@ -2420,9 +2804,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 const orchestrator = new AutofillOrchestrator();
                 orchestrator.start().then(result => {
                     console.log('[Content] Autofill complete:', result);
-                    chrome.runtime.sendMessage({
-                        type: 'AUTOFILL_COMPLETE',
-                        data: result
+                    if (isExtensionContextValid()) {
+                        safeSendMessage({
+                            type: 'AUTOFILL_COMPLETE',
+                            data: result
                     }).catch(err => console.error('[Content] Error sending result:', err));
                     
                     sendResponse({ success: true, result });

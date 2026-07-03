@@ -7,7 +7,53 @@
  * - Handles file processing
  * - Manages API calls
  * - Single response pattern
+ * - Auto token refresh scheduler
+ * - 401 retry logic
+ * - Graceful module loading with fallbacks
  */
+
+// Import required modules (dynamically loaded via importScripts in Manifest V3)
+// These are loaded synchronously before the rest of the script runs
+const ModuleAvailability = {
+    tokenRefreshScheduler: false,
+    apiClient: false,
+    storageCleanup: false,
+    storageConsolidation: false
+};
+
+try {
+    importScripts('../utils/StorageConsolidation.js');
+    ModuleAvailability.storageConsolidation = typeof StorageConsolidation !== 'undefined';
+    console.log('[ServiceWorker] ✅ storageConsolidation loaded:', ModuleAvailability.storageConsolidation);
+} catch (error) {
+    console.error('[ServiceWorker] ⚠️ Failed to load storageConsolidation:', error.message);
+}
+
+try {
+    importScripts('tokenRefreshScheduler.js');
+    ModuleAvailability.tokenRefreshScheduler = typeof TokenRefreshScheduler !== 'undefined';
+    console.log('[ServiceWorker] ✅ tokenRefreshScheduler loaded:', ModuleAvailability.tokenRefreshScheduler);
+} catch (error) {
+    console.error('[ServiceWorker] ⚠️ Failed to load tokenRefreshScheduler:', error.message);
+}
+
+try {
+    importScripts('../utils/apiClient.js');
+    ModuleAvailability.apiClient = typeof APIClient !== 'undefined';
+    console.log('[ServiceWorker] ✅ apiClient loaded:', ModuleAvailability.apiClient);
+} catch (error) {
+    console.error('[ServiceWorker] ⚠️ Failed to load apiClient:', error.message);
+}
+
+try {
+    importScripts('../migrations/storageCleanup.js');
+    ModuleAvailability.storageCleanup = typeof StorageCleanup !== 'undefined';
+    console.log('[ServiceWorker] ✅ storageCleanup loaded:', ModuleAvailability.storageCleanup);
+} catch (error) {
+    console.error('[ServiceWorker] ⚠️ Failed to load storageCleanup:', error.message);
+}
+
+console.log('[ServiceWorker] Module availability:', ModuleAvailability);
 
 // Import config - CONFIG object will be available globally if config.js is loaded
 // For service worker, we define CONFIG locally since it doesn't load HTML with scripts
@@ -241,11 +287,23 @@ async function processFile(payload, sendResponse) {
         clearTimeout(timeout);
         
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            // Safe JSON parsing - try text first
+            let errorData;
+            try {
+                const text = await response.text();
+                errorData = text ? JSON.parse(text) : { error: `HTTP ${response.status}` };
+            } catch (parseError) {
+                errorData = { error: `HTTP ${response.status}` };
+            }
             throw new Error(errorData.error || 'Upload failed');
         }
         
-        const data = await response.json();
+        // Safe JSON parsing for success response
+        const data = await response.json().catch((error) => {
+            console.error('[Background] Failed to parse response JSON:', error);
+            throw new Error('Invalid server response format');
+        });
+        
         sendResponse({ success: true, data });
     } catch (error) {
         console.error('[Background] File processing error:', error);
@@ -285,11 +343,23 @@ async function parseResume(payload, sendResponse) {
         clearTimeout(timeout);
         
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            // Safe JSON parsing - try text first
+            let errorData;
+            try {
+                const text = await response.text();
+                errorData = text ? JSON.parse(text) : { error: `HTTP ${response.status}` };
+            } catch (parseError) {
+                errorData = { error: `HTTP ${response.status}` };
+            }
             throw new Error(errorData.error || 'Parse failed');
         }
         
-        const data = await response.json();
+        // Safe JSON parsing for success response
+        const data = await response.json().catch((error) => {
+            console.error('[Background] Failed to parse response JSON:', error);
+            throw new Error('Invalid server response format');
+        });
+        
         sendResponse({ success: true, data: data.parsedData });
     } catch (error) {
         console.error('[Background] Parse error:', error);
@@ -327,11 +397,23 @@ async function optimizeResume(payload, sendResponse) {
         clearTimeout(timeout);
         
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            // Safe JSON parsing - try text first
+            let errorData;
+            try {
+                const text = await response.text();
+                errorData = text ? JSON.parse(text) : { error: `HTTP ${response.status}` };
+            } catch (parseError) {
+                errorData = { error: `HTTP ${response.status}` };
+            }
             throw new Error(errorData.error || 'Optimization failed');
         }
         
-        const data = await response.json();
+        // Safe JSON parsing for success response
+        const data = await response.json().catch((error) => {
+            console.error('[Background] Failed to parse response JSON:', error);
+            throw new Error('Invalid server response format');
+        });
+        
         sendResponse({ success: true, data });
     } catch (error) {
         console.error('[Background] Optimization error:', error);
@@ -369,7 +451,14 @@ async function generateDocument(payload, sendResponse) {
         clearTimeout(timeout);
         
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+            // Safe JSON parsing - try text first
+            let errorData;
+            try {
+                const text = await response.text();
+                errorData = text ? JSON.parse(text) : { error: `HTTP ${response.status}` };
+            } catch (parseError) {
+                errorData = { error: `HTTP ${response.status}` };
+            }
             throw new Error(errorData.error || 'Generation failed');
         }
         
@@ -534,3 +623,60 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.runtime.onStartup.addListener(() => {
     console.log('Chrome started');
 });
+
+// ============================================================================
+// INITIALIZE TOKEN REFRESH SCHEDULER AND STORAGE CLEANUP
+// ============================================================================
+
+// Run storage consolidation on first load (before other operations)
+if (ModuleAvailability.storageConsolidation) {
+    console.log('[ServiceWorker] ✅ Running storage consolidation...');
+    try {
+        StorageConsolidation.verifyAndConsolidate().then((report) => {
+            console.log('[ServiceWorker] Storage consolidation report:', report);
+            if (report.hasLegacy) {
+                console.log('[ServiceWorker] ✅ Legacy keys consolidated');
+            }
+        }).catch(error => {
+            console.error('[ServiceWorker] Storage consolidation error:', error);
+        });
+    } catch (error) {
+        console.error('[ServiceWorker] ❌ Failed to run storage consolidation:', error.message);
+    }
+} else {
+    console.warn('[ServiceWorker] ⚠️ StorageConsolidation not available');
+}
+
+// Start token refresh scheduler when service worker loads
+if (ModuleAvailability.tokenRefreshScheduler) {
+    console.log('[ServiceWorker] ✅ Starting token refresh scheduler...');
+    try {
+        TokenRefreshScheduler.initialize();
+    } catch (error) {
+        console.error('[ServiceWorker] ❌ Failed to initialize scheduler:', error.message);
+    }
+} else {
+    console.warn('[ServiceWorker] ⚠️ TokenRefreshScheduler not available - token refresh disabled');
+}
+
+// Run storage cleanup migration on first load
+if (ModuleAvailability.storageCleanup) {
+    console.log('[ServiceWorker] ✅ Running storage cleanup migration...');
+    try {
+        StorageCleanup.run().then(() => {
+            console.log('[ServiceWorker] ✅ Storage cleanup complete');
+            // Verify storage after cleanup
+            return StorageCleanup.verifyStorage();
+        }).then(result => {
+            console.log('[ServiceWorker] Storage verification:', result);
+        }).catch(error => {
+            console.error('[ServiceWorker] Storage cleanup error:', error);
+        });
+    } catch (error) {
+        console.error('[ServiceWorker] ❌ Failed to run storage cleanup:', error.message);
+    }
+} else {
+    console.warn('[ServiceWorker] ⚠️ StorageCleanup not available - storage migration skipped');
+}
+
+console.log('[ServiceWorker] ✅ Initialization complete');
