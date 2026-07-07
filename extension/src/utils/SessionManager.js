@@ -9,67 +9,90 @@ class SessionManager {
      * Create or update session after successful authentication
      */
     static async createSession(authData) {
-        console.log('[SessionManager] 📝 Creating new session...');
-        
-        const session = {
-            // Authentication
-            extensionToken: authData.extensionToken || authData.token,
-            tokenType: authData.tokenType || 'Bearer',
-            expiresIn: authData.expiresIn || 3600,
-            expiresAt: Date.now() + ((authData.expiresIn || 3600) * 1000),
+        try {
+            console.log("========== CREATE SESSION ==========");
+            console.log("AUTH DATA:", authData);
+            console.log('[SessionManager] 📝 Creating new session...');
             
-            // User Info
-            user: authData.user || {},
-            userId: authData.user?.id || authData.userId,
-            
-            // Session Metadata
-            createdAt: new Date().toISOString(),
-            lastVerifiedAt: new Date().toISOString(),
-            lastSyncAt: null,
-            syncStatus: 'never', // 'never', 'syncing', 'success', 'error'
-            
-            // Cached Data (for immediate UI display)
-            cachedProfile: authData.profile || {},
-            cachedResumes: authData.resumes || [],
-            cachedApplications: authData.applications || [],
-            cachedAnswers: authData.answers || [],
-            cachedSettings: authData.settings || {},
-            
-            // Cloud Sync Info
-            cloudSyncEnabled: true,
-            lastCloudSyncAt: null,
-            cloudSyncStatus: 'not-synced'
-        };
-        
-        // Save to both sync and local storage
-        return new Promise((resolve) => {
-            const dataToSave = {
-                jobOrbitSession: session,
-                jobOrbitAuth: {
-                    extensionToken: session.extensionToken,
-                    user: session.user,
-                    expiresAt: session.expiresAt,
-                    receivedAt: session.createdAt
-                }
+            const session = {
+                // Authentication
+                extensionToken: authData.extensionToken || authData.token,
+                tokenType: authData.tokenType || 'Bearer',
+                expiresIn: authData.expiresIn || 3600,
+                expiresAt: Date.now() + ((authData.expiresIn || 3600) * 1000),
+                
+                // User Info
+                user: authData.user || {},
+                userId: authData.user?.id || authData.userId,
+                
+                // Session Metadata
+                createdAt: new Date().toISOString(),
+                lastVerifiedAt: new Date().toISOString(),
+                lastSyncAt: null,
+                syncStatus: 'never', // 'never', 'syncing', 'success', 'error'
+                
+                // Cached Data (for immediate UI display)
+                cachedProfile: authData.profile || {},
+                cachedResumes: authData.resumes || [],
+                cachedApplications: authData.applications || [],
+                cachedAnswers: authData.answers || [],
+                cachedSettings: authData.settings || {},
+                
+                // Cloud Sync Info
+                cloudSyncEnabled: true,
+                lastCloudSyncAt: null,
+                cloudSyncStatus: 'not-synced'
             };
             
-            // Save to sync storage (primary)
-            chrome.storage.sync.set(dataToSave, () => {
-                if (chrome.runtime.lastError) {
-                    console.warn('[SessionManager] ⚠️ Sync storage failed, using local');
-                    chrome.storage.local.set(dataToSave, () => {
-                        console.log('[SessionManager] ✅ Session created in local storage');
-                        resolve({ success: true, stored: 'local' });
+            console.log("SESSION OBJECT:");
+            console.log(session);
+            
+            // Save to both sync and local storage
+            return new Promise((resolve) => {
+                const dataToSave = {
+                    jobOrbitSession: session,
+                    jobOrbitAuth: {
+                        extensionToken: session.extensionToken,
+                        user: session.user,
+                        expiresAt: session.expiresAt,
+                        receivedAt: session.createdAt
+                    }
+                };
+
+                const logSavedSession = () => {
+                    chrome.storage.sync.get(["jobOrbitSession"], (r) => {
+                        console.log("SYNC AFTER SAVE:", r);
                     });
-                } else {
-                    // Also backup to local
-                    chrome.storage.local.set(dataToSave, () => {
-                        console.log('[SessionManager] ✅ Session created in sync + local storage');
-                        resolve({ success: true, stored: 'sync+local' });
+
+                    chrome.storage.local.get(["jobOrbitSession"], (r) => {
+                        console.log("LOCAL AFTER SAVE:", r);
                     });
-                }
+                };
+                
+                // Save to sync storage (primary)
+                chrome.storage.sync.set(dataToSave, () => {
+                    if (chrome.runtime.lastError) {
+                        console.warn('[SessionManager] ⚠️ Sync storage failed, using local');
+                        chrome.storage.local.set(dataToSave, () => {
+                            console.log('[SessionManager] ✅ Session created in local storage');
+                            logSavedSession();
+                            resolve({ success: true, stored: 'local' });
+                        });
+                    } else {
+                        // Also backup to local
+                        chrome.storage.local.set(dataToSave, () => {
+                            console.log('[SessionManager] ✅ Session created in sync + local storage');
+                            logSavedSession();
+                            resolve({ success: true, stored: 'sync+local' });
+                        });
+                    }
+                });
             });
-        });
+        } catch (e) {
+            console.error("CREATE SESSION FAILED");
+            console.error(e);
+            return { success: false, error: e.message };
+        }
     }
 
     /**
@@ -412,6 +435,10 @@ class SessionManager {
 }
 
 // Export for use
+if (typeof globalThis !== 'undefined') {
+    globalThis.SessionManager = SessionManager;
+}
+
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = SessionManager;
 }

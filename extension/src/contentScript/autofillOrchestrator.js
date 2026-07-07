@@ -1,17 +1,19 @@
 /**
- * Autofill Orchestrator - Phase 2
+ * Autofill Orchestrator - Phase 2 with Intelligent Mode
  * Coordinates automatic autofill workflow
- * Handles job detection, resume loading, and form filling
+ * Supports both simple and intelligent modes
  */
 
 class AutofillOrchestrator {
     constructor() {
         this.maxRetries = 3;
         this.delayBetweenFields = 100; // ms
+        this.intelligentMode = false; // Can be toggled
     }
 
     /**
      * Start automatic autofill workflow
+     * @param {Object} options - { profile, intelligentMode }
      */
     async start(options = {}) {
         const startTime = Date.now();
@@ -20,6 +22,69 @@ class AutofillOrchestrator {
             console.log('[Orchestrator] 🚀 Starting autofill workflow...');
             console.log('[Orchestrator] Options received:', options ? `${Object.keys(options).length} keys` : 'none');
 
+            // Check if intelligent mode is enabled
+            const useIntelligentMode = options.intelligentMode || this.intelligentMode;
+
+            if (useIntelligentMode) {
+                console.log('[Orchestrator] 🧠 Using INTELLIGENT MODE');
+                return await this.runIntelligentMode(options);
+            } else {
+                console.log('[Orchestrator] ⚡ Using SIMPLE MODE');
+                return await this.runSimpleMode(options);
+            }
+        } catch (error) {
+            console.error('[Orchestrator] ❌ FATAL ERROR:', error);
+            console.error('[Orchestrator] Stack:', error.stack);
+            return {
+                status: 'AUTOFILL_ERROR',
+                data: { 
+                    error: error.message,
+                    filled: 0, 
+                    skipped: 0, 
+                    failed: 0, 
+                    total: 0
+                }
+            };
+        }
+    }
+
+    /**
+     * Run intelligent mode using Application Understanding Engine
+     */
+    async runIntelligentMode(options) {
+        try {
+            const profile = options.profile || await this.loadProfile();
+            
+            if (!profile || Object.keys(profile).length === 0) {
+                console.log('[Orchestrator] ❌ No profile available');
+                return {
+                    status: 'NO_PROFILE',
+                    data: { filled: 0, skipped: 0, failed: 0, total: 0 }
+                };
+            }
+
+            // Use Intelligent Form Filler
+            const filler = new IntelligentFormFiller();
+            const results = await filler.fillForm(profile, options.context || {});
+
+            return {
+                status: 'AUTOFILL_COMPLETE',
+                mode: 'intelligent',
+                data: results
+            };
+        } catch (error) {
+            console.error('[Orchestrator] ❌ Intelligent mode error:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Run simple mode (existing implementation)
+     */
+    async runSimpleMode(options) {
+        const startTime = Date.now();
+
+        try {
             // Step 1: Detect if we're on an application form
             console.log('[Orchestrator] Step 1: Detecting if this is an application form...');
             const isAppForm = this.detectApplicationForm();
@@ -27,6 +92,7 @@ class AutofillOrchestrator {
                 console.log('[Orchestrator] ⚠️  Step 1: Not an application form, aborting');
                 return {
                     status: 'NOT_APPLICATION_FORM',
+                    mode: 'simple',
                     data: { filled: 0, skipped: 0, failed: 0, total: 0 }
                 };
             }
@@ -39,11 +105,7 @@ class AutofillOrchestrator {
             if (!profile) {
                 // Load from storage if not provided
                 console.log('[Orchestrator]   Loading profile from storage...');
-                profile = await new Promise((resolve) => {
-                    chrome.storage.local.get(['profile', 'autofillProfile'], (result) => {
-                        resolve(result.profile || result.autofillProfile);
-                    });
-                });
+                profile = await this.loadProfile();
             } else {
                 console.log('[Orchestrator]   Profile provided in options');
             }
@@ -52,6 +114,7 @@ class AutofillOrchestrator {
                 console.log('[Orchestrator] ❌ Step 2: No profile available');
                 return {
                     status: 'NO_PROFILE',
+                    mode: 'simple',
                     data: { filled: 0, skipped: 0, failed: 0, total: 0 }
                 };
             }
@@ -82,6 +145,7 @@ class AutofillOrchestrator {
 
             return {
                 status: 'AUTOFILL_COMPLETE',
+                mode: 'simple',
                 data: {
                     filled: results.filled,
                     skipped: results.skipped,
@@ -93,19 +157,20 @@ class AutofillOrchestrator {
             };
 
         } catch (error) {
-            console.error('[Orchestrator] ❌ FATAL ERROR:', error);
-            console.error('[Orchestrator] Stack:', error.stack);
-            return {
-                status: 'AUTOFILL_ERROR',
-                data: { 
-                    error: error.message,
-                    filled: 0, 
-                    skipped: 0, 
-                    failed: 0, 
-                    total: 0
-                }
-            };
+            console.error('[Orchestrator] ❌ Simple mode error:', error);
+            throw error;
         }
+    }
+
+    /**
+     * Load profile from storage
+     */
+    async loadProfile() {
+        return new Promise((resolve) => {
+            chrome.storage.local.get(['profile', 'autofillProfile'], (result) => {
+                resolve(result.profile || result.autofillProfile);
+            });
+        });
     }
 
     /**

@@ -1,3 +1,6 @@
+console.log("========== SERVICE WORKER LOADED ==========");
+console.log(new Date().toISOString());
+
 /**
  * Background Service Worker - Fixed Version
  * Handles background tasks, message passing, and API communication
@@ -15,11 +18,21 @@
 // Import required modules (dynamically loaded via importScripts in Manifest V3)
 // These are loaded synchronously before the rest of the script runs
 const ModuleAvailability = {
+    sessionManager: false,
     tokenRefreshScheduler: false,
     apiClient: false,
     storageCleanup: false,
     storageConsolidation: false
 };
+
+try {
+    importScripts('../utils/SessionManager.js');
+    ModuleAvailability.sessionManager = typeof SessionManager !== 'undefined';
+    console.log('[ServiceWorker] ✅ sessionManager loaded:', ModuleAvailability.sessionManager);
+    console.log(typeof SessionManager);
+} catch (error) {
+    console.error('[ServiceWorker] ⚠️ Failed to load sessionManager:', error.message);
+}
 
 try {
     importScripts('../utils/StorageConsolidation.js');
@@ -76,6 +89,8 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
     console.log('[ServiceWorker] Request data:', request);
     
     if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
+        console.log("JOBORBIT_AUTH_RESPONSE RECEIVED");
+        console.log(request);
         console.log('[ServiceWorker] ✅ Processing Job Orbit auth response');
         
         // Validate required data
@@ -87,6 +102,7 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
         
         const authData = {
             extensionToken: request.data.extensionToken,
+            expiresIn: request.data.expiresIn || 86400,
             expiresAt: request.data.expiresAt || (Date.now() + ((request.data.expiresIn || 86400) * 1000)),
             user: request.data.user || null,
             receivedAt: new Date().toISOString(),
@@ -101,46 +117,65 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
         });
         
         // Store in SYNC storage (persists across sessions)
-        chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
-            if (chrome.runtime.lastError) {
-                console.error('[ServiceWorker] ❌ Failed to store in sync:', chrome.runtime.lastError);
-                sendResponse({ success: false, error: chrome.runtime.lastError.message });
-                return;
-            }
-            
-            console.log('[ServiceWorker] ✅ Stored in chrome.storage.sync');
-            
-            // Also store in LOCAL storage as backup
-            chrome.storage.local.set({ jobOrbitAuth: authData }, () => {
+        (async () => {
+            console.log(JSON.stringify(request.data, null, 2));
+            console.log("Calling SessionManager.createSession...");
+            const result = await SessionManager.createSession({
+                extensionToken: authData.extensionToken,
+                expiresIn: authData.expiresIn,
+                user: authData.user
+            });
+            console.log("createSession returned:");
+            console.log(result);
+    
+            chrome.storage.sync.get(null, (result) => {
+                console.log(result);
+            });
+
+            chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
                 if (chrome.runtime.lastError) {
-                    console.warn('[ServiceWorker] ⚠️ Failed to store in local:', chrome.runtime.lastError);
-                } else {
-                    console.log('[ServiceWorker] ✅ Stored in chrome.storage.local');
+                    console.error('[ServiceWorker] ❌ Failed to store in sync:', chrome.runtime.lastError);
+                    sendResponse({ success: false, error: chrome.runtime.lastError.message });
+                    return;
                 }
+                
+                console.log('[ServiceWorker] ✅ Stored in chrome.storage.sync');
+                
+                // Also store in LOCAL storage as backup
+                chrome.storage.local.set({ jobOrbitAuth: authData }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.warn('[ServiceWorker] ⚠️ Failed to store in local:', chrome.runtime.lastError);
+                    } else {
+                        console.log('[ServiceWorker] ✅ Stored in chrome.storage.local');
+                    }
+                });
+                
+                // Notify all windows/tabs that auth was successful
+                chrome.runtime.sendMessage({
+                    type: 'EXTENSION_TOKEN_RECEIVED',
+                    data: authData
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.log('[ServiceWorker] ℹ️ Popup not open (will update on next open):', chrome.runtime.lastError.message);
+                    } else {
+                        console.log('[ServiceWorker] ✅ Popup notified of token arrival');
+                    }
+                });
+                
+                // Send success response to auth page
+                sendResponse({ 
+                    success: true, 
+                    message: 'Token stored successfully',
+                    stored: {
+                        sync: true,
+                        local: true,
+                        timestamp: authData.receivedAt
+                    }
+                });
             });
-            
-            // Notify all windows/tabs that auth was successful
-            chrome.runtime.sendMessage({
-                type: 'EXTENSION_TOKEN_RECEIVED',
-                data: authData
-            }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.log('[ServiceWorker] ℹ️ Popup not open (will update on next open):', chrome.runtime.lastError.message);
-                } else {
-                    console.log('[ServiceWorker] ✅ Popup notified of token arrival');
-                }
-            });
-            
-            // Send success response to auth page
-            sendResponse({ 
-                success: true, 
-                message: 'Token stored successfully',
-                stored: {
-                    sync: true,
-                    local: true,
-                    timestamp: authData.receivedAt
-                }
-            });
+        })().catch((error) => {
+            console.error('[ServiceWorker] ❌ Failed to create session:', error);
+            sendResponse({ success: false, error: error.message });
         });
         
         return true; // Keep channel open for async response
@@ -154,20 +189,42 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
 // Also listen for internal messages from popup during auth callback
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
+        console.log("JOBORBIT_AUTH_RESPONSE RECEIVED");
+        console.log(request);
         console.log('[ServiceWorker] ⏬ Received internal message from:', sender.tab?.url);
         
         if (request.data && request.data.extensionToken) {
             const authData = {
                 extensionToken: request.data.extensionToken,
+                expiresIn: request.data.expiresIn || 86400,
                 expiresAt: request.data.expiresAt || (Date.now() + ((request.data.expiresIn || 86400) * 1000)),
                 user: request.data.user || null,
                 receivedAt: new Date().toISOString(),
                 state: request.state || null
             };
             
-            chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
-                console.log('[ServiceWorker] ✅ Internal: Stored in chrome.storage.sync');
-                sendResponse({ success: true, stored: true });
+            (async () => {
+                console.log(JSON.stringify(request.data, null, 2));
+                console.log("Calling SessionManager.createSession...");
+                const result = await SessionManager.createSession({
+                    extensionToken: authData.extensionToken,
+                    expiresIn: authData.expiresIn,
+                    user: authData.user
+                });
+                console.log("createSession returned:");
+                console.log(result);
+    
+                chrome.storage.sync.get(null, (result) => {
+                    console.log(result);
+                });
+
+                chrome.storage.sync.set({ jobOrbitAuth: authData }, () => {
+                    console.log('[ServiceWorker] ✅ Internal: Stored in chrome.storage.sync');
+                    sendResponse({ success: true, stored: true });
+                });
+            })().catch((error) => {
+                console.error('[ServiceWorker] ❌ Internal: Failed to create session:', error);
+                sendResponse({ success: false, error: error.message });
             });
         }
         
