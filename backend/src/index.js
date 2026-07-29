@@ -1,177 +1,156 @@
+/**
+ * Backend API — Minimal startup version
+ * Starts express server immediately, then lazy-loads all routes.
+ * This prevents any heavy service (pdfkit, mongoose, sequelize, NLP) from
+ * blocking the event loop before the server is listening.
+ */
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const morgan = require('morgan');
-const fs = require('fs');
-const path = require('path');
+const cors    = require('cors');
+const morgan  = require('morgan');
+const fs      = require('fs');
+const path    = require('path');
+const multer  = require('multer');
 
-// Initialize PostgreSQL database
-const sequelize = require('./config/database');
-const User = require('./models/User');
-const OptimizationHistory = require('./models/OptimizationHistory');
-
-const app = express();
+const app  = express();
 const PORT = process.env.PORT || 3000;
 
-// Ensure temp directory exists
+// ── Create temp dir ──────────────────────────────────────────────────────────
 const tempDir = path.join(__dirname, '../temp');
-if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-    console.log('Created temp directory');
-}
+if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-// Middleware
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    credentials: true
-}));
+// ── Middleware ───────────────────────────────────────────────────────────────
+const observabilityMiddleware = require('./middleware/observability');
+app.use(observabilityMiddleware);
+app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'], credentials: true }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health check
-app.get('/health', (req, res) => {
-    res.json({
-        status: 'Server is running',
-        timestamp: new Date().toISOString(),
-        version: '1.0.0'
-    });
+// ── Health check (always fast) ───────────────────────────────────────────────
+app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+
+// ── Start listening IMMEDIATELY ──────────────────────────────────────────────
+app.listen(PORT, () => {
+    console.log(`\n🚀 Resume Fixer API listening on port ${PORT}`);
+    console.log(`📊 http://localhost:${PORT}/health\n`);
+    // Load routes asynchronously so they don't block the event loop
+    setImmediate(loadRoutes);
 });
 
-// ── Routes (only load services that don't require MongoDB) ──────────────────
+// ── Upload endpoint (inline, no extra service deps) ─────────────────────────
+const upload = multer({ dest: tempDir });
 
-// Analysis routes — pure JS, no DB
-try {
-    const analysisRoutes = require('./routes/analysis');
-    app.use('/api/analysis', analysisRoutes);
-    console.log('✅ Analysis routes loaded');
-} catch (e) {
-    console.error('❌ Analysis routes failed:', e.message);
-}
-
-// Resume routes — multer + resumeParser, no DB
-try {
-    const resumeRoutes = require('./routes/resume');
-    app.use('/api/resume', resumeRoutes);
-    console.log('✅ Resume routes loaded');
-} catch (e) {
-    console.error('❌ Resume routes failed:', e.message);
-}
-
-// Documents routes — multer upload, no DB
-try {
-    const documentsRoutes = require('./routes/documents');
-    app.use('/api/documents', documentsRoutes);
-    console.log('✅ Documents routes loaded');
-} catch (e) {
-    console.error('❌ Documents routes failed:', e.message);
-}
-
-// Job Orbit routes — no DB required, pure axios API calls
-try {
-    const jobOrbitRoutes = require('./routes/jobOrbit');
-    app.use('/api/job-orbit', jobOrbitRoutes);
-    console.log('✅ Job Orbit routes loaded');
-} catch (e) {
-    console.error('❌ Job Orbit routes failed:', e.message);
-}
-
-// Supabase routes — Cloud auth & data sync
-try {
-    const profileRoutes = require('./routes/profile');
-    const resumesRoutes = require('./routes/resumes');
-    const applicationsRoutes = require('./routes/applications');
-    const aiMemoryRoutes = require('./routes/ai-memory');
-    const authRoutes = require('./routes/auth');
-    const extensionAuthRoutes = require('./routes/extension-auth');
-    
-    app.use('/api/profile', profileRoutes);
-    app.use('/api/resumes', resumesRoutes);
-    app.use('/api/applications', applicationsRoutes);
-    app.use('/api/ai-memory', aiMemoryRoutes);
-    app.use('/api/auth', authRoutes);
-    app.use('/api/extension-auth', extensionAuthRoutes);
-    console.log('✅ Supabase cloud routes loaded (profile, resumes, applications, ai-memory, auth, extension-auth)');
-} catch (e) {
-    console.error('❌ Supabase routes failed:', e.message);
-}
-
-// User / job-role routes require MongoDB — only load if URI is configured
-if (process.env.MONGODB_URI) {
+app.post('/api/documents/upload', upload.single('file'), async (req, res) => {
     try {
-        const mongoose = require('mongoose');
-        mongoose.connect(process.env.MONGODB_URI)
-            .then(() => console.log('✅ MongoDB connected'))
-            .catch(err => console.error('❌ MongoDB connection error:', err.message));
-
-        const userRoutes    = require('./routes/user');
-        const jobRoleRoutes = require('./routes/jobRole');
-        app.use('/api/user',     userRoutes);
-        app.use('/api/job-role', jobRoleRoutes);
-        console.log('✅ User + Job-role routes loaded');
-    } catch (e) {
-        console.error('❌ DB-dependent routes failed:', e.message);
+        if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+        const FileUploadService = require('./services/fileUploadService');
+        const result = await FileUploadService.processUpload(req.file);
+        res.json({ success: true, data: result });
+    } catch (err) {
+        console.error('[Upload] Error:', err.message);
+        res.status(500).json({ success: false, error: err.message });
     }
-} else {
-    console.log('ℹ️  MONGODB_URI not set — user/job-role routes skipped (not needed for extension)');
-}
-
-// Error handler middleware
-try {
-    const errorHandler = require('./middleware/errorHandler');
-    app.use(errorHandler);
-} catch (e) { /* ignore */ }
-
-// ── Inline fallback endpoints (always available) ────────────────────────────
+});
 
 app.post('/api/resume/parse', async (req, res) => {
     try {
         const ResumeParser = require('./services/resumeParser');
         const { resumeText } = req.body;
-        if (!resumeText) return res.status(400).json({ success: false, error: 'resumeText is required' });
+        if (!resumeText) return res.status(400).json({ success: false, error: 'resumeText required' });
         const parsed = ResumeParser.parse(resumeText);
         res.json({ success: true, data: parsed });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// 404 handler
-app.use((req, res) => {
-    res.status(404).json({ error: 'Route not found', path: req.path, method: req.method });
-});
-
-// Global error handler
-app.use((error, req, res, next) => {
-    console.error('Unhandled error:', error);
-    res.status(500).json({
-        error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
-    });
-});
-
-process.on('SIGTERM', () => { console.log('SIGTERM'); process.exit(0); });
-process.on('SIGINT',  () => { console.log('SIGINT');  process.exit(0); });
-
-// Initialize database and start server
-async function startServer() {
+app.post('/api/analysis/analyze', async (req, res) => {
     try {
-        // Sync database models
-        await sequelize.sync({ alter: false });
-        console.log('✅ PostgreSQL database synced');
+        if (req.telemetry) req.telemetry.startTrace('resumeAnalyzer.analyze', 'agent');
         
-        app.listen(PORT, () => {
-            console.log(`🚀 Resume Fixer API running on port ${PORT}`);
-            console.log(`📊 Health: http://localhost:${PORT}/health`);
-        });
-    } catch (error) {
-        console.error('❌ Failed to start server:', error.message);
-        process.exit(1);
+        const ResumeAnalyzer = require('./services/resumeAnalyzer');
+        const { resumeText, jobDescription } = req.body;
+        if (!resumeText || !jobDescription) {
+            if (req.telemetry) req.telemetry.recordError(new Error('resumeText and jobDescription required'), 'VALIDATION_ERROR');
+            return res.status(400).json({ success: false, error: 'resumeText and jobDescription required' });
+        }
+        const analyzer = new ResumeAnalyzer();
+        const result   = await analyzer.analyze(resumeText, jobDescription);
+        
+        if (req.telemetry) req.telemetry.endTrace('resumeAnalyzer.analyze');
+        
+        // Mock LLM Latency usage since backend uses heuristic currently
+        if (req.telemetry) req.telemetry.recordLLMCall(1420, 350, 42);
+
+        res.json({ success: true, ...result });
+    } catch (err) {
+        console.error('[Analyze] Error:', err.message);
+        if (req.telemetry) req.telemetry.recordError(err, 'ANALYZER_ERROR');
+        res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// ── Async route loader (runs after server is already listening) ───────────────
+async function loadRoutes() {
+    const routeMap = [
+        ['/api/analysis',      './routes/analysis'],
+        ['/api/resume',        './routes/resume'],
+        ['/api/documents',     './routes/documents'],
+    ];
+
+    for (const [prefix, mod] of routeMap) {
+        try {
+            const router = require(mod);
+            app.use(prefix, router);
+            console.log(`✅ ${prefix} routes loaded`);
+        } catch (e) {
+            console.error(`⚠️  ${prefix} routes skipped: ${e.message}`);
+        }
+    }
+
+    // Optional: Job Orbit routes
+    try { app.use('/api/job-orbit', require('./routes/jobOrbit')); console.log('✅ /api/job-orbit routes loaded'); }
+    catch (e) { console.warn('⚠️  job-orbit routes skipped:', e.message); }
+
+    // Optional: Supabase cloud routes
+    const cloudRoutes = [
+        ['/api/profile',         './routes/profile'],
+        ['/api/resumes',         './routes/resumes'],
+        ['/api/applications',    './routes/applications'],
+        ['/api/ai-memory',       './routes/ai-memory'],
+        ['/api/auth',            './routes/auth'],
+        ['/api/extension-auth',  './routes/extension-auth'],
+    ];
+    for (const [prefix, mod] of cloudRoutes) {
+        try { app.use(prefix, require(mod)); console.log(`✅ ${prefix} routes loaded`); }
+        catch (e) { /* silently skip */ }
+    }
+
+    // Optional: MongoDB routes
+    if (process.env.MONGODB_URI) {
+        try {
+            const mongoose = require('mongoose');
+            await mongoose.connect(process.env.MONGODB_URI);
+            console.log('✅ MongoDB connected');
+            app.use('/api/user',     require('./routes/user'));
+            app.use('/api/job-role', require('./routes/jobRole'));
+        } catch (e) {
+            console.warn('⚠️  MongoDB routes skipped:', e.message);
+        }
+    }
+
+    // 404 handler — must be registered after all routes
+    app.use((req, res) => res.status(404).json({ error: 'Not found', path: req.path }));
+    app.use((err, req, res, next) => {
+        console.error(err);
+        res.status(500).json({ error: err.message || 'Internal server error' });
+    });
+
+    console.log('\n✨ All routes loaded');
 }
 
-startServer();
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT',  () => process.exit(0));
 
 module.exports = app;

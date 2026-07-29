@@ -1974,17 +1974,15 @@ async function loadAutofillProfile() {
             const answerHireEl = document.getElementById('answer_hire_you');
             if (answerHireEl) answerHireEl.value = p.answer_hire_you || '';
             
-            // Preferences
-            const workEnvEl = document.getElementById('work_environment');
-            if (workEnvEl) workEnvEl.value = p.work_environment || '';
+            // Q&A profile fields
+            const keyStrengthEl = document.getElementById('key_strength');
+            if (keyStrengthEl) keyStrengthEl.value = p.key_strength || '';
             
-            const locationEl = document.getElementById('preferred_location');
-            if (locationEl) locationEl.value = p.preferred_location || '';
-            
-            const authEl = document.getElementById('work_authorization');
-            if (authEl) authEl.value = p.work_authorization || '';
+            const whyInterestedEl = document.getElementById('why_interested');
+            if (whyInterestedEl) whyInterestedEl.value = p.why_interested || '';
             
             console.log('[Popup] ✅ All available profile fields populated');
+
         } else {
             console.log('[Popup] ℹ️ No autofill profile found (first time or deleted)');
         }
@@ -2073,6 +2071,10 @@ async function handleSaveProfile(e) {
             answer_about_you: document.getElementById('answer_about_you')?.value.trim() || '',
             answer_why_company: document.getElementById('answer_why_company')?.value.trim() || '',
             answer_hire_you: document.getElementById('answer_hire_you')?.value.trim() || '',
+            
+            // Q&A profile fields (for SmartAnswerEngine)
+            key_strength: document.getElementById('key_strength')?.value.trim() || '',
+            why_interested: document.getElementById('why_interested')?.value.trim() || '',
             
             // Job Preferences
             work_environment: document.getElementById('work_environment')?.value || '',
@@ -3746,3 +3748,341 @@ function saveAnswer() {
         });
     });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMART Q&A — Scan, Generate, Approve, Fill
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Current list of detected questions with generated answers */
+let qaGeneratedAnswers = [];
+
+/**
+ * Build a SmartAnswerEngine-compatible profile object from stored autofill profile.
+ */
+function buildQAProfile(storedProfile) {
+    return {
+        firstName:       storedProfile.first_name       || storedProfile.full_name?.split(' ')[0] || '',
+        currentTitle:    storedProfile.current_title    || '',
+        noticePeriod:    storedProfile.notice_period    || '',
+        expectedCTC:     storedProfile.expected_salary  || '',
+        workMode:        storedProfile.work_environment || 'flexible',
+        keyStrength:     storedProfile.key_strength     || '',
+        whyInterested:   storedProfile.why_interested   || storedProfile.answer_why_company || ''
+    };
+}
+
+/**
+ * Render a confidence badge (colour-coded).
+ */
+function confidenceBadge(score) {
+    const isHigh = score >= 80;
+    const isMedium = score >= 60 && score < 80;
+    const colorBg = isHigh ? 'var(--color-secondary-container)' : isMedium ? 'var(--color-tertiary-container)' : 'var(--color-error-container)';
+    const colorText = isHigh ? 'var(--color-on-secondary-container)' : isMedium ? 'var(--color-on-tertiary-container)' : 'var(--color-on-error-container)';
+    const colorBorder = isHigh ? 'var(--color-secondary)' : isMedium ? 'var(--color-tertiary)' : 'var(--color-error)';
+    const label = isHigh ? 'High' : isMedium ? 'Medium' : 'Low';
+    
+    return `<span style="
+        background: ${colorBg}; color: ${colorText}; border: 1px solid ${colorBorder};
+        border-radius: var(--radius-organic); font-family: var(--font-label); font-size: 9px; font-weight: 600; padding: 2px 8px;
+        display: inline-block; letter-spacing: 0.03em;
+    ">${score}% · ${label}</span>`;
+}
+
+/**
+ * Render all Q&A cards into #qaCardsContainer.
+ */
+function renderQACards(results) {
+    const container = document.getElementById('qaCardsContainer');
+    const emptyState = document.getElementById('qaEmptyState');
+    const actionsBar = document.getElementById('qaActionsBar');
+    const fillCount = document.getElementById('qaFillCount');
+
+    if (!results || results.length === 0) {
+        emptyState.style.display = 'block';
+        container.style.display = 'none';
+        actionsBar.style.display = 'none';
+        return;
+    }
+
+    emptyState.style.display = 'none';
+    container.style.display = 'block';
+    actionsBar.style.display = 'block';
+    fillCount.textContent = `${results.length} question${results.length > 1 ? 's' : ''} detected — approve the ones you want to fill`;
+
+    container.innerHTML = results.map((item, idx) => `
+        <div id="qa-card-${idx}" style="
+            background: var(--color-surface); border: 1px solid var(--color-pencil-grey); border-radius: var(--radius-organic);
+            padding: 16px; margin-bottom: 12px; transition: border-color 0.2s;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 8px;">
+                <p style="font-family: var(--font-heading); font-size: 14px; font-weight: 500; color: var(--color-on-surface); margin: 0; flex: 1; line-height: 1.4;">
+                    ${escapeHtml(item.question.length > 120 ? item.question.substring(0, 117) + '...' : item.question)}
+                </p>
+                ${confidenceBadge(item.confidence)}
+            </div>
+
+            <textarea
+                id="qa-answer-${idx}"
+                style="
+                    width: 100%; box-sizing: border-box; border: 1px solid var(--color-pencil-grey);
+                    border-radius: var(--radius-organic); padding: 12px; font-size: 14px; line-height: 1.5;
+                    color: var(--color-on-surface); resize: vertical; min-height: 80px; max-height: 160px;
+                    font-family: var(--font-body); background: transparent; border-bottom: 1.5px solid var(--color-pencil-grey);
+                "
+            >${escapeHtml(item.answer)}</textarea>
+
+            <div style="display: flex; gap: 8px; margin-top: 12px; align-items: center;">
+                <button
+                    id="qa-approve-${idx}"
+                    onclick="toggleQAApproval(${idx})"
+                    style="
+                        padding: 6px 12px; border-radius: var(--radius-organic); font-family: var(--font-label); font-size: 11px; cursor: pointer;
+                        border: 1px solid var(--color-secondary); background: var(--color-secondary); color: var(--color-on-secondary);
+                        font-weight: 600; transition: all 0.15s; letter-spacing: 0.05em; text-transform: uppercase;
+                    "
+                    data-approved="true"
+                >✅ Approved</button>
+
+                <button
+                    onclick="regenerateQAAnswer(${idx})"
+                    style="
+                        padding: 6px 12px; border-radius: var(--radius-organic); font-family: var(--font-label); font-size: 11px; cursor: pointer;
+                        border: 1px solid var(--color-pencil-grey); background: transparent; color: var(--color-on-surface-variant);
+                        font-weight: 600; transition: all 0.15s; letter-spacing: 0.05em; text-transform: uppercase;
+                    "
+                >🔄 Regenerate</button>
+
+                <span style="font-family: var(--font-label); font-size: 10px; color: var(--color-on-surface-variant); margin-left: auto;">
+                    ${(item.answer.split(/\s+/).filter(Boolean).length)} words
+                </span>
+            </div>
+        </div>
+    `).join('');
+
+    // Store results globally
+    qaGeneratedAnswers = results;
+}
+
+function escapeHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/**
+ * Toggle approved/skipped state for a card.
+ */
+window.toggleQAApproval = function(idx) {
+    const btn = document.getElementById(`qa-approve-${idx}`);
+    if (!btn) return;
+    const isApproved = btn.dataset.approved === 'true';
+    if (isApproved) {
+        btn.dataset.approved = 'false';
+        btn.textContent = '⬜ Skipped';
+        btn.style.background = 'transparent';
+        btn.style.color = 'var(--color-on-surface-variant)';
+        btn.style.borderColor = 'var(--color-pencil-grey)';
+    } else {
+        btn.dataset.approved = 'true';
+        btn.textContent = '✅ Approved';
+        btn.style.background = 'var(--color-secondary)';
+        btn.style.color = 'var(--color-on-secondary)';
+        btn.style.borderColor = 'var(--color-secondary)';
+    }
+};
+
+/**
+ * Regenerate the answer for a single card using fresh data.
+ */
+window.regenerateQAAnswer = function(idx) {
+    const item = qaGeneratedAnswers[idx];
+    if (!item) return;
+    chrome.storage.local.get(['autofillProfile', 'parsedResume'], (data) => {
+        const profile = buildQAProfile(data.autofillProfile || {});
+        const resumeData = data.parsedResume || {};
+        const result = SmartAnswerEngine.generate(item.question, resumeData, profile);
+        const ta = document.getElementById(`qa-answer-${idx}`);
+        if (ta) {
+            ta.value = result.answer;
+            qaGeneratedAnswers[idx].answer = result.answer;
+        }
+    });
+};
+
+/**
+ * Scan the current tab for application questions and generate answers.
+ */
+async function scanQuestionsFromPage() {
+    const btn       = document.getElementById('scanQuestionsBtn');
+    const statusEl  = document.getElementById('qaStatus');
+    const container = document.getElementById('qaCardsContainer');
+    const emptyState = document.getElementById('qaEmptyState');
+    const actionsBar = document.getElementById('qaActionsBar');
+
+    // Reset
+    container.style.display = 'none';
+    actionsBar.style.display = 'none';
+    emptyState.style.display = 'none';
+    statusEl.style.display = 'block';
+    statusEl.style.background = '#eff6ff';
+    statusEl.style.color = '#1d4ed8';
+    statusEl.style.border = '1px solid #bfdbfe';
+    statusEl.textContent = '🔍 Scanning page for questions...';
+    btn.disabled = true;
+    btn.textContent = '⏳ Scanning...';
+
+    try {
+        // Get active tab
+        const [tab] = await new Promise(resolve =>
+            chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+        );
+
+        if (!tab) throw new Error('No active tab found');
+
+        // Send message to content script
+        const response = await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { type: 'DETECT_QUESTIONS' }, (res) => {
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                } else {
+                    resolve(res);
+                }
+            });
+        });
+
+        if (!response || !response.success) {
+            throw new Error(response?.message || 'Failed to detect questions');
+        }
+
+        const questions = response.questions || [];
+
+        if (questions.length === 0) {
+            statusEl.style.background = '#fff7ed';
+            statusEl.style.color = '#92400e';
+            statusEl.style.border = '1px solid #fed7aa';
+            statusEl.textContent = '⚠️ No open-ended questions found on this page. Try navigating to an application form.';
+            emptyState.style.display = 'block';
+            return;
+        }
+
+        statusEl.textContent = `⚙️ Generating answers for ${questions.length} question${questions.length > 1 ? 's' : ''}...`;
+
+        // Load resume data + profile from storage
+        const stored = await new Promise(resolve =>
+            chrome.storage.local.get(['autofillProfile', 'parsedResume'], resolve)
+        );
+
+        const profile    = buildQAProfile(stored.autofillProfile || {});
+        const resumeData = stored.parsedResume || {};
+
+        // Generate answers via SmartAnswerEngine
+        const results = SmartAnswerEngine.generateAll(questions, resumeData, profile);
+
+        statusEl.style.background = '#f0fdf4';
+        statusEl.style.color = '#166534';
+        statusEl.style.border = '1px solid #bbf7d0';
+        statusEl.textContent = `✅ ${results.length} answer${results.length > 1 ? 's' : ''} generated — review and approve below`;
+
+        renderQACards(results);
+
+    } catch (err) {
+        console.error('[QA] Scan error:', err);
+        statusEl.style.background = '#fef2f2';
+        statusEl.style.color = '#991b1b';
+        statusEl.style.border = '1px solid #fecaca';
+        if (err.message.includes('Could not establish connection') || err.message.includes('No tab')) {
+            statusEl.textContent = '⚠️ Could not reach the page. Make sure you are on a job application page (not a chrome:// URL).';
+        } else {
+            statusEl.textContent = '❌ Error: ' + err.message;
+        }
+        emptyState.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Scan Page for Questions';
+    }
+}
+
+/**
+ * Fill all approved answers into the page fields.
+ */
+async function fillApprovedAnswers() {
+    const btn = document.getElementById('fillApprovedBtn');
+    const statusEl = document.getElementById('qaStatus');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Filling...';
+    statusEl.style.display = 'block';
+    statusEl.style.background = '#eff6ff';
+    statusEl.style.color = '#1d4ed8';
+    statusEl.style.border = '1px solid #bfdbfe';
+    statusEl.textContent = '✍️ Filling approved answers into the page...';
+
+    try {
+        // Collect approved answers (check button state + get current textarea value)
+        const approved = qaGeneratedAnswers
+            .map((item, idx) => {
+                const approveBtn = document.getElementById(`qa-approve-${idx}`);
+                const textarea   = document.getElementById(`qa-answer-${idx}`);
+                const isApproved = approveBtn?.dataset.approved === 'true';
+                return isApproved ? { fieldIndex: item.fieldIndex, answer: textarea?.value || item.answer } : null;
+            })
+            .filter(Boolean);
+
+        if (approved.length === 0) {
+            statusEl.style.background = '#fff7ed';
+            statusEl.style.color = '#92400e';
+            statusEl.style.border = '1px solid #fed7aa';
+            statusEl.textContent = '⚠️ No approved answers. Click ✅ Approved on the answers you want to fill.';
+            return;
+        }
+
+        const [tab] = await new Promise(resolve =>
+            chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+        );
+
+        const response = await new Promise((resolve, reject) => {
+            chrome.tabs.sendMessage(tab.id, { type: 'FILL_ANSWERS', answers: approved }, (res) => {
+                if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+                else resolve(res);
+            });
+        });
+
+        if (response?.success) {
+            statusEl.style.background = '#f0fdf4';
+            statusEl.style.color = '#166534';
+            statusEl.style.border = '1px solid #bbf7d0';
+            statusEl.textContent = `🎉 Successfully filled ${response.filled} answer${response.filled !== 1 ? 's' : ''} on the page!`;
+        } else {
+            throw new Error(response?.message || 'Fill failed');
+        }
+    } catch (err) {
+        console.error('[QA] Fill error:', err);
+        statusEl.style.background = '#fef2f2';
+        statusEl.style.color = '#991b1b';
+        statusEl.style.border = '1px solid #fecaca';
+        statusEl.textContent = '❌ Error filling answers: ' + err.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '✅ Fill Approved Answers';
+    }
+}
+
+/**
+ * Wire up the Q&A tab buttons once DOM is ready.
+ */
+function initQATab() {
+    const scanBtn   = document.getElementById('scanQuestionsBtn');
+    const fillBtn   = document.getElementById('fillApprovedBtn');
+    const rescanBtn = document.getElementById('rescanBtn');
+
+    if (scanBtn)   scanBtn.addEventListener('click',   scanQuestionsFromPage);
+    if (fillBtn)   fillBtn.addEventListener('click',   fillApprovedAnswers);
+    if (rescanBtn) rescanBtn.addEventListener('click', scanQuestionsFromPage);
+
+    console.log('[QA] Smart Q&A tab initialized');
+}
+
+// Initialize Q&A tab when popup loads
+document.addEventListener('DOMContentLoaded', () => {
+    // Delay slightly to let other init code run first
+    setTimeout(initQATab, 300);
+});

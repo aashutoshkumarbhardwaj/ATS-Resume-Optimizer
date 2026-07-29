@@ -33,6 +33,8 @@
         "http://*/*"
       ],
       "js": [
+        "src/contentScript/QuestionExtractionEngine.js",
+        "src/contentScript/BrowserAutomationModule.js",
         "src/contentScript/ApplicationUnderstandingEngine.js",
         "src/contentScript/IntelligentFormFiller.js",
         "src/contentScript/floatingButtonManager.js",

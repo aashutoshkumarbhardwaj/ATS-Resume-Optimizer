@@ -73,12 +73,14 @@ window.UnifiedAutofillButton = class {
             // Create styles
             const style = document.createElement('style');
             style.textContent = `
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
                 :host {
                     position: fixed;
                     bottom: 20px;
                     right: 20px;
                     z-index: 2147483647;
-                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    font-family: 'Inter', sans-serif;
                 }
                 
                 .button-wrapper {
@@ -93,26 +95,29 @@ window.UnifiedAutofillButton = class {
                     align-items: center;
                     gap: 8px;
                     padding: 12px 18px;
-                    background: linear-gradient(135deg, #4A90E2 0%, #357ABD 100%);
+                    background: #99462a; /* primary */
                     color: white;
-                    border: none;
-                    border-radius: 50px;
+                    border: 1px solid #d1cdc7; /* pencil-grey */
+                    border-radius: 4px 6px 3px 5px; /* organic radius */
                     cursor: pointer;
                     font-size: 13px;
                     font-weight: 600;
-                    box-shadow: 0 4px 12px rgba(74, 144, 226, 0.3);
-                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                    transition: all 0.2s ease;
                     user-select: none;
                     white-space: nowrap;
+                    letter-spacing: 0.05em;
+                    text-transform: uppercase;
                 }
                 
                 .autofill-btn:hover {
+                    background: #d97757; /* primary-container */
+                    color: #541400; /* on-primary-container */
                     transform: translateY(-2px);
-                    box-shadow: 0 6px 16px rgba(74, 144, 226, 0.4);
+                    border-width: 1.5px;
                 }
                 
                 .autofill-btn:active {
-                    transform: translateY(0);
+                    transform: scale(0.98);
                 }
                 
                 .autofill-btn.loading {
@@ -121,13 +126,14 @@ window.UnifiedAutofillButton = class {
                 }
                 
                 .autofill-btn.success {
-                    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-                    box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+                    background: #596245; /* secondary (sage) */
+                    color: white;
+                    border-color: #5d6648;
                 }
                 
                 .autofill-btn.error {
-                    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-                    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+                    background: #ba1a1a; /* error */
+                    color: white;
                 }
                 
                 .btn-icon {

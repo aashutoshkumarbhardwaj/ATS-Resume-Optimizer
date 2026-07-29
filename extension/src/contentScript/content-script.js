@@ -471,6 +471,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             return true;
         }
+    } else if (request.type === 'DETECT_QUESTIONS') {
+        // Scan page for open-ended application questions
+        try {
+            const questions = detectApplicationQuestions();
+            sendResponse({ success: true, questions });
+        } catch (err) {
+            sendResponse({ success: false, questions: [], message: err.message });
+        }
+        return false;
+
+    } else if (request.type === 'FILL_ANSWERS') {
+        // Fill approved answers into their fields robustly
+        (async () => {
+            try {
+                const answers = request.answers || [];
+                const mapping = [];
+                
+                answers.forEach(({ fieldIndex, answer, id }) => {
+                    const el = window.__qaDetectedFields?.[fieldIndex];
+                    if (el && answer) {
+                        mapping.push({ element: el, answer, id });
+                    }
+                });
+
+                if (mapping.length > 0) {
+                    const automator = new BrowserAutomationModule();
+                    const results = await automator.fillBatch(mapping, (curr, total, status) => {
+                        console.log(`[Content] Q&A Fill Progress: ${curr}/${total} - ${status}`);
+                        // We could send a progress message back here if needed
+                    });
+                    sendResponse({ success: true, filled: results.filled, details: results });
+                } else {
+                    sendResponse({ success: true, filled: 0 });
+                }
+            } catch (err) {
+                console.error('[Content] Error in FILL_ANSWERS:', err);
+                sendResponse({ success: false, filled: 0, message: err.message });
+            }
+        })();
+        return true; // Keep message channel open for async response
+
     } else {
         // Unknown message type - log it but don't error
         console.log('[Content] ℹ️ Received unknown message type:', request.type);
@@ -478,6 +519,112 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return false;
     }
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Smart Q&A: Question Detection + Field Filling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Question-like label patterns
+ */
+const QUESTION_LABEL_PATTERNS = [
+    /\?$/,
+    /\bwhy\b/i, /\bhow\b/i, /\bdescribe\b/i, /\btell us\b/i, /\bexplain\b/i,
+    /\bwhat.{0,20}(experience|skills|background|motivat|bring)/i,
+    /\bplease (share|provide|describe|tell)/i,
+    /\bcover letter\b/i, /\badditional.{0,15}(information|comment)/i,
+    /\bsalary\b/i, /\bnotice period\b/i, /\bavailability\b/i,
+    /\bachievement\b/i, /\bstrength\b/i, /\bweakness\b/i,
+    /\bgoal\b/i, /\bself.?introduc/i
+];
+
+/**
+ * Returns the label text for a form field element.
+ * Checks: <label for=id>, aria-label, placeholder, preceding sibling/parent text.
+ */
+function getLabelForField(el) {
+    // 1. <label for="id">
+    if (el.id) {
+        const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (label) return label.textContent.trim();
+    }
+    // 2. aria-label / aria-labelledby
+    if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
+    if (el.getAttribute('aria-labelledby')) {
+        const ref = document.getElementById(el.getAttribute('aria-labelledby'));
+        if (ref) return ref.textContent.trim();
+    }
+    // 3. placeholder
+    if (el.placeholder && el.placeholder.length > 5) return el.placeholder.trim();
+    // 4. Closest wrapping label
+    const wrappingLabel = el.closest('label');
+    if (wrappingLabel) return wrappingLabel.textContent.replace(el.value || '', '').trim();
+    // 5. Preceding sibling or parent text (up to 3 levels)
+    let parent = el.parentElement;
+    for (let i = 0; i < 4 && parent; i++) {
+        // Prefer a <label>, <p>, <span>, <h*> sibling that comes before
+        const siblings = Array.from(parent.children);
+        const myIdx = siblings.indexOf(el);
+        for (let j = myIdx - 1; j >= Math.max(0, myIdx - 3); j--) {
+            const sib = siblings[j];
+            if (sib && /^(LABEL|P|SPAN|H[1-6]|DIV|LI)$/.test(sib.tagName)) {
+                const txt = sib.textContent.trim();
+                if (txt.length > 4 && txt.length < 250) return txt;
+            }
+        }
+        parent = parent.parentElement;
+    }
+    return '';
+}
+
+/**
+ * Detect all open-ended question fields on the current page.
+ * Returns array of { question, fieldIndex, tagName, placeholder, ... }
+ * and stores field elements in window.__qaDetectedFields for later filling.
+ */
+function detectApplicationQuestions() {
+    window.__qaDetectedFields = window.__qaDetectedFields || [];
+    window.__qaDetectedFields = []; // Reset
+    
+    let questions = [];
+    
+    try {
+        const engine = new QuestionExtractionEngine();
+        questions = engine.extractAll();
+    } catch (e) {
+        console.error('[Content] Error running QuestionExtractionEngine:', e);
+        return [];
+    }
+
+    const results = [];
+    
+    questions.forEach((q, idx) => {
+        // Skip fields that are already filled with substantial content (>20 chars)
+        if ((q.element.value || '').trim().length > 20) return;
+        
+        const fieldIndex = window.__qaDetectedFields.length;
+        window.__qaDetectedFields.push(q.element);
+        
+        results.push({
+            id: q.id,
+            question: q.questionText,
+            fieldIndex,
+            tagName: q.fieldType,
+            placeholder: q.placeholder,
+            helpText: q.helpText,
+            required: q.required,
+            maxLength: q.maxLength,
+            sectionHeading: q.sectionHeading,
+            nearbyLabels: q.nearbyLabels,
+            validationHints: q.validationHints
+        });
+    });
+
+    console.log(`[Content] Q&A: Detected ${results.length} question field(s) using Extraction Engine`);
+    return results;
+}
+
+// fillAnswerIntoField replaced by BrowserAutomationModule
 
 /**
  * Detect and extract job description from the current page using adaptive heuristics

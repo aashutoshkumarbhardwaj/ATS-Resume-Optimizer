@@ -47,7 +47,7 @@ class ResumeAnalyzer {
 
         // Parse resume and job description
         const resumeData = ResumeParser.parse(resumeText);
-        const jobData = JobDescriptionParser.parse(jobDescription);
+        const jobData = await JobDescriptionParser.parse(jobDescription);
 
         // Perform enhanced keyword matching
         const keywordMatch = this.keywordMatcher.matchKeywords(resumeText, jobDescription);

@@ -10,7 +10,7 @@ class JobDescriptionParser {
     /**
      * Parse job description into structured data with caching
      */
-    static parse(jobDescription) {
+    static async parse(jobDescription) {
         if (!jobDescription || typeof jobDescription !== 'string') {
             throw new Error('Invalid job description: must be a non-empty string');
         }
@@ -34,7 +34,7 @@ class JobDescriptionParser {
         const cacheKey = 'job_' + crypto.createHash('md5').update(trimmed).digest('hex');
         
         // Check cache first
-        const cached = cache.get(cacheKey);
+        const cached = await cache.get(cacheKey);
         if (cached) {
             console.log('Job description retrieved from cache');
             return cached;
@@ -55,7 +55,7 @@ class JobDescriptionParser {
         };
 
         // Cache the result for 1 hour
-        cache.set(cacheKey, result, 60 * 60 * 1000);
+        await cache.set(cacheKey, result, 60 * 60 * 1000);
 
         return result;
     }

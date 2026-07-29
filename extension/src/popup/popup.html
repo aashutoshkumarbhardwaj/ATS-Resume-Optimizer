@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Resume Fixer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400..600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -252,9 +255,8 @@
                 <div id="errorMessage" class="error-message hidden"></div>
             </div>
 
-            <!-- Job Tracking Tab (move to Account) -->
-            <!-- AI Hub Tab (Personal Answer Library) -->
-            <div id="accountTab" class="tab-content">
+            <!-- Answer Library Tab -->
+            <div id="answerLibraryTab" class="tab-content">
                 <!-- AI Hub Main Panel -->
                 <div class="panel">
                     <h3>💡 Answer Library</h3>
@@ -336,13 +338,50 @@
                 </div>
             </div>
 
+
             <!-- Settings Tab -->
-            <!-- Settings Tab -->
+
             <div id="aiTab" class="tab-content">
                 <div class="panel">
-                    <h3>⚙️ Settings & Controls</h3>
+                    <h3>💡 Smart Answers</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 14px; line-height: 1.5;">
+                        Scan the current page for open-ended questions. We'll generate grounded, ≤100-word answers from your resume and profile. Review each one before filling.
+                    </p>
 
-                    <!-- Job Orbit Login -->
+                    <!-- Scan Button -->
+                    <button id="scanQuestionsBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 14px;">
+                        🔍 Scan Page for Questions
+                    </button>
+
+                    <!-- Status -->
+                    <div id="qaStatus" style="display:none; padding: 10px 12px; border-radius: 6px; font-size: 11px; margin-bottom: 12px;"></div>
+
+                    <!-- Empty state -->
+                    <div id="qaEmptyState" style="text-align: center; padding: 24px 16px; color: #aaa;">
+                        <div style="font-size: 32px; margin-bottom: 8px;">🤖</div>
+                        <p style="font-size: 12px; margin: 0;">Click Scan to detect questions on this career page</p>
+                    </div>
+
+                    <!-- Question Cards -->
+                    <div id="qaCardsContainer" style="display:none; margin-bottom: 12px;"></div>
+
+                    <!-- Fill All Button -->
+                    <div id="qaActionsBar" style="display:none;">
+                        <div style="display: flex; gap: 8px;">
+                            <button id="fillApprovedBtn" class="btn btn-primary" style="flex: 1;">✅ Fill Approved Answers</button>
+                            <button id="rescanBtn" class="btn btn-secondary" style="flex: 1;">🔄 Re-scan</button>
+                        </div>
+                        <p id="qaFillCount" style="font-size: 10px; color: #888; text-align: center; margin-top: 6px;"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab (account) -->
+            <div id="accountTab" class="tab-content">
+                <div class="panel">
+                    <h3>⚙️ Settings &amp; Controls</h3>
+
+
                     <div id="jobOrbitLoginSection" style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
                         <h4 style="margin-top: 0; font-size: 13px; color: #333;">🌐 Job Orbit Connection</h4>
                         
@@ -541,6 +580,17 @@
                             <textarea id="answer_hire_you" placeholder="What makes you a great fit?..." style="min-height: 60px; resize: vertical;"></textarea>
                         </div>
 
+                        <div class="form-section-title" style="margin-top: 16px;">🧠 Q&A Profile (used for smart answer generation)</div>
+                        <div class="form-group">
+                            <label for="key_strength">Your Key Strength</label>
+                            <input type="text" id="key_strength" placeholder="e.g. Problem-solving + strong attention to detail">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="why_interested">Why interested in this field / role?</label>
+                            <textarea id="why_interested" placeholder="Briefly explain your motivation for this type of role (used to answer 'Why us?' questions)..." style="min-height: 60px; resize: vertical;"></textarea>
+                        </div>
+
                         <div class="form-section-title" style="margin-top: 16px;">⚙️ Job Preferences</div>
                         <div class="form-group">
                             <label for="work_environment">Work Environment</label>
@@ -641,6 +691,7 @@
     <script src="../utils/SessionManager.js"></script>
     <script src="../utils/ProfileSyncManager.js"></script>
     <script src="../utils/DataSyncManager.js"></script>
+    <script src="../utils/smartAnswerEngine.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
