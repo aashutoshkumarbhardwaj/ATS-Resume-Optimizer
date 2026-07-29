@@ -80,8 +80,13 @@ class TokenRefreshScheduler {
 
             console.log('[TokenRefresh] Time to expiry:', Math.round(timeToExpiry / 1000), 'seconds');
 
+            console.log('[AUTH] Current expiresAt:', session.expiresAt);
+            console.log('[AUTH] Current Date.now():', now);
+            console.log('[AUTH] Calculated timeToExpiry:', timeToExpiry);
+
             // If expires in < 10 minutes, refresh now
             if (timeToExpiry < timeToRefresh) {
+                console.log('[AUTH] Refresh starts: YES');
                 console.log('[TokenRefresh] ⚠️ Token expiring soon, refreshing...');
                 await this.refreshToken(session);
             } else {
@@ -112,11 +117,16 @@ class TokenRefreshScheduler {
             });
 
             if (!response.ok) {
-                console.error('[TokenRefresh] ❌ Refresh failed (HTTP', response.status + ')');
+                const responseBody = await response.text().catch(() => 'Failed to read body');
+                console.error('[AUTH] Backend response HTTP:', response.status);
+                console.error('[AUTH] Backend response body:', responseBody);
                 
                 if (response.status === 401 || response.status === 403) {
+                    console.log('[AUTH] clearSession() executes: YES');
                     console.log('[TokenRefresh] Token invalid, logging out...');
                     await this.clearSession();
+                } else {
+                    console.log('[AUTH] clearSession() executes: NO');
                 }
                 this.isRefreshing = false;
                 return;
@@ -192,6 +202,10 @@ class TokenRefreshScheduler {
      * Clear session (logout)
      */
     async clearSession() {
+        console.warn("[AUTH] Session deletion");
+        console.trace();
+        const stored = await new Promise(r => chrome.storage.local.get(null, r));
+        console.log("[AUTH] Storage before deletion:", stored);
         return new Promise(resolve => {
             const keys = ['jobOrbitSession', 'jobOrbitAuth', 'extensionToken', 'expiresAt', 'isLoggedIn'];
             chrome.storage.sync.remove(keys, () => {

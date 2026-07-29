@@ -505,6 +505,10 @@ class AuthManager {
     async logout() {
         try {
             console.log('[AuthManager] 🚪 Logging out...');
+            console.warn("[AUTH] Session deletion initiated from AuthManager.logout");
+            console.trace();
+            const stored = await new Promise(r => chrome.storage.local.get(null, r));
+            console.log("[AUTH] Storage before deletion:", stored);
 
             return new Promise((resolve) => {
                 const keysToRemove = Object.values(this.STORAGE_KEYS);

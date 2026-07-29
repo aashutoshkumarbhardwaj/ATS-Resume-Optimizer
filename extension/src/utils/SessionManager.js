@@ -47,53 +47,71 @@ class SessionManager {
             console.log("SESSION OBJECT:");
             console.log(session);
             
+            console.log('[AUTH] Input payload:', authData);
+            console.log('[AUTH] Final session object:', session);
+            try {
+                const jsonStr = JSON.stringify(session);
+                console.log('[AUTH] JSON size:', jsonStr.length, 'bytes');
+                console.log('[AUTH] JSON.stringify(session):', jsonStr);
+            } catch (jsonErr) {
+                console.error('[AUTH] Session object is NOT serializable:', jsonErr);
+            }
+            
             // Save to both sync and local storage
-            return new Promise((resolve) => {
-                const dataToSave = {
-                    jobOrbitSession: session,
-                    jobOrbitAuth: {
-                        extensionToken: session.extensionToken,
-                        user: session.user,
-                        expiresAt: session.expiresAt,
-                        receivedAt: session.createdAt
-                    }
-                };
+            const jobOrbitAuth = {
+                extensionToken: session.extensionToken,
+                user: session.user,
+                expiresAt: session.expiresAt,
+                receivedAt: session.createdAt
+            };
+            
+            // Log the exact object being written to storage
+            console.log('[SessionManager] Writing exact object to storage:', { jobOrbitSession: session, jobOrbitAuth });
 
-                const logSavedSession = () => {
-                    chrome.storage.sync.get(["jobOrbitSession"], (r) => {
-                        console.log("SYNC AFTER SAVE:", r);
-                    });
-
-                    chrome.storage.local.get(["jobOrbitSession"], (r) => {
-                        console.log("LOCAL AFTER SAVE:", r);
-                    });
-                };
-                
-                // Save to sync storage (primary)
-                chrome.storage.sync.set(dataToSave, () => {
-                    if (chrome.runtime.lastError) {
-                        console.warn('[SessionManager] ⚠️ Sync storage failed, using local');
-                        chrome.storage.local.set(dataToSave, () => {
-                            console.log('[SessionManager] ✅ Session created in local storage');
-                            logSavedSession();
-                            resolve({ success: true, stored: 'local' });
-                        });
-                    } else {
-                        // Also backup to local
-                        chrome.storage.local.set(dataToSave, () => {
-                            console.log('[SessionManager] ✅ Session created in sync + local storage');
-                            logSavedSession();
-                            resolve({ success: true, stored: 'sync+local' });
-                        });
-                    }
-                });
+        // Save ONLY auth info to sync storage to respect 8KB quota
+        chrome.storage.sync.set({ jobOrbitAuth }, () => {
+          if (chrome.runtime.lastError) {
+            console.warn('[SessionManager] ⚠️ Sync storage failed:', chrome.runtime.lastError.message)
+          } else {
+            console.log('[SessionManager] ✅ Auth stored in sync storage')
+          }
+        })
+        
+        try {
+            // Save FULL session (with heavy cached profiles/resumes) to LOCAL storage exclusively
+            // Awaiting this directly surfaces any DataCloneError or QuotaExceededError
+            await chrome.storage.local.set({ jobOrbitSession: session, jobOrbitAuth });
+            
+            const stored = await chrome.storage.local.get(null);
+            console.log("=========================================");
+            console.log("[AUTH] Storage Immediately After Save", stored);
+            console.log("=========================================");
+            
+            // Read-after-write verification
+            const verifyResult = await chrome.storage.local.get(['jobOrbitSession', 'jobOrbitAuth']);
+            console.log('[SessionManager] 🔍 Read-after-write verification:', {
+                hasSession: !!verifyResult.jobOrbitSession,
+                hasAuth: !!verifyResult.jobOrbitAuth,
+                authKeys: Object.keys(verifyResult.jobOrbitAuth || {})
             });
-        } catch (e) {
-            console.error("CREATE SESSION FAILED");
-            console.error(e);
-            return { success: false, error: e.message };
+            
+            if (!verifyResult.jobOrbitSession || !verifyResult.jobOrbitAuth) {
+                console.error('[SessionManager] ❌ Storage verification failed! Data was not persisted.');
+                return { success: false, error: 'Storage verification failed' };
+            } else {
+                console.log('[SessionManager] ✅ Full session created and verified in local storage');
+                return { success: true, stored: 'local' };
+            }
+        } catch (localErr) {
+            console.error('[SessionManager] ❌ Local storage threw an exception:', localErr);
+            return { success: false, error: localErr.message || String(localErr) };
         }
+    } catch (e) {
+        console.error("CREATE SESSION FAILED");
+        console.error(e);
+        return { success: false, error: e.message };
     }
+}
 
     /**
      * Get current session
@@ -102,26 +120,15 @@ class SessionManager {
         return new Promise((resolve) => {
             console.log('[SessionManager] 🔍 Retrieving session...');
             
-            // Try sync storage first
-            chrome.storage.sync.get(['jobOrbitSession', 'jobOrbitAuth'], (syncResult) => {
-                if (syncResult.jobOrbitSession) {
-                    console.log('[SessionManager] ✅ Session found in sync storage');
-                    resolve({ success: true, session: syncResult.jobOrbitSession, source: 'sync' });
-                    return;
+            // Session with heavy data is exclusively in local storage
+            chrome.storage.local.get(['jobOrbitSession'], (localResult) => {
+                if (localResult.jobOrbitSession) {
+                    console.log('[SessionManager] ✅ Session found in local storage');
+                    resolve({ success: true, session: localResult.jobOrbitSession, source: 'local' });
+                } else {
+                    console.log('[SessionManager] ❌ No session found in local storage');
+                    resolve({ success: false, session: null, source: 'none' });
                 }
-                
-                // Fallback to local storage
-                chrome.storage.local.get(['jobOrbitSession', 'jobOrbitAuth'], (localResult) => {
-                    if (localResult.jobOrbitSession) {
-                        console.log('[SessionManager] ✅ Session found in local storage');
-                        // Sync to sync storage
-                        chrome.storage.sync.set({ jobOrbitSession: localResult.jobOrbitSession });
-                        resolve({ success: true, session: localResult.jobOrbitSession, source: 'local' });
-                    } else {
-                        console.log('[SessionManager] ❌ No session found');
-                        resolve({ success: false, session: null, source: 'none' });
-                    }
-                });
             });
         });
     }
@@ -332,6 +339,10 @@ class SessionManager {
      * Clear session (logout)
      */
     static async clearSession() {
+        console.warn("[AUTH] Session deletion");
+        console.trace();
+        const stored = await chrome.storage.local.get(null);
+        console.log("[AUTH] Storage before deletion:", stored);
         console.log('[SessionManager] 🗑️ Clearing session (logout)...');
         
         return new Promise((resolve) => {

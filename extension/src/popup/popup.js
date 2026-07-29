@@ -176,7 +176,15 @@ function setElementValue(element, value) {
 }
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // DIAGNOSTIC INSTRUMENTATION: Log full storage on popup open
+    const initialStorage = await new Promise(r => chrome.storage.local.get(null, r));
+    console.log("========== POPUP OPEN ==========");
+    console.log("[AUTH] Full Storage on Popup Open:", initialStorage);
+    console.log("================================");
+    
+    // Check if we need to show guest mode overlay
+    // initializeGuestModeOverlay(); // Function is not defined
     initializeDOMElements();
     init();
     setupAutoClose();
@@ -1803,18 +1811,20 @@ const autoSaveResumeText = debounce((value) => {
     chrome.storage.local.set({ resumeText: value });
 }, 500);
 
-// Add auto-save listeners
-if (elements.jobDescription) {
-    elements.jobDescription.addEventListener('input', (e) => {
-        autoSaveJobDescription(e.target.value);
-    });
-}
+// Add auto-save listeners after DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    if (elements && elements.jobDescription) {
+        elements.jobDescription.addEventListener('input', (e) => {
+            autoSaveJobDescription(e.target.value);
+        });
+    }
 
-if (elements.resumeText) {
-    elements.resumeText.addEventListener('input', (e) => {
-        autoSaveResumeText(e.target.value);
-    });
-}
+    if (elements && elements.resumeText) {
+        elements.resumeText.addEventListener('input', (e) => {
+            autoSaveResumeText(e.target.value);
+        });
+    }
+});
 
 /**
  * Lazy Loading for Heavy Components

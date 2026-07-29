@@ -114,10 +114,12 @@ class StorageConsolidation {
         });
     }
 
-    /**
-     * Clear session from storage
-     */
     static async clearSession() {
+        console.warn("[AUTH] Session deletion initiated from StorageConsolidation.clearSession");
+        console.trace();
+        const stored = await new Promise(r => chrome.storage.local.get(null, r));
+        console.log("[AUTH] Storage before deletion:", stored);
+
         return new Promise((resolve) => {
             const keys = [this.AUTHORITATIVE_KEY, ...this.DEPRECATED_KEYS];
 
@@ -236,9 +238,14 @@ class StorageConsolidation {
 
                     // If we have duplicates and authoritative exists, clean up
                     if (report.hasLegacy && report.authoritative) {
-                        console.log('[StorageConsolidation] 🧹 Cleaning up duplicate keys:', report.duplicates);
-                        chrome.storage.sync.remove(report.duplicates);
-                        chrome.storage.local.remove(report.duplicates);
+                        console.warn("[AUTH] Session deletion");
+                        console.trace();
+                        chrome.storage.local.get(null, (stored) => {
+                            console.log("[AUTH] Storage before deletion:", stored);
+                            console.log('[StorageConsolidation] 🧹 Cleaning up duplicate keys:', report.duplicates);
+                            chrome.storage.sync.remove(report.duplicates);
+                            chrome.storage.local.remove(report.duplicates);
+                        });
                     }
 
                     resolve(report);

@@ -52,7 +52,8 @@ class TokenVerifier {
             if (!response.ok) {
                 const errorText = await response.text();
                 console.log('[TokenVerifier] ❌ Token invalid (HTTP', response.status + ')');
-                console.log('[TokenVerifier] Error response:', errorText.substring(0, 200));
+                console.log('[TokenVerifier] JWT Type/Prefix:', 'Bearer');
+                console.log('[TokenVerifier] Error response:', errorText);
                 return {
                     valid: false,
                     reason: 'INVALID_TOKEN',
@@ -153,7 +154,12 @@ class TokenVerifier {
     /**
      * Clear stored token
      */
-    static clearToken() {
+    static async clearToken() {
+        console.warn("[AUTH] Session deletion initiated from TokenVerifier.clearToken");
+        console.trace();
+        const stored = await new Promise(r => chrome.storage.local.get(null, r));
+        console.log("[AUTH] Storage before deletion:", stored);
+        
         return new Promise((resolve) => {
             chrome.storage.sync.remove(['jobOrbitAuth'], () => {
                 chrome.storage.local.remove(['jobOrbitAuth'], () => {

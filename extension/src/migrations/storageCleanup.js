@@ -154,10 +154,15 @@ class StorageCleanup {
                     chrome.storage.sync.set(consolidatedData, () => {
                         chrome.storage.local.set(consolidatedData, () => {
                             // Remove old keys
-                            chrome.storage.sync.remove(keysToRemove, () => {
-                                chrome.storage.local.remove(keysToRemove, () => {
-                                    console.log('[StorageCleanup] Auth data consolidated to jobOrbitSession');
-                                    resolve();
+                            chrome.storage.local.get(null, (stored) => {
+                                console.warn("[AUTH] Session deletion");
+                                console.trace();
+                                console.log("[AUTH] Storage before deletion:", stored);
+                                chrome.storage.sync.remove(keysToRemove, () => {
+                                    chrome.storage.local.remove(keysToRemove, () => {
+                                        console.log('[StorageCleanup] Auth data consolidated to jobOrbitSession');
+                                        resolve();
+                                    });
                                 });
                             });
                         });

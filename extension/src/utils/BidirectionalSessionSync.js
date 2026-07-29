@@ -115,6 +115,10 @@ class BidirectionalSessionSync {
      */
     static async handleLogoutRequest() {
         try {
+            console.warn("[AUTH] Session deletion");
+            console.trace();
+            const stored = await chrome.storage.local.get(null);
+            console.log("[AUTH] Storage before deletion:", stored);
             console.log('[Session Sync] Website logout detected, syncing...');
             
             // Clear tokens
@@ -209,6 +213,10 @@ class BidirectionalSessionSync {
      */
     static async notifyWebsiteOfLogout() {
         try {
+            console.warn("[AUTH] Session deletion");
+            console.trace();
+            const stored = await chrome.storage.local.get(null);
+            console.log("[AUTH] Storage before deletion:", stored);
             // Clear login signal
             await chrome.storage.local.remove('extension_login_signal');
 
