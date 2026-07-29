@@ -2788,7 +2788,36 @@ async function handleJobOrbitLogin() {
                 }
             }, 1500);
             
-            // Also listen for direct message in case popup stays open
+            // PRIMARY: Watch for URL change when JobOrbit redirects back with the token
+            // This is reliable because it doesn't depend on chrome.runtime.sendMessage
+            chrome.tabs.onUpdated.addListener(function onTabUpdated(tabId, changeInfo) {
+                if (tabId !== tab.id) return;
+                const url = changeInfo.url;
+                if (!url) return;
+                
+                console.log('[Popup] Auth tab URL changed:', url);
+                
+                if (url.includes('ext_status=connected') && url.includes('ext_token=')) {
+                    chrome.tabs.onUpdated.removeListener(onTabUpdated);
+                    try {
+                        const urlObj = new URL(url);
+                        const token = urlObj.searchParams.get('ext_token');
+                        const expiresIn = parseInt(urlObj.searchParams.get('ext_expires') || '86400');
+                        if (token) {
+                            console.log('[Popup] ✅ Token received via URL! Creating session...');
+                            SessionManager.createSession({
+                                extensionToken: token,
+                                expiresIn: expiresIn,
+                                user: null
+                            }).then(() => finish(true)).catch(e => finish(false, e.message));
+                        }
+                    } catch(e) {
+                        console.error('[Popup] Failed to parse token from URL:', e);
+                    }
+                }
+            });
+            
+            // FALLBACK: Also listen for direct messages in case popup stays open
             const messageListener = (request, sender, sendResponse) => {
                 if (request.type === 'JOBORBIT_AUTH_RESPONSE' || request.type === 'EXTENSION_TOKEN_RECEIVED') {
                     console.log('[Popup] Auth message received directly');
