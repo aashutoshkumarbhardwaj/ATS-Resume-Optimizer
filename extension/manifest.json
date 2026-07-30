@@ -1,0 +1,79 @@
+{
+  "manifest_version": 3,
+  "name": "Resume Fixer",
+  "version": "1.0.0",
+  "description": "Improve and optimize your resume based on job role requirements",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "webRequest",
+    "tabs",
+    "identity"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://job-orbit-flax.vercel.app/*",
+      "https://ats-resume-optimizer-359j.onrender.com/*",
+      "http://localhost:*/*"
+    ]
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "src/popup/popup.html",
+    "default_title": "Resume Fixer",
+    "default_icon": {
+      "16": "src/assets/icons/icon-16.png",
+      "48": "src/assets/icons/icon-48.png",
+      "128": "src/assets/icons/icon-128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "js": [
+        "src/contentScript/authReceiver.js",
+        "src/contentScript/QuestionExtractionEngine.js",
+        "src/contentScript/BrowserAutomationModule.js",
+        "src/contentScript/ApplicationUnderstandingEngine.js",
+        "src/contentScript/IntelligentFormFiller.js",
+        "src/contentScript/floatingButtonManager.js",
+        "src/contentScript/autofillOrchestrator.js",
+        "src/contentScript/content-script.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": {
+    "16": "src/assets/icons/icon-16.png",
+    "48": "src/assets/icons/icon-48.png",
+    "128": "src/assets/icons/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/assets/icons/*",
+        "src/assets/styles/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    },
+    {
+      "resources": [
+        "src/popup/popup.html"
+      ],
+      "matches": [
+        "https://job-orbit-flax.vercel.app/*"
+      ]
+    }
+  ]
+}
