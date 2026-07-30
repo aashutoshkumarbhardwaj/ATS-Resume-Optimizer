@@ -38,58 +38,6 @@ app.listen(PORT, () => {
     setImmediate(loadRoutes);
 });
 
-// ── Upload endpoint (inline, no extra service deps) ─────────────────────────
-const upload = multer({ dest: tempDir });
-
-app.post('/api/documents/upload', upload.single('file'), async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
-        const FileUploadService = require('./services/fileUploadService');
-        const result = await FileUploadService.extractText(req.file);
-        res.json({ success: true, data: result });
-    } catch (err) {
-        console.error('[Upload] Error:', err.message);
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-app.post('/api/resume/parse', async (req, res) => {
-    try {
-        const ResumeParser = require('./services/resumeParser');
-        const { resumeText } = req.body;
-        if (!resumeText) return res.status(400).json({ success: false, error: 'resumeText required' });
-        const parsed = ResumeParser.parse(resumeText);
-        res.json({ success: true, data: parsed });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-app.post('/api/analysis/analyze', async (req, res) => {
-    try {
-        if (req.telemetry) req.telemetry.startTrace('resumeAnalyzer.analyze', 'agent');
-        
-        const ResumeAnalyzer = require('./services/resumeAnalyzer');
-        const { resumeText, jobDescription } = req.body;
-        if (!resumeText || !jobDescription) {
-            if (req.telemetry) req.telemetry.recordError(new Error('resumeText and jobDescription required'), 'VALIDATION_ERROR');
-            return res.status(400).json({ success: false, error: 'resumeText and jobDescription required' });
-        }
-        const analyzer = new ResumeAnalyzer();
-        const result   = await analyzer.analyze(resumeText, jobDescription);
-        
-        if (req.telemetry) req.telemetry.endTrace('resumeAnalyzer.analyze');
-        
-        // Mock LLM Latency usage since backend uses heuristic currently
-        if (req.telemetry) req.telemetry.recordLLMCall(1420, 350, 42);
-
-        res.json({ success: true, ...result });
-    } catch (err) {
-        console.error('[Analyze] Error:', err.message);
-        if (req.telemetry) req.telemetry.recordError(err, 'ANALYZER_ERROR');
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
 
 // ── Async route loader (runs after server is already listening) ───────────────
 async function loadRoutes() {
