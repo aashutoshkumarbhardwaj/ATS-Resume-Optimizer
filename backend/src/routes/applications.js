@@ -164,13 +164,14 @@ router.post('/', async (req, res) => {
             });
         }
 
-        // Get profile to get profile_id
-        const profile = await supabaseService.getProfile(userId);
+        // Get profile to get profile_id (auto-create if missing)
+        let profile = await supabaseService.getProfile(userId).catch(() => null);
         if (!profile) {
-            return res.status(404).json({
-                success: false,
-                error: 'Profile not found'
-            });
+            try {
+                profile = await supabaseService.createProfile(userId, req.user?.email || 'user@joborbit.com', 'extension');
+            } catch (e) {
+                profile = { id: userId };
+            }
         }
 
         // Create application
