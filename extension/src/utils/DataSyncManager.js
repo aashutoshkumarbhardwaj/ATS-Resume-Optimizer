@@ -497,7 +497,14 @@ class DataSyncManager {
                     if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
                 } catch (e) {}
             }
-            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${apiKey}`;
+            const reqHeaders = {
+                'apikey': apiKey,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=representation'
+            };
+            if (isSupabaseJwt) {
+                reqHeaders['Authorization'] = `Bearer ${token}`;
+            }
 
             const jd = application.jobDescription || application.job_description || '';
             const existingNotes = application.notes || '';
@@ -505,12 +512,7 @@ class DataSyncManager {
 
             const response = await fetch(supabaseUrl, {
                 method: 'POST',
-                headers: {
-                    'apikey': apiKey,
-                    'Authorization': authHeader,
-                    'Content-Type': 'application/json',
-                    'Prefer': 'return=representation'
-                },
+                headers: reqHeaders,
                 body: JSON.stringify({
                     user_id: userId,
                     role: application.jobTitle || application.job_title || application.role || 'Unknown Position',

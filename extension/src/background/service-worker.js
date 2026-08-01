@@ -758,20 +758,23 @@ async function syncPendingApplications() {
                             if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
                         } catch (e) {}
                     }
-                    const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${apiKey}`;
                     
+                    const reqHeaders = {
+                        'apikey': apiKey,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    };
+                    if (isSupabaseJwt) {
+                        reqHeaders['Authorization'] = `Bearer ${token}`;
+                    }
+
                     const jd = history[i].jobDescription || history[i].job_description || '';
                     const existingNotes = history[i].notes || '';
                     const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
 
                     const response = await fetch(supabaseUrl, {
                         method: 'POST',
-                        headers: {
-                            'apikey': apiKey,
-                            'Authorization': authHeader,
-                            'Content-Type': 'application/json',
-                            'Prefer': 'return=representation'
-                        },
+                        headers: reqHeaders,
                         body: JSON.stringify({
                             user_id: userId,
                             role: history[i].jobTitle || history[i].job_title || history[i].role || 'Unknown Position',
