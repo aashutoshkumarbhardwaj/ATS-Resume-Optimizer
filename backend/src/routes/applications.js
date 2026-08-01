@@ -38,17 +38,32 @@ async function extractUserId(req) {
     throw new Error('Invalid token');
 }
 
-/**
- * Middleware: Authenticate extension or Supabase token
- */
 const authenticateExtensionOrSupabase = async (req, res, next) => {
-    try {
-        await authenticateRequest(req, res, () => {
-            next();
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({
+            success: false,
+            error: 'Missing or invalid authorization header'
         });
-    } catch (error) {
-        next();
     }
+
+    const token = authHeader.substring('Bearer '.length);
+
+    // 1. Try extension JWT first
+    try {
+        const verified = verifyExtensionToken(token);
+        req.user = {
+            id: verified.user_id || verified.userId || verified.sub,
+            email: verified.email || verified.user_email,
+            type: 'extension'
+        };
+        return next();
+    } catch (e) {
+        // Not an extension token, try Supabase token next
+    }
+
+    // 2. Try Supabase JWT
+    return authenticateRequest(req, res, next);
 };
 
 router.use(authenticateExtensionOrSupabase);
