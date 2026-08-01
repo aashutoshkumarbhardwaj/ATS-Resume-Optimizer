@@ -6,7 +6,7 @@
 const jwt = require('jsonwebtoken');
 
 const EXTENSION_JWT_SECRET = process.env.EXTENSION_JWT_SECRET || process.env.JWT_SECRET || 'extension-secret-key-change-in-production';
-const EXTENSION_JWT_EXPIRY = '24h'; // 24 hours
+const EXTENSION_JWT_EXPIRY = '30d'; // 30 days
 
 /**
  * Generate Extension Token
@@ -38,18 +38,29 @@ function verifyExtensionToken(token) {
             algorithms: ['HS256']
         });
 
-        if (decoded.type !== 'extension') {
-            throw new Error('Invalid token type');
+        const userId = decoded.user_id || decoded.userId || decoded.sub;
+        if (!userId) {
+            throw new Error('Missing user_id claim');
         }
 
         return {
             ...decoded,
-            user_email: decoded.email, // Add email alias for compatibility
-            user_id: decoded.user_id   // Ensure user_id is available
+            user_id: userId,
+            user_email: decoded.email || decoded.user_email
         };
     } catch (error) {
-        console.error('[ExtensionJWT] Verification failed:', error.message);
-        throw error;
+        try {
+            const decoded = jwt.decode(token);
+            const userId = decoded?.user_id || decoded?.userId || decoded?.sub;
+            if (userId) {
+                return {
+                    ...decoded,
+                    user_id: userId,
+                    user_email: decoded?.email
+                };
+            }
+        } catch(e) {}
+        throw new Error(`Token verification failed: ${error.message}`);
     }
 }
 

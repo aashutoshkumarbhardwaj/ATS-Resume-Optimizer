@@ -384,31 +384,68 @@ async function getApplications(userId, filters = {}) {
 /**
  * Create application
  */
-async function createApplication(profileId, applicationData) {
+async function createApplication(profileId, applicationData, userId = null) {
     try {
         const sb = getSupabaseClient();
-        const { data, error } = await sb
-            .from('applications')
-            .insert([
-                {
-                    profile_id: profileId,
-                    job_title: applicationData.jobTitle,
+        let createdData = null;
+        
+        // 1. Try to insert into Job Orbit's "jobs" table for dashboard visibility
+        if (userId) {
+            try {
+                const { data, error } = await sb.from('jobs').insert([{
+                    user_id: userId,
+                    role: applicationData.jobTitle,
                     company: applicationData.company,
-                    job_url: applicationData.jobUrl,
+                    url: applicationData.jobUrl,
                     job_description: applicationData.jobDescription,
                     location: applicationData.location,
                     salary: applicationData.salary,
                     status: applicationData.status || 'applied',
-                    resume_id: applicationData.resumeId,
                     notes: applicationData.notes,
-                    application_date: new Date().toISOString()
-                }
-            ])
-            .select()
-            .single();
+                    applied_date: new Date().toISOString(),
+                    source: applicationData.source || 'Extension',
+                    extension_saved: true
+                }]).select().single();
+                
+                if (error) throw error;
+                createdData = data;
+                console.log('[Supabase] Successfully synced to Job Orbit jobs table');
+            } catch (jobErr) {
+                console.warn('[Supabase] Could not sync to Job Orbit jobs table:', jobErr.message);
+                throw jobErr; // We want the extension to know it failed so it retries later
+            }
+        }
 
-        if (error) throw error;
-        return data;
+        // 2. Try to insert into ATS Resume Optimizer's "applications" table (Legacy)
+        try {
+            const { data, error } = await sb
+                .from('applications')
+                .insert([
+                    {
+                        profile_id: profileId,
+                        job_title: applicationData.jobTitle,
+                        company: applicationData.company,
+                        job_url: applicationData.jobUrl,
+                        job_description: applicationData.jobDescription,
+                        location: applicationData.location,
+                        salary: applicationData.salary,
+                        status: applicationData.status || 'applied',
+                        resume_id: applicationData.resumeId,
+                        notes: applicationData.notes,
+                        application_date: new Date().toISOString()
+                    }
+                ])
+                .select()
+                .single();
+
+            if (!error && !createdData) {
+                createdData = data;
+            }
+        } catch (appErr) {
+            console.warn('[Supabase] Legacy applications table insert failed:', appErr.message);
+        }
+
+        return createdData || {};
     } catch (error) {
         console.error('[Supabase] Create application error:', error);
         throw error;

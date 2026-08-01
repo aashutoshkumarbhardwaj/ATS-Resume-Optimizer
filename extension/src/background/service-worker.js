@@ -745,11 +745,9 @@ async function syncPendingApplications() {
         for (let i = 0; i < history.length; i++) {
             if (!history[i].synced) {
                 try {
-                    // Supabase REST API config
+                    // Supabase REST API config (Public Publishable key for browser extensions)
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
-                    const k1 = 'sb_secret_';
-                    const k2 = 'zknQ8ENKEnTZLTuIYGfawQ_bS9bln9l';
-                    const apiKey = k1 + k2;
+                    const publishableKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
                     
                     let isSupabaseJwt = false;
                     if (token && typeof token === 'string' && token.split('.').length === 3) {
@@ -760,7 +758,7 @@ async function syncPendingApplications() {
                     }
                     
                     const reqHeaders = {
-                        'apikey': apiKey,
+                        'apikey': publishableKey,
                         'Content-Type': 'application/json',
                         'Prefer': 'return=representation'
                     };
@@ -772,21 +770,49 @@ async function syncPendingApplications() {
                     const existingNotes = history[i].notes || '';
                     const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
 
-                    const response = await fetch(supabaseUrl, {
+                    const appData = {
+                        user_id: userId,
+                        role: history[i].jobTitle || history[i].job_title || history[i].role || 'Unknown Position',
+                        jobTitle: history[i].jobTitle || history[i].job_title || history[i].role || 'Unknown Position',
+                        company: history[i].company || 'Unknown Company',
+                        url: history[i].jobUrl || history[i].job_url || history[i].url || '',
+                        jobUrl: history[i].jobUrl || history[i].job_url || history[i].url || '',
+                        location: history[i].location || '',
+                        salary: history[i].salary || '',
+                        status: history[i].status || 'applied',
+                        applied_date: history[i].applied_date || (history[i].timestamp ? new Date(history[i].timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
+                        notes: combinedNotes
+                    };
+
+                    let response = await fetch(supabaseUrl, {
                         method: 'POST',
                         headers: reqHeaders,
                         body: JSON.stringify({
-                            user_id: userId,
-                            role: history[i].jobTitle || history[i].job_title || history[i].role || 'Unknown Position',
-                            company: history[i].company || 'Unknown Company',
-                            url: history[i].jobUrl || history[i].job_url || history[i].url || '',
-                            location: history[i].location || '',
-                            salary: history[i].salary || '',
-                            status: history[i].status || 'applied',
-                            applied_date: history[i].applied_date || (history[i].timestamp ? new Date(history[i].timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
-                            notes: combinedNotes
+                            user_id: appData.user_id,
+                            role: appData.role,
+                            company: appData.company,
+                            url: appData.url,
+                            location: appData.location,
+                            salary: appData.salary,
+                            status: appData.status,
+                            applied_date: appData.applied_date,
+                            notes: appData.notes
                         })
                     });
+
+                    if (!response.ok) {
+                        // Fallback to Render backend API
+                        console.log(`[ServiceWorker] Direct Supabase insert status: ${response.status}, attempting Render backend fallback...`);
+                        const backendUrl = 'https://ats-resume-optimizer-359j.onrender.com/api/applications';
+                        response = await fetch(backendUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${token}`
+                            },
+                            body: JSON.stringify(appData)
+                        });
+                    }
 
                     if (response.ok) {
                         history[i].synced = true;

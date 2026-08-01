@@ -122,17 +122,15 @@ router.post('/', async (req, res) => {
             });
         }
 
-        const {
-            job_title,
-            company,
-            job_url,
-            job_description,
-            location,
-            salary,
-            status,
-            resume_id,
-            notes
-        } = req.body;
+        const job_title = req.body.job_title || req.body.jobTitle;
+        const company = req.body.company;
+        const job_url = req.body.job_url || req.body.jobUrl;
+        const job_description = req.body.job_description || req.body.jobDescription;
+        const location = req.body.location;
+        const salary = req.body.salary;
+        const status = req.body.status;
+        const resume_id = req.body.resume_id || req.body.resumeId;
+        const notes = req.body.notes;
 
         // Validate required fields
         if (!job_title || !company) {
@@ -170,8 +168,9 @@ router.post('/', async (req, res) => {
             salary,
             status: status || 'applied',
             resumeId: resume_id,
-            notes
-        });
+            notes,
+            source: req.body.source
+        }, userId);
 
         res.status(201).json({
             success: true,

@@ -484,11 +484,9 @@ class DataSyncManager {
                 throw new Error('Invalid token: missing user ID (sub claim)');
             }
 
-            // Supabase project config
+            // Supabase project config (Public Publishable key for browser extensions)
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
-            const k1 = 'sb_secret_';
-            const k2 = 'zknQ8ENKEnTZLTuIYGfawQ_bS9bln9l';
-            const apiKey = k1 + k2;
+            const publishableKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
 
             let isSupabaseJwt = false;
             if (token && typeof token === 'string' && token.split('.').length === 3) {
@@ -498,7 +496,7 @@ class DataSyncManager {
                 } catch (e) {}
             }
             const reqHeaders = {
-                'apikey': apiKey,
+                'apikey': publishableKey,
                 'Content-Type': 'application/json',
                 'Prefer': 'return=representation'
             };
@@ -510,21 +508,49 @@ class DataSyncManager {
             const existingNotes = application.notes || '';
             const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
 
-            const response = await fetch(supabaseUrl, {
+            const appPayload = {
+                user_id: userId,
+                role: application.jobTitle || application.job_title || application.role || 'Unknown Position',
+                jobTitle: application.jobTitle || application.job_title || application.role || 'Unknown Position',
+                company: application.company || 'Unknown Company',
+                url: application.jobUrl || application.job_url || application.url || '',
+                jobUrl: application.jobUrl || application.job_url || application.url || '',
+                location: application.location || '',
+                salary: application.salary || '',
+                status: application.status || 'applied',
+                applied_date: application.applied_date || (application.timestamp ? new Date(application.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
+                notes: combinedNotes
+            };
+
+            let response = await fetch(supabaseUrl, {
                 method: 'POST',
                 headers: reqHeaders,
                 body: JSON.stringify({
-                    user_id: userId,
-                    role: application.jobTitle || application.job_title || application.role || 'Unknown Position',
-                    company: application.company || 'Unknown Company',
-                    url: application.jobUrl || application.job_url || application.url || '',
-                    location: application.location || '',
-                    salary: application.salary || '',
-                    status: application.status || 'applied',
-                    applied_date: application.applied_date || (application.timestamp ? new Date(application.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
-                    notes: combinedNotes
+                    user_id: appPayload.user_id,
+                    role: appPayload.role,
+                    company: appPayload.company,
+                    url: appPayload.url,
+                    location: appPayload.location,
+                    salary: appPayload.salary,
+                    status: appPayload.status,
+                    applied_date: appPayload.applied_date,
+                    notes: appPayload.notes
                 })
             });
+
+            if (!response.ok) {
+                // Fallback to Render backend API
+                console.log(`[DataSync] Direct Supabase insert status: ${response.status}, attempting Render backend fallback...`);
+                const backendUrl = 'https://ats-resume-optimizer-359j.onrender.com/api/applications';
+                response = await fetch(backendUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(appPayload)
+                });
+            }
 
             if (!response.ok) {
                 const errText = await response.text();
