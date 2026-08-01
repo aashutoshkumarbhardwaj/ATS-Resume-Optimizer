@@ -121,12 +121,11 @@ class TokenRefreshScheduler {
                 console.error('[AUTH] Backend response HTTP:', response.status);
                 console.error('[AUTH] Backend response body:', responseBody);
                 
-                if (response.status === 401 || response.status === 403) {
-                    console.log('[AUTH] clearSession() executes: YES');
-                    console.log('[TokenRefresh] Token invalid, logging out...');
+                if (response.status >= 400) {
+                    console.log('[AUTH] clearSession() executes: YES (Status ' + response.status + ')');
+                    console.log('[TokenRefresh] Stale/invalid token session cleared');
                     await this.clearSession();
-                } else {
-                    console.log('[AUTH] clearSession() executes: NO');
+                    this.stopScheduler();
                 }
                 this.isRefreshing = false;
                 return;

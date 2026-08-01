@@ -748,7 +748,15 @@ async function syncPendingApplications() {
                     // Supabase REST API config
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
                     const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
-                    const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
+                    
+                    let isSupabaseJwt = false;
+                    if (token && typeof token === 'string' && token.split('.').length === 3) {
+                        try {
+                            const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                            if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
+                        } catch (e) {}
+                    }
+                    const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${anonKey}`;
                     
                     const response = await fetch(supabaseUrl, {
                         method: 'POST',

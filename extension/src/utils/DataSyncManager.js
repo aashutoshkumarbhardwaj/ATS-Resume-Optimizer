@@ -108,7 +108,14 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/profiles?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
-            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
+            let isSupabaseJwt = false;
+            if (token && typeof token === 'string' && token.split('.').length === 3) {
+                try {
+                    const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
+                } catch (e) {}
+            }
+            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
@@ -262,7 +269,14 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/resumes?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
-            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
+            let isSupabaseJwt = false;
+            if (token && typeof token === 'string' && token.split('.').length === 3) {
+                try {
+                    const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
+                } catch (e) {}
+            }
+            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
@@ -302,7 +316,14 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
-            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
+            let isSupabaseJwt = false;
+            if (token && typeof token === 'string' && token.split('.').length === 3) {
+                try {
+                    const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
+                } catch (e) {}
+            }
+            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
@@ -466,7 +487,14 @@ class DataSyncManager {
             // Supabase project config
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
             const publishableKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
-            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${publishableKey}`;
+            let isSupabaseJwt = false;
+            if (token && typeof token === 'string' && token.split('.').length === 3) {
+                try {
+                    const p = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
+                } catch (e) {}
+            }
+            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${publishableKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'POST',
