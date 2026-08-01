@@ -794,201 +794,220 @@ function cleanText(text) {
 }
 
 /**
- * Extract job title using semantic heuristics
+ * Known invalid title strings that should NEVER be extracted as job title
+ */
+const INVALID_JOB_TITLES = [
+    'about the job', 'job description', 'job details', 'job summary', 'overview',
+    'responsibilities', 'qualifications', 'requirements', 'about us', 'apply now',
+    'apply for this job', 'job search', 'job filters', 'careers', 'career opportunities',
+    'all jobs', 'search jobs', 'find jobs', 'job application', 'application form',
+    'personal information', 'contact us', 'sign in', 'login', 'register', 'dashboard',
+    'home', 'welcome', 'menu', 'navigation', 'footer', 'header', 'cookie policy',
+    'job posting', 'vacancy', 'open position', 'openings', 'current openings', 'description'
+];
+
+/**
+ * Known invalid company strings that should NEVER be extracted as company name
+ */
+const INVALID_COMPANY_NAMES = [
+    'wellfound', 'linkedin', 'indeed', 'glassdoor', 'monster', 'ziprecruiter',
+    'careerbuilder', 'foundit', 'naukri', 'dice', 'simplyhired', 'google', 'facebook',
+    'twitter', 'instagram', 'youtube', 'github', 'apply', 'apply now', 'save', 'share',
+    'view', 'company', 'company name', 'employer', 'organization', 'about company',
+    'about us', 'company info', 'company details', 'careers', 'jobs', 'all jobs',
+    'view company', 'view all jobs', 'hiring', 'hiring team', 'recruiter', 'hr',
+    'job orbit', 'resume optimizer', 'home', 'back', 'close', 'submit', 'privacy'
+];
+
+function isValidJobTitle(text) {
+    if (!text || typeof text !== 'string') return false;
+    const clean = text.trim().toLowerCase();
+    if (clean.length < 3 || clean.length > 80) return false;
+    if (INVALID_JOB_TITLES.includes(clean)) return false;
+    if (INVALID_JOB_TITLES.some(bad => clean.startsWith(bad + ':') || clean === bad)) return false;
+    return true;
+}
+
+function isValidCompanyName(text) {
+    if (!text || typeof text !== 'string') return false;
+    const clean = text.trim().toLowerCase();
+    if (clean.length < 2 || clean.length > 60) return false;
+    if (INVALID_COMPANY_NAMES.includes(clean)) return false;
+    if (INVALID_COMPANY_NAMES.some(bad => clean === bad)) return false;
+    return true;
+}
+
+function cleanTitleString(title) {
+    if (!title) return '';
+    return title.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').replace(/^job title\s*:\s*/i, '').trim();
+}
+
+function cleanCompanyString(company) {
+    if (!company) return '';
+    return company.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').replace(/^company\s*:\s*/i, '').trim();
+}
+
+function parseTitleFromMetaString(str) {
+    if (!str) return { jobTitle: '', company: '' };
+    
+    // Remove site suffixes like "| LinkedIn", "- Indeed.com", "- Naukri.com", "- Wellfound"
+    let clean = str.replace(/\s*[-|–—]\s*(?:LinkedIn|Indeed|Naukri|Foundit|Wellfound|Glassdoor|Monster|ZipRecruiter|Careers|Job Orbit).*$/i, '').trim();
+
+    // Match "Job Title at Company" or "Job Title - Company" or "Job Title @ Company"
+    const match = clean.match(/^(.*?)\s+(?:at|@|in|for)\s+(.*)$/i) || clean.match(/^(.*?)\s+[-|–—]\s+(.*)$/);
+    if (match) {
+        const potentialTitle = match[1].trim();
+        const potentialCompany = match[2].trim();
+        return {
+            jobTitle: isValidJobTitle(potentialTitle) ? cleanTitleString(potentialTitle) : '',
+            company: isValidCompanyName(potentialCompany) ? cleanCompanyString(potentialCompany) : ''
+        };
+    }
+
+    if (isValidJobTitle(clean)) {
+        return { jobTitle: cleanTitleString(clean), company: '' };
+    }
+
+    return { jobTitle: '', company: '' };
+}
+
+/**
+ * Extract job title using platform-specific selectors + JSON-LD + Meta tags + High-Precision Heuristics
  */
 function extractJobTitle() {
-    const candidates = [];
-    
-    // Strategy 1: Look for h1 tags (most common for job titles)
-    const h1Elements = document.querySelectorAll('h1');
-    h1Elements.forEach(el => {
-        const text = el.textContent.trim();
-        if (text.length > 5 && text.length < 100) {
-            candidates.push({
-                text: text,
-                score: calculateTitleScore(text, el),
-                element: el
-            });
-        }
-    });
-    
-    // Strategy 2: Look for elements with title-related attributes or classes
-    const titleSelectors = [
-        '[class*="title"]', '[class*="job"]', '[class*="position"]', '[class*="role"]',
-        '[id*="title"]', '[id*="job"]', '[data-*="title"]', '[data-*="job"]'
-    ];
-    
-    titleSelectors.forEach(selector => {
-        try {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-                const text = el.textContent.trim();
-                if (text.length > 5 && text.length < 100 && !candidates.find(c => c.text === text)) {
-                    candidates.push({
-                        text: text,
-                        score: calculateTitleScore(text, el),
-                        element: el
-                    });
-                }
-            });
-        } catch (e) {
-            // Ignore invalid selectors
-        }
-    });
-    
-    // Strategy 3: Look in document title and meta tags
-    const docTitle = document.title;
-    if (docTitle && docTitle.length > 5) {
-        // Extract potential job title from page title (often formatted as "Job Title - Company")
-        const titleParts = docTitle.split(/[-|–—]/);
-        if (titleParts.length > 1) {
-            const potentialTitle = titleParts[0].trim();
-            if (potentialTitle.length > 5 && potentialTitle.length < 100) {
-                candidates.push({
-                    text: potentialTitle,
-                    score: calculateTitleScore(potentialTitle, null) + 10, // Bonus for page title
-                    element: null
-                });
+    const url = window.location.href.toLowerCase();
+
+    // 1. JSON-LD Structured Data
+    try {
+        const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const script of scripts) {
+            const data = JSON.parse(script.textContent);
+            const item = Array.isArray(data) ? data.find(i => i && i['@type'] === 'JobPosting') : (data && data['@type'] === 'JobPosting' ? data : null);
+            if (item && item.title && isValidJobTitle(item.title)) {
+                return cleanTitleString(item.title);
             }
         }
+    } catch (e) {}
+
+    // 2. Site-Specific High-Precision Selectors
+    let title = '';
+    if (url.includes('linkedin.com')) {
+        const el = document.querySelector('h1.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, .top-card-layout__title, h1.t-24, .job-title');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('wellfound.com') || url.includes('angel.co')) {
+        const el = document.querySelector('[data-test="JobTitle"], h1[class*="title"], .styles_title__');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('indeed.com')) {
+        const el = document.querySelector('h1.jobsearch-JobInfoHeader-title, [data-testid="simulated-h1"], h1');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('naukri.com')) {
+        const el = document.querySelector('h1.styles_jd-header-title__, .jd-header-title, h1.jd-header-title-text');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('foundit')) {
+        const el = document.querySelector('h1.job-title, .card-title, h1');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('greenhouse.io') || document.querySelector('#grnhse_app')) {
+        const el = document.querySelector('h1.app-title, #header h1, .job-title');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('lever.co')) {
+        const el = document.querySelector('.posting-header h2, h2, h1');
+        if (el && el.textContent) title = el.textContent;
+    } else if (url.includes('myworkdayjobs.com')) {
+        const el = document.querySelector('[data-automation-id="jobPostingHeader"], h2[data-automation-id="jobPostingTitle"]');
+        if (el && el.textContent) title = el.textContent;
     }
-    
-    // Return the highest scoring candidate
-    if (candidates.length > 0) {
-        candidates.sort((a, b) => b.score - a.score);
-        return candidates[0].text;
+
+    if (isValidJobTitle(title)) {
+        return cleanTitleString(title);
     }
-    
+
+    // 3. OpenGraph / Twitter Meta Tags
+    const ogTitle = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
+    if (ogTitle && ogTitle.content) {
+        const parsed = parseTitleFromMetaString(ogTitle.content);
+        if (parsed.jobTitle) return parsed.jobTitle;
+    }
+
+    // 4. Page Title Parsing (e.g. "Senior Fullstack Developer at Stripe | LinkedIn")
+    const docTitle = document.title;
+    if (docTitle) {
+        const parsed = parseTitleFromMetaString(docTitle);
+        if (parsed.jobTitle) return parsed.jobTitle;
+    }
+
+    // 5. General H1 DOM Search
+    const h1s = document.querySelectorAll('h1');
+    for (const h1 of h1s) {
+        const txt = h1.textContent.trim();
+        if (isValidJobTitle(txt)) return cleanTitleString(txt);
+    }
+
     return '';
 }
 
 /**
- * Calculate score for potential job title
- */
-function calculateTitleScore(text, element) {
-    let score = 0;
-    const lowerText = text.toLowerCase();
-    
-    // Bonus for job-related keywords
-    const jobTitleKeywords = [
-        'engineer', 'developer', 'manager', 'analyst', 'specialist', 'coordinator',
-        'director', 'lead', 'senior', 'junior', 'associate', 'consultant',
-        'architect', 'designer', 'scientist', 'researcher', 'administrator'
-    ];
-    
-    jobTitleKeywords.forEach(keyword => {
-        if (lowerText.includes(keyword)) {
-            score += 15;
-        }
-    });
-    
-    // Bonus for element positioning and styling
-    if (element) {
-        const rect = element.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(element);
-        
-        // Higher score for elements near the top of the page
-        if (rect.top < window.innerHeight * 0.3) {
-            score += 10;
-        }
-        
-        // Bonus for larger font sizes
-        const fontSize = parseFloat(computedStyle.fontSize);
-        if (fontSize > 20) {
-            score += 10;
-        }
-        if (fontSize > 24) {
-            score += 5;
-        }
-        
-        // Bonus for bold text
-        if (computedStyle.fontWeight === 'bold' || parseInt(computedStyle.fontWeight) >= 600) {
-            score += 5;
-        }
-        
-        // Bonus for h1-h3 tags
-        const tagName = element.tagName.toLowerCase();
-        if (tagName === 'h1') score += 20;
-        else if (tagName === 'h2') score += 15;
-        else if (tagName === 'h3') score += 10;
-    }
-    
-    // Penalty for very long or very short text
-    if (text.length < 10) score -= 10;
-    if (text.length > 80) score -= 15;
-    
-    return score;
-}
-
-/**
- * Extract company name using semantic heuristics
+ * Extract company name using platform-specific selectors + JSON-LD + Meta tags + High-Precision Heuristics
  */
 function extractCompanyName() {
-    const candidates = [];
-    
-    // Strategy 1: Look for elements with company-related attributes or classes
-    const companySelectors = [
-        '[class*="company"]', '[class*="employer"]', '[class*="organization"]',
-        '[id*="company"]', '[id*="employer"]', '[data-*="company"]'
-    ];
-    
-    companySelectors.forEach(selector => {
-        try {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-                const text = el.textContent.trim();
-                if (text.length > 2 && text.length < 100) {
-                    candidates.push({
-                        text: text,
-                        score: calculateCompanyScore(text, el)
-                    });
-                }
-            });
-        } catch (e) {
-            // Ignore invalid selectors
-        }
-    });
-    
-    // Strategy 2: Look for links that might be company names
-    const links = document.querySelectorAll('a');
-    links.forEach(link => {
-        const text = link.textContent.trim();
-        const href = link.href;
-        
-        // Check if link looks like a company profile or careers page
-        if (text.length > 2 && text.length < 50 && 
-            (href.includes('/company/') || href.includes('/careers') || href.includes('/jobs'))) {
-            candidates.push({
-                text: text,
-                score: calculateCompanyScore(text, link) + 5 // Bonus for being a link
-            });
-        }
-    });
-    
-    // Strategy 3: Look in page title and meta tags
-    const docTitle = document.title;
-    if (docTitle) {
-        const titleParts = docTitle.split(/[-|–—]/);
-        if (titleParts.length > 1) {
-            // Company name is often after the job title
-            for (let i = 1; i < titleParts.length; i++) {
-                const part = titleParts[i].trim();
-                if (part.length > 2 && part.length < 50) {
-                    candidates.push({
-                        text: part,
-                        score: calculateCompanyScore(part, null) + 8
-                    });
-                }
+    const url = window.location.href.toLowerCase();
+
+    // 1. JSON-LD Structured Data
+    try {
+        const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const script of scripts) {
+            const data = JSON.parse(script.textContent);
+            const item = Array.isArray(data) ? data.find(i => i && i['@type'] === 'JobPosting') : (data && data['@type'] === 'JobPosting' ? data : null);
+            if (item && item.hiringOrganization && item.hiringOrganization.name && isValidCompanyName(item.hiringOrganization.name)) {
+                return cleanCompanyString(item.hiringOrganization.name);
             }
         }
+    } catch (e) {}
+
+    // 2. Site-Specific High-Precision Selectors
+    let company = '';
+    if (url.includes('linkedin.com')) {
+        const el = document.querySelector('.job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name, .topcard__org-name-link, .top-card-layout__first-sub-text a');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('wellfound.com') || url.includes('angel.co')) {
+        const el = document.querySelector('[data-test="CompanyName"], h2[class*="company"], .styles_companyName__');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('indeed.com')) {
+        const el = document.querySelector('[data-testid="inlineHeader-companyName"], .jobsearch-InlineCompanyRating-companyHeader, [data-company-name="true"]');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('naukri.com')) {
+        const el = document.querySelector('.styles_jd-header-comp-name__, .jd-header-comp-name, a.comp-name');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('foundit')) {
+        const el = document.querySelector('.company-name, a.company-name, .comp-name');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('greenhouse.io') || document.querySelector('#grnhse_app')) {
+        const el = document.querySelector('.company-name, #header .company, span.company-name');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('lever.co')) {
+        const el = document.querySelector('.main-header a.logo, .posting-header .company-name');
+        if (el && el.textContent) company = el.textContent;
+    } else if (url.includes('myworkdayjobs.com')) {
+        const el = document.querySelector('[data-automation-id="company"], .css-1vw0l0');
+        if (el && el.textContent) company = el.textContent;
     }
-    
-    // Return the highest scoring candidate
-    if (candidates.length > 0) {
-        candidates.sort((a, b) => b.score - a.score);
-        return candidates[0].text;
+
+    if (isValidCompanyName(company)) {
+        return cleanCompanyString(company);
     }
-    
+
+    // 3. OpenGraph / Meta Tags / Document Title Parsing
+    const ogTitle = document.querySelector('meta[property="og:title"], meta[name="twitter:title"]');
+    if (ogTitle && ogTitle.content) {
+        const parsed = parseTitleFromMetaString(ogTitle.content);
+        if (parsed.company) return parsed.company;
+    }
+
+    const docTitle = document.title;
+    if (docTitle) {
+        const parsed = parseTitleFromMetaString(docTitle);
+        if (parsed.company) return parsed.company;
+    }
+
     return '';
 }
 
