@@ -183,6 +183,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.log("[AUTH] Full Storage on Popup Open:", initialStorage);
     console.log("================================");
     
+    // SESSION SELF-HEALING: If we have a token but no user email, decode it from the JWT
+    // This fixes cases where the session was saved with empty user info
+    try {
+        const session = initialStorage.jobOrbitSession;
+        const auth = initialStorage.jobOrbitAuth;
+        const token = session?.extensionToken || auth?.extensionToken;
+        
+        if (token && (!session?.user?.email) && !session?.user?.id) {
+            console.log('[Popup] 🔧 Session healing: user info is missing but token exists. Decoding...');
+            try {
+                const payloadB64 = token.split('.')[1];
+                const fixed = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+                const decoded = JSON.parse(decodeURIComponent(atob(fixed).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')));
+                
+                if (decoded && decoded.sub) {
+                    const userInfo = {
+                        id: decoded.sub,
+                        email: decoded.email || decoded.user_metadata?.email || ''
+                    };
+                    console.log('[Popup] 🔧 Decoded user from token:', userInfo);
+                    
+                    // Patch the session in storage
+                    if (session) {
+                        session.user = userInfo;
+                        session.userId = decoded.sub;
+                        await chrome.storage.local.set({ jobOrbitSession: session });
+                    }
+                    if (auth) {
+                        auth.user = userInfo;
+                        await chrome.storage.local.set({ jobOrbitAuth: auth });
+                        await chrome.storage.sync.set({ jobOrbitAuth: auth });
+                    }
+                    console.log('[Popup] ✅ Session healed with user info from token');
+                }
+            } catch(e) {
+                console.warn('[Popup] Session healing failed (non-critical):', e.message);
+            }
+        }
+    } catch(e) {
+        console.warn('[Popup] Session healing check failed:', e.message);
+    }
+    
     // Check if we need to show guest mode overlay
     // initializeGuestModeOverlay(); // Function is not defined
     initializeDOMElements();
@@ -232,10 +274,11 @@ function setupAutoClose() {
         if (request.type === 'EXTENSION_TOKEN_RECEIVED') {
             console.log('[Popup] Received extension token from auth page');
             sendResponse({ success: true });
-            // Refresh the connection status
+            // Refresh both the Account tab connection status AND the Home tab auth card
             setTimeout(() => {
                 checkJobOrbitConnection();
-            }, 100);
+                loadDashboard();
+            }, 500);
         }
     });
     
@@ -332,6 +375,7 @@ async function init() {
             });
             
             showJobOrbitConnected(cachedData.user?.email || 'Connected');
+            loadRecentApplications();
             
             // Verify token with backend in background
             console.log('[Popup] 🔐 Step 3: Verifying token with backend...');
@@ -361,6 +405,7 @@ async function init() {
                             applications: dataSyncResult.applications,
                             answers: dataSyncResult.answers
                         });
+                        loadRecentApplications();
                     } else {
                         console.warn('[Popup] ⚠️ Full data sync failed');
                         await SessionManager.updateSyncStatus('error');
@@ -872,8 +917,8 @@ async function handleFileUpload(event) {
                                     }
                                 });
                                 
-                                // Save profile to storage
-                                chrome.storage.local.set({ profile: formFields });
+                                // Save profile to storage using StorageUtil for consistency
+                                StorageUtil.saveAutofillProfile(formFields).catch(err => console.error(err));
                                 
                                 console.log('[Popup] Profile parsed from resume');
                                 
@@ -2383,7 +2428,7 @@ function showMissedFields(fields) {
  * Handle Autofill Results
  * Called when autofill completes from content script
  */
-function handleAutofillResults(result) {
+async function handleAutofillResults(result) {
     console.log('[Popup] Processing autofill results:', result);
     
     if (!result) {
@@ -2407,26 +2452,31 @@ function handleAutofillResults(result) {
         }
     }
     
-    // Record application if details are available
-    if (result.jobTitle || result.company) {
-        const applicationData = {
-            company: result.company || 'Unknown Company',
-            jobTitle: result.jobTitle || 'Unknown Position',
-            date: new Date().toISOString(),
-            resumeVersion: 'current',
-            status: 'Applied',
-            notes: `Auto-filled ${result.filled || 0} fields`
-        };
-        
-        chrome.runtime.sendMessage({
-            type: 'SAVE_APPLICATION_RECORD',
-            payload: applicationData
-        }, (response) => {
-            if (response && response.success) {
-                console.log('[Popup] Application record saved');
-            }
-        });
-    }
+    // Always record application, even if details are partial (use Unknown as fallback)
+    const source = result.source || 'Direct Website';
+    const applicationData = {
+        company: result.company || 'Unknown Company',
+        job_title: result.jobTitle || 'Unknown Position',
+        job_url: result.url || result.jobUrl || '',
+        job_description: result.description || result.jobDescription || '',
+        date: new Date().toISOString(),
+        resumeVersion: 'current',
+        status: 'applied',
+        notes: `Source: ${source} | Auto-filled ${result.filled || 0} fields`
+    };
+    
+    chrome.runtime.sendMessage({
+        type: 'SAVE_APPLICATION_RECORD',
+        payload: applicationData
+    }, (response) => {
+        if (response && response.success) {
+            console.log('[Popup] Application record saved locally and sent for background sync');
+            // Reload list to show the new local record immediately
+            loadRecentApplications();
+        } else {
+            console.warn('[Popup] ⚠️ Failed to save application record locally');
+        }
+    });
 }
 
 
@@ -2695,20 +2745,21 @@ function showGuestMode() {
     console.log('[Popup] 👤 Showing guest mode');
     
     const authStatus = document.getElementById('authStatus');
+    const authStatusIcon = document.getElementById('authStatusIcon');
+    const authStatusTitle = document.getElementById('authStatusTitle');
+    const userEmail = document.getElementById('userEmail');
+
     if (authStatus) {
-        authStatus.innerHTML = `
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="font-size: 20px;">👤</span>
-                <div style="flex: 1;">
-                    <p style="margin: 0; font-weight: 600; color: #666; font-size: 12px;">Guest Mode</p>
-                    <p style="margin: 4px 0 0 0; font-size: 10px; color: #999;">Login to access all features</p>
-                </div>
-            </div>
-        `;
-        authStatus.style.background = '#f5f5f5';
-        authStatus.style.borderLeft = '4px solid #999';
+        authStatus.style.background = '#fff3e0';
+        authStatus.style.borderLeft = '4px solid #ff9800';
     }
-    
+    if (authStatusIcon) authStatusIcon.textContent = '👤';
+    if (authStatusTitle) {
+        authStatusTitle.style.color = '#e65100';
+        authStatusTitle.textContent = 'Guest Mode';
+    }
+    if (userEmail) userEmail.textContent = 'Login to access all features';
+
     // Update quick actions to show login
     const goToResumeBtn = document.getElementById('goToResumeBtn');
     if (goToResumeBtn) {
@@ -2761,7 +2812,15 @@ async function handleJobOrbitLogin() {
                 // Try to close the auth tab
                 chrome.tabs.remove(tab.id, () => { chrome.runtime.lastError; });
                 if (success) {
+                    // Give service worker a moment to finish saving session
+                    await new Promise(r => setTimeout(r, 800));
+                    // Refresh account tab connection status
                     await checkJobOrbitConnection();
+                    // CRITICAL: Refresh home tab auth card immediately
+                    loadDashboard();
+                    showNotification('✅ Successfully connected to Job Orbit!', 'success');
+                    // Also refresh again after 2 seconds in case of race condition
+                    setTimeout(() => loadDashboard(), 2000);
                 } else {
                     showNotification(errorMsg || 'Login failed', 'error');
                     showJobOrbitNotConnected();
@@ -3341,14 +3400,97 @@ async function loadDashboard() {
     try {
         PopupState.markTask();
         
-        // Get auth status from GuestModeManager
-        chrome.runtime.sendMessage({ type: 'GET_AUTH_STATUS' }, (response) => {
-            if (response && response.user) {
-                const userEmail = response.user.email || response.user.id || 'User';
-                const userEmailEl = document.getElementById('userEmail');
-                if (userEmailEl) {
-                    userEmailEl.textContent = userEmail;
+    // Check auth status - try session storage FIRST (most reliable)
+        chrome.storage.local.get(['jobOrbitSession', 'jobOrbitAuth'], (storedResult) => {
+            const session = storedResult.jobOrbitSession;
+            const auth = storedResult.jobOrbitAuth;
+            const authStatusEl = document.getElementById('authStatus');
+            const authStatusIconEl = document.getElementById('authStatusIcon');
+            const authStatusTitleEl = document.getElementById('authStatusTitle');
+            const userEmailEl = document.getElementById('userEmail');
+
+            // Helper to decode JWT and get user info
+            function decodeJWT(token) {
+                try {
+                    const payloadB64 = token.split('.')[1];
+                    const fixed = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+                    return JSON.parse(decodeURIComponent(atob(fixed).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')));
+                } catch(e) { return null; }
+            }
+
+            let userEmail = null;
+
+            // Try to get email from session
+            if (session && session.user && session.user.email) {
+                userEmail = session.user.email;
+            }
+            // Try to get email from auth
+            else if (auth && auth.user && auth.user.email) {
+                userEmail = auth.user.email;
+            }
+            // Try to decode from token
+            else if (session && session.extensionToken) {
+                const decoded = decodeJWT(session.extensionToken);
+                if (decoded) userEmail = decoded.email || decoded.user_metadata?.email;
+            }
+            else if (auth && auth.extensionToken) {
+                const decoded = decodeJWT(auth.extensionToken);
+                if (decoded) userEmail = decoded.email || decoded.user_metadata?.email;
+            }
+
+            const isLoggedIn = !!(session && session.extensionToken && session.expiresAt > Date.now()) ||
+                               !!(auth && auth.extensionToken && auth.expiresAt > Date.now());
+
+            if (isLoggedIn && userEmail) {
+                // Show logged in state
+                if (authStatusEl) {
+                    authStatusEl.style.background = '#e8f5e9';
+                    authStatusEl.style.borderLeftColor = '#4caf50';
                 }
+                if (authStatusIconEl) authStatusIconEl.textContent = '✓';
+                if (authStatusTitleEl) {
+                    authStatusTitleEl.style.color = '#2e7d32';
+                    authStatusTitleEl.textContent = `Welcome back!`;
+                }
+                if (userEmailEl) userEmailEl.textContent = userEmail;
+
+                // Restore action button when logged in
+                const goToResumeBtn = document.getElementById('goToResumeBtn');
+                if (goToResumeBtn) {
+                    goToResumeBtn.innerHTML = '📄 Upload / Optimize Resume';
+                    goToResumeBtn.onclick = () => switchTab('resume');
+                }
+            } else if (isLoggedIn) {
+                // Logged in but no email decoded yet
+                if (authStatusEl) {
+                    authStatusEl.style.background = '#e8f5e9';
+                    authStatusEl.style.borderLeftColor = '#4caf50';
+                }
+                if (authStatusIconEl) authStatusIconEl.textContent = '✓';
+                if (authStatusTitleEl) {
+                    authStatusTitleEl.style.color = '#2e7d32';
+                    authStatusTitleEl.textContent = 'Connected to Job Orbit';
+                }
+                if (userEmailEl) userEmailEl.textContent = 'Syncing your data...';
+
+                // Restore action button when logged in
+                const goToResumeBtn = document.getElementById('goToResumeBtn');
+                if (goToResumeBtn) {
+                    goToResumeBtn.innerHTML = '📄 Upload / Optimize Resume';
+                    goToResumeBtn.onclick = () => switchTab('resume');
+                }
+            } else {
+                // Not logged in
+                if (authStatusEl) {
+                    authStatusEl.style.background = '#fff3e0';
+                    authStatusEl.style.borderLeftColor = '#ff9800';
+                }
+                if (authStatusIconEl) authStatusIconEl.textContent = '⚠️';
+                if (authStatusTitleEl) {
+                    authStatusTitleEl.style.color = '#e65100';
+                    authStatusTitleEl.textContent = 'Not logged in to Job Orbit';
+                }
+                if (userEmailEl) userEmailEl.textContent = 'Jobs you apply won\'t be synced';
             }
         });
         
@@ -3356,13 +3498,13 @@ async function loadDashboard() {
         chrome.storage.local.get(['applicationHistory'], (result) => {
             const applications = result.applicationHistory || [];
             const totalApps = applications.length;
-            const appliedCount = applications.filter(a => a.status === 'Applied').length;
+            const appliedCount = applications.filter(a => a.status === 'applied' || a.status === 'Applied').length;
             
             const totalAppsEl = document.getElementById('dashboardTotalApps');
             const appliedEl = document.getElementById('dashboardApplied');
             
             if (totalAppsEl) totalAppsEl.textContent = totalApps;
-            if (appliedEl) appliedEl.textContent = appliedCount;
+            if (appliedEl) appliedEl.textContent = appliedCount || totalApps;
             
             // Load recent applications
             loadDashboardRecentApps(applications);
@@ -4179,3 +4321,45 @@ document.addEventListener('DOMContentLoaded', () => {
     // Delay slightly to let other init code run first
     setTimeout(initQATab, 300);
 });
+
+/**
+ * Load Recent Applications for Dashboard
+ */
+async function loadRecentApplications() {
+    try {
+        const container = document.getElementById('dashboardRecentApps');
+        if (!container) return;
+        
+        const stored = await DataSyncManager.getStoredData();
+        const apps = stored.applications || [];
+        
+        if (apps.length === 0) {
+            container.innerHTML = `
+                <div style="text-align: center; color: #999; padding: 20px 0; font-size: 12px;">
+                    No applications yet
+                </div>
+            `;
+            return;
+        }
+        
+        // Sort by date (newest first) and take top 5
+        const sortedApps = [...apps].sort((a, b) => {
+            const dateA = a.created_at || a.date;
+            const dateB = b.created_at || b.date;
+            return new Date(dateB) - new Date(dateA);
+        }).slice(0, 5);
+        
+        container.innerHTML = sortedApps.map(app => `
+            <div style="padding: 10px; border-bottom: 1px solid #eee;">
+                <div style="font-weight: 600; font-size: 13px; color: #333; margin-bottom: 2px;">${app.job_title || app.jobTitle || 'Unknown Position'}</div>
+                <div style="font-size: 11px; color: #666; display: flex; justify-content: space-between;">
+                    <span>🏢 ${app.company}</span>
+                    <span style="color: #4CAF50; font-weight: 500;">✓ ${app.status || 'Applied'}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('[Popup] Failed to load recent applications:', error);
+    }
+}
+

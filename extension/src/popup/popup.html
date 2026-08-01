@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Fixer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400..600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">✨</div>
+            <h1>Resume Optimizer</h1>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="home">🏠 Home</button>
+            <button class="tab-btn" data-tab="resume">📝 Resume</button>
+            <button class="tab-btn" data-tab="autofill">⚡ Autofill</button>
+            <button class="tab-btn" data-tab="ai">💡 Answers</button>
+            <button class="tab-btn" data-tab="account">⚙️ Settings</button>
+        </div>
+
+        <div class="main-content">
+            <!-- Home Tab (Dashboard) -->
+            <div id="homeTab" class="tab-content active">
+                <div class="panel">
+                    <h3>🏠 Dashboard</h3>
+                    
+                    <!-- Auth Status -->
+                    <div id="authStatus" style="padding: 12px; background: #f5f5f5; border-radius: 6px; border-left: 4px solid #9e9e9e; margin-bottom: 16px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 20px;" id="authStatusIcon">⏳</span>
+                            <div style="flex: 1;">
+                                <p style="margin: 0; font-weight: 600; color: #333; font-size: 12px;" id="authStatusTitle">Checking login status...</p>
+                                <p style="margin: 4px 0 0 0; font-size: 10px; color: #666;" id="userEmail"></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Stats -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 28px; font-weight: bold; color: #667eea;" id="dashboardTotalApps">0</div>
+                            <div style="font-size: 11px; color: #666; margin-top: 6px;">Applications</div>
+                        </div>
+                        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; text-align: center;">
+                            <div style="font-size: 28px; font-weight: bold; color: #4caf50;" id="dashboardApplied">0</div>
+                            <div style="font-size: 11px; color: #666; margin-top: 6px;">Applied</div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div style="margin-bottom: 16px;">
+                        <p style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 10px;">Quick Actions</p>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <button class="btn btn-primary" id="goToResumeBtn" style="width: 100%;">📄 Upload / Optimize Resume</button>
+                            <button class="btn btn-secondary" id="goToAutofillBtn" style="width: 100%;">⚡ Manage Autofill Profile</button>
+                            <button class="btn btn-secondary" id="viewApplicationsBtn" style="width: 100%;">📋 View All Applications</button>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity -->
+                    <div style="border-top: 1px solid #e0e0e0; padding-top: 16px;">
+                        <p style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 10px;">Recent Applications</p>
+                        <div id="dashboardRecentApps" style="max-height: 200px; overflow-y: auto;">
+                            <div style="text-align: center; color: #999; padding: 20px 0; font-size: 12px;">
+                                No applications yet
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resume Tab -->
+            <div id="resumeTab" class="tab-content">
+                <!-- Job Detection Panel -->
+                <div id="jobDetectionPanel" class="panel">
+                    <h3>📄 Job Description</h3>
+                    <div id="detectedJobInfo" class="detected-job hidden">
+                        <div class="job-badge">✓ Job Detected</div>
+                        <div class="job-details">
+                            <strong id="detectedJobTitle"></strong>
+                            <span id="detectedCompany"></span>
+                        </div>
+                    </div>
+                    <div class="input-section">
+                        <textarea 
+                            id="jobDescription" 
+                            placeholder="Paste job description here or it will be auto-detected..."
+                            class="textarea-field"
+                            rows="4"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <!-- Resume Upload Panel -->
+                <div id="resumeUploadPanel" class="panel">
+                    <h3>📝 Your Resume</h3>
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="resumeFile" accept=".pdf,.docx,.txt" hidden>
+                        <div class="upload-content">
+                            <span class="upload-icon">📎</span>
+                            <p>Drop resume here or click to upload</p>
+                            <small>Supports PDF, DOCX, TXT (Max 5MB)</small>
+                        </div>
+                    </div>
+                    <div id="uploadedFileInfo" class="file-info hidden">
+                        <span id="fileName"></span>
+                        <button id="removeFile" class="btn-icon">✕</button>
+                    </div>
+                    <div class="input-section">
+                        <textarea 
+                            id="resumeText" 
+                            placeholder="Or paste your resume text here..."
+                            class="textarea-field"
+                            rows="4"
+                        ></textarea>
+                    </div>
+                </div>
+
+                <button id="analyzeBtn" class="btn btn-primary">🔍 Analyze Resume</button>
+
+                <button id="fetchJobDescBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%;">
+                    📥 Fetch Job Description from Page
+                </button>
+
+                <!-- Analysis Results Panel -->
+                <div id="analysisPanel" class="panel hidden">
+                    <h3>📊 ATS Score</h3>
+                    <div class="score-display">
+                        <div class="score-circle">
+                            <span id="atsScore" class="score-number">0</span>
+                            <span class="score-label">/100</span>
+                        </div>
+                        <div class="score-breakdown">
+                            <div class="breakdown-item">
+                                <span>Keywords</span>
+                                <div class="progress-bar">
+                                    <div id="keywordBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                            <div class="breakdown-item">
+                                <span>Experience</span>
+                                <div class="progress-bar">
+                                    <div id="experienceBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                            <div class="breakdown-item">
+                                <span>Skills</span>
+                                <div class="progress-bar">
+                                    <div id="skillsBar" class="progress-fill"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="keywords-section">
+                        <div class="keyword-group">
+                            <h4>✓ Matched Keywords</h4>
+                            <div id="matchedKeywords" class="keyword-list"></div>
+                        </div>
+                        <div class="keyword-group">
+                            <h4>✗ Missing Keywords</h4>
+                            <div id="missingKeywords" class="keyword-list"></div>
+                        </div>
+                    </div>
+
+                    <div class="suggestions-section">
+                        <h4>💡 Suggestions</h4>
+                        <div id="suggestionsList"></div>
+                    </div>
+
+                    <button id="optimizeBtn" class="btn btn-primary">✨ Optimize Resume</button>
+                </div>
+
+                <!-- Optimization Results Panel -->
+                <div id="optimizationPanel" class="panel hidden">
+                    <h3>✨ Optimized Resume</h3>
+                    <div class="score-comparison">
+                        <div class="score-item">
+                            <span class="score-label">Original</span>
+                            <span id="originalScore" class="score-value">0</span>
+                        </div>
+                        <span class="arrow">→</span>
+                        <div class="score-item">
+                            <span class="score-label">Optimized</span>
+                            <span id="optimizedScore" class="score-value improved">0</span>
+                        </div>
+                        <div class="score-improvement">
+                            <span id="scoreImprovement">+0</span>
+                        </div>
+                    </div>
+
+                    <div class="changes-section">
+                        <h4>📝 Changes Made</h4>
+                        <div id="changesList"></div>
+                    </div>
+
+                    <div class="download-section">
+                        <h4>💾 Get Your Optimized Resume</h4>
+                        
+                        <!-- Option 1: Copy to edit your original file -->
+                        <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; margin-bottom: 12px; border-left: 4px solid #4caf50;">
+                            <div style="display: flex; align-items: start; gap: 8px;">
+                                <span style="font-size: 20px;">💡</span>
+                                <div style="flex: 1;">
+                                    <strong style="color: #2e7d32; font-size: 13px;">Recommended: Keep Your Original Formatting</strong>
+                                    <p style="font-size: 11px; color: #555; margin: 6px 0 8px 0; line-height: 1.4;">
+                                        <strong>How it works:</strong><br>
+                                        1. Click "Copy Optimized Text" below<br>
+                                        2. Open your original resume file (Word/Google Docs)<br>
+                                        3. Select all (Ctrl+A) and paste (Ctrl+V)<br>
+                                        4. Your formatting stays, content is optimized! ✨
+                                    </p>
+                                    <button id="copyOptimizedBtn" class="btn btn-secondary" style="width: 100%;">
+                                        📋 Copy Optimized Text
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Option 2: Download new file -->
+                        <div style="border-top: 1px solid #e0e0e0; padding-top: 12px;">
+                            <p style="font-size: 12px; color: #666; margin-bottom: 12px;">
+                                Or download as a new file (will use standard template):
+                            </p>
+                            <div class="download-options">
+                                <button class="btn btn-download" data-format="pdf">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📄</span>
+                                    PDF
+                                </button>
+                                <button class="btn btn-download" data-format="docx">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📝</span>
+                                    DOCX
+                                </button>
+                                <button class="btn btn-download" data-format="txt">
+                                    <span style="font-size: 20px; display: block; margin-bottom: 4px;">📋</span>
+                                    TXT
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="loadingSpinner" class="loading-spinner hidden">
+                    <div class="spinner"></div>
+                    <p id="loadingText">Processing...</p>
+                </div>
+
+                <div id="errorMessage" class="error-message hidden"></div>
+            </div>
+
+            <!-- Answer Library Tab -->
+            <div id="answerLibraryTab" class="tab-content">
+                <!-- AI Hub Main Panel -->
+                <div class="panel">
+                    <h3>💡 Answer Library</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 12px;">
+                        Build your personal AI answer library. Create answers to common interview questions, and we'll auto-suggest them during job applications.
+                    </p>
+
+                    <!-- Search Bar -->
+                    <div style="margin-bottom: 16px;">
+                        <input type="text" id="aiHubSearch" placeholder="🔍 Search answers..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; box-sizing: border-box;">
+                    </div>
+
+                    <!-- Category Filter -->
+                    <div style="margin-bottom: 16px;">
+                        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                            <button class="category-btn active" data-category="all" style="padding: 6px 12px; background: #667eea; color: white; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">All</button>
+                            <button class="category-btn" data-category="about-me" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">About Me</button>
+                            <button class="category-btn" data-category="company" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Why Company?</button>
+                            <button class="category-btn" data-category="hire-you" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Hire You?</button>
+                            <button class="category-btn" data-category="leadership" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Leadership</button>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                        <button class="category-btn" data-category="conflict" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Conflict</button>
+                        <button class="category-btn" data-category="achievements" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Achievements</button>
+                        <button class="category-btn" data-category="goals" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Goals</button>
+                        <button class="category-btn" data-category="technical" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Technical</button>
+                        <button class="category-btn" data-category="behavioral" style="padding: 6px 12px; background: #f0f0f0; border: none; border-radius: 20px; font-size: 11px; cursor: pointer;">Behavioral</button>
+                    </div>
+
+                    <!-- Add New Answer Button -->
+                    <button id="addNewAnswerBtn" class="btn btn-primary" style="width: 100%; margin-top: 16px;">
+                        ➕ Add New Answer
+                    </button>
+
+                    <!-- Answers List -->
+                    <div id="aiAnswersList" style="margin-top: 16px; max-height: 400px; overflow-y: auto;">
+                        <div style="text-align: center; color: #999; padding: 30px 0; font-size: 12px;">
+                            <p style="margin: 0;">No answers yet</p>
+                            <p style="margin: 4px 0 0 0; font-size: 10px;">Click "Add New Answer" to create your first AI response</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Add/Edit Answer Modal (Hidden by default) -->
+                <div id="aiAnswerModal" style="display: none; padding: 16px; background: #f9f9f9; border-radius: 8px; border: 1px solid #e0e0e0; margin-top: 16px;">
+                    <h4 style="margin-top: 0; color: #333;">Create Answer</h4>
+                    
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">Category</label>
+                        <select id="answerCategory" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; box-sizing: border-box;">
+                            <option value="about-me">About Me</option>
+                            <option value="company">Why this company?</option>
+                            <option value="hire-you">Why should we hire you?</option>
+                            <option value="leadership">Leadership</option>
+                            <option value="conflict">Conflict Resolution</option>
+                            <option value="achievements">Achievements</option>
+                            <option value="goals">Career Goals</option>
+                            <option value="technical">Technical Questions</option>
+                            <option value="behavioral">Behavioral Questions</option>
+                        </select>
+                    </div>
+
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">Question/Title</label>
+                        <input type="text" id="answerTitle" placeholder="e.g., Tell me about yourself" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; box-sizing: border-box;">
+                    </div>
+
+                    <div style="margin-bottom: 12px;">
+                        <label style="display: block; font-size: 11px; font-weight: 600; color: #666; margin-bottom: 6px;">Answer</label>
+                        <textarea id="answerText" placeholder="Write your answer here..." style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; box-sizing: border-box; min-height: 100px; resize: vertical;"></textarea>
+                    </div>
+
+                    <div style="display: flex; gap: 8px;">
+                        <button id="saveAnswerBtn" class="btn btn-primary" style="flex: 1; font-size: 11px;">Save Answer</button>
+                        <button id="cancelAnswerBtn" class="btn btn-secondary" style="flex: 1; font-size: 11px;">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- Settings Tab -->
+
+            <div id="aiTab" class="tab-content">
+                <div class="panel">
+                    <h3>💡 Smart Answers</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 14px; line-height: 1.5;">
+                        Scan the current page for open-ended questions. We'll generate grounded, ≤100-word answers from your resume and profile. Review each one before filling.
+                    </p>
+
+                    <!-- Scan Button -->
+                    <button id="scanQuestionsBtn" class="btn btn-primary" style="width: 100%; margin-bottom: 14px;">
+                        🔍 Scan Page for Questions
+                    </button>
+
+                    <!-- Status -->
+                    <div id="qaStatus" style="display:none; padding: 10px 12px; border-radius: 6px; font-size: 11px; margin-bottom: 12px;"></div>
+
+                    <!-- Empty state -->
+                    <div id="qaEmptyState" style="text-align: center; padding: 24px 16px; color: #aaa;">
+                        <div style="font-size: 32px; margin-bottom: 8px;">🤖</div>
+                        <p style="font-size: 12px; margin: 0;">Click Scan to detect questions on this career page</p>
+                    </div>
+
+                    <!-- Question Cards -->
+                    <div id="qaCardsContainer" style="display:none; margin-bottom: 12px;"></div>
+
+                    <!-- Fill All Button -->
+                    <div id="qaActionsBar" style="display:none;">
+                        <div style="display: flex; gap: 8px;">
+                            <button id="fillApprovedBtn" class="btn btn-primary" style="flex: 1;">✅ Fill Approved Answers</button>
+                            <button id="rescanBtn" class="btn btn-secondary" style="flex: 1;">🔄 Re-scan</button>
+                        </div>
+                        <p id="qaFillCount" style="font-size: 10px; color: #888; text-align: center; margin-top: 6px;"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab (account) -->
+            <div id="accountTab" class="tab-content">
+                <div class="panel">
+                    <h3>⚙️ Settings &amp; Controls</h3>
+
+
+                    <div id="jobOrbitLoginSection" style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">🌐 Job Orbit Connection</h4>
+                        
+                        <div id="jobOrbitNotConnected" style="text-align: center; padding: 16px; background: #f9f9f9; border-radius: 6px;">
+                            <p style="margin: 0 0 12px 0; font-size: 11px; color: #666;">
+                                Sync your applications and answers automatically
+                            </p>
+                            <button id="joborbitLoginBtn" class="btn btn-primary" style="width: 100%;">
+                                🔗 Login with Job Orbit
+                            </button>
+                        </div>
+                        
+                        <div id="jobOrbitConnected" style="display: none; padding: 12px; background: #e8f5e9; border-radius: 6px; border-left: 4px solid #4caf50;">
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                                <span style="font-size: 20px;">✓</span>
+                                <div style="flex: 1;">
+                                    <p style="margin: 0; font-weight: 600; color: #2e7d32; font-size: 12px;">Already Logged In</p>
+                                    <p style="margin: 4px 0 0 0; font-size: 10px; color: #555;" id="jobOrbitUserEmail"></p>
+                                    <p style="margin: 6px 0 0 0; font-size: 9px; color: #888;" id="jobOrbitSyncStatus">Synced</p>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 8px; flex-direction: column;">
+                                <button id="joborbitSyncBtn" class="btn btn-secondary" style="width: 100%; font-size: 11px;">
+                                    🔄 Sync Now
+                                </button>
+                                <button id="joborbitLogoutBtn" class="btn btn-secondary" style="width: 100%; font-size: 11px;">
+                                    🚪 Logout
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Autofill Settings -->
+                    <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">⚡ Autofill Preferences</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+                                <input type="checkbox" id="autoStartAutofill" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Auto-fill on job pages</span>
+                            </label>
+                            
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 8px;">
+                                <input type="checkbox" id="showFloatingButton" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Show autofill button</span>
+                            </label>
+                            
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="enableNotifications" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; color: #333;">Show notifications</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- About -->
+                    <div>
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">ℹ️ About</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px; font-size: 11px; line-height: 1.6;">
+                            <p style="margin: 0 0 8px 0;">
+                                <strong>ATS Resume Optimizer</strong><br>
+                                v1.0.0
+                            </p>
+                            <p style="margin: 0;">
+                                <a href="https://github.com/aashutosh-kumarbhardwaj/ATS-Resume-Optimizer" target="_blank" style="color: #667eea; text-decoration: none;">GitHub</a>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Autofill Tab -->
+            <div id="autofillTab" class="tab-content">
+                <div class="panel">
+                    <h3>⚡ Autofill Profile</h3>
+                    <p style="font-size: 11px; color: #666; margin-bottom: 12px; line-height: 1.4;">
+                        Fill in your profile details once. We will auto-fill them when you visit a job application page. All data is stored locally.
+                    </p>
+                    
+                    <form id="autofillForm">
+                        <div class="form-section-title">👤 Personal Info</div>
+                        <div class="form-group">
+                            <label for="full_name">Full Name</label>
+                            <input type="text" id="full_name" placeholder="John Doe">
+                        </div>
+                        
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="first_name">First Name</label>
+                                <input type="text" id="first_name" placeholder="John">
+                            </div>
+                            <div class="form-group">
+                                <label for="last_name">Last Name</label>
+                                <input type="text" id="last_name" placeholder="Doe">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="email">Email Address</label>
+                            <input type="email" id="email" placeholder="john.doe@example.com">
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="phone">Phone Number</label>
+                                <input type="tel" id="phone" placeholder="+1 (555) 019-2834">
+                            </div>
+                            <div class="form-group">
+                                <label for="city">City</label>
+                                <input type="text" id="city" placeholder="San Francisco">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="country">Country</label>
+                            <input type="text" id="country" placeholder="United States">
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="state">State / Province</label>
+                                <input type="text" id="state" placeholder="California">
+                            </div>
+                            <div class="form-group">
+                                <label for="zip">ZIP / PIN Code</label>
+                                <input type="text" id="zip" placeholder="94102">
+                            </div>
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">🌐 Social & Portfolio Links</div>
+                        <div class="form-group">
+                            <label for="linkedin">LinkedIn Profile URL</label>
+                            <input type="url" id="linkedin" placeholder="https://linkedin.com/in/johndoe">
+                        </div>
+                        <div class="form-group">
+                            <label for="github">GitHub Profile URL</label>
+                            <input type="url" id="github" placeholder="https://github.com/johndoe">
+                        </div>
+                        <div class="form-group">
+                            <label for="portfolio">Portfolio / Personal Website</label>
+                            <input type="url" id="portfolio" placeholder="https://johndoe.dev">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">💼 Professional Info</div>
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="current_title">Current Job Title</label>
+                                <input type="text" id="current_title" placeholder="Software Engineer">
+                            </div>
+                            <div class="form-group">
+                                <label for="current_company">Current Company</label>
+                                <input type="text" id="current_company" placeholder="Tech Corp">
+                            </div>
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label for="years_of_experience">Years of Experience</label>
+                                <input type="number" id="years_of_experience" placeholder="3" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="notice_period">Notice Period</label>
+                                <input type="text" id="notice_period" placeholder="2 weeks">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="expected_salary">Expected Salary</label>
+                            <input type="text" id="expected_salary" placeholder="$80,000 - $120,000">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">📄 Resume & Skills</div>
+                        <div class="form-group">
+                            <label for="default_resume">Default Resume</label>
+                            <input type="text" id="default_resume" placeholder="Your resume filename">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="skills">Skills (comma-separated)</label>
+                            <input type="text" id="skills" placeholder="JavaScript, React, Python, AWS, SQL">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">🤖 Pre-filled Answers</div>
+                        <div class="form-group">
+                            <label for="answer_about_you">Tell me about yourself</label>
+                            <textarea id="answer_about_you" placeholder="Brief introduction..." style="min-height: 60px; resize: vertical;"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="answer_why_company">Why this company?</label>
+                            <textarea id="answer_why_company" placeholder="Why interested in this company?..." style="min-height: 60px; resize: vertical;"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="answer_hire_you">Why should we hire you?</label>
+                            <textarea id="answer_hire_you" placeholder="What makes you a great fit?..." style="min-height: 60px; resize: vertical;"></textarea>
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">🧠 Q&A Profile (used for smart answer generation)</div>
+                        <div class="form-group">
+                            <label for="key_strength">Your Key Strength</label>
+                            <input type="text" id="key_strength" placeholder="e.g. Problem-solving + strong attention to detail">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="why_interested">Why interested in this field / role?</label>
+                            <textarea id="why_interested" placeholder="Briefly explain your motivation for this type of role (used to answer 'Why us?' questions)..." style="min-height: 60px; resize: vertical;"></textarea>
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">⚙️ Job Preferences</div>
+                        <div class="form-group">
+                            <label for="work_environment">Work Environment</label>
+                            <select id="work_environment" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; box-sizing: border-box;">
+                                <option value="">Select...</option>
+                                <option value="remote">Remote</option>
+                                <option value="hybrid">Hybrid</option>
+                                <option value="onsite">On-site</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="preferred_location">Preferred Location</label>
+                            <input type="text" id="preferred_location" placeholder="e.g., San Francisco, CA">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="work_authorization">Work Authorization</label>
+                            <input type="text" id="work_authorization" placeholder="e.g., US Citizen, H1B OK">
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>🛠 Custom Fields</span>
+                            <button type="button" id="addCustomFieldBtn" class="btn-text-action">+ Add Custom Field</button>
+                        </div>
+                        <p style="font-size: 10px; color: #888; margin-top: -4px; margin-bottom: 8px;">
+                            Define any extra fields career forms might ask (e.g. Notice Period, Desired Salary).
+                        </p>
+                        
+                        <div id="customFieldsContainer" class="custom-fields-container">
+                            <!-- Dynamic rows will be inserted here -->
+                        </div>
+
+                        <div class="form-section-title" style="margin-top: 16px;">⚙️ Settings</div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="settingShowBadge" checked>
+                            <label for="settingShowBadge" style="font-weight: normal; cursor: pointer;">Show floating "Autofill" button on career pages</label>
+                        </div>
+
+                        <div style="margin-top: 12px; padding: 10px; background: #fff3cd; border-radius: 6px; border-left: 4px solid #ffc107; display: none;" id="autofillHiddenNotice">
+                            <div style="display: flex; justify-content: space-between; align-items: start; gap: 8px;">
+                                <div style="flex: 1;">
+                                    <p style="font-size: 11px; color: #856404; margin: 0 0 8px 0;">
+                                        ⚠️ You closed the autofill button on the current page. Click below to show it again.
+                                    </p>
+                                    <button type="button" id="showAutofillButtonBtn" class="btn btn-secondary" style="width: 100%; font-size: 12px;">
+                                        🔄 Show Autofill Button on Current Page
+                                    </button>
+                                </div>
+                                <button type="button" id="dismissAutofillNoticeBtn" style="
+                                    background: none;
+                                    border: none;
+                                    color: #856404;
+                                    font-size: 18px;
+                                    cursor: pointer;
+                                    padding: 0;
+                                    width: 20px;
+                                    height: 20px;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                    flex-shrink: 0;
+                                    margin-top: -2px;
+                                " title="Dismiss this notice">✕</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 20px; display: flex; gap: 8px;">
+                            <button type="submit" id="saveProfileBtn" class="btn btn-primary" style="flex: 1;">💾 Save Profile</button>
+                            <button type="button" id="autofillActiveTabBtn" class="btn btn-secondary" style="flex: 1;">⚡ Autofill Tab</button>
+                        </div>
+                    </form>
+                    
+                    <div id="autofillMessage" class="autofill-status-message hidden"></div>
+
+                    <!-- Missed Fields Reporter Panel -->
+                    <div id="missedFieldsSection" class="hidden" style="margin-top: 16px; border-top: 1px dashed #e2e8f0; padding-top: 12px; text-align: left;">
+                        <h4 style="color: #e53e3e; font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px; font-weight: 700;">
+                            <span>⚠️</span> Unfilled Fields on Current Page
+                        </h4>
+                        <p style="font-size: 10px; color: #718096; margin-bottom: 8px; line-height: 1.3;">
+                            Click the <strong>+</strong> next to any field to add it to your Custom Fields profile.
+                        </p>
+                        <div id="missedFieldsList" style="display: flex; flex-wrap: wrap; gap: 6px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <span>ATS Resume Optimizer v1.0.0</span>
+        </div>
+    </div>
+
+    <script src="../config/config.js"></script>
+    <script src="../utils/StorageUtil.js"></script>
+    <script src="../utils/TokenVerifier.js"></script>
+    <script src="../utils/SessionManager.js"></script>
+    <script src="../utils/ProfileSyncManager.js"></script>
+    <script src="../utils/DataSyncManager.js"></script>
+    <script src="../utils/smartAnswerEngine.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>
