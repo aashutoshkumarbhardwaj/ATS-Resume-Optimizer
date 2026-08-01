@@ -125,7 +125,7 @@ class TokenRefreshScheduler {
                     console.log('[AUTH] clearSession() executes: YES (Status ' + response.status + ')');
                     console.log('[TokenRefresh] Stale/invalid token session cleared');
                     await this.clearSession();
-                    this.stopScheduler();
+                    this.stop();
                 }
                 this.isRefreshing = false;
                 return;

@@ -743,7 +743,7 @@ async function syncPendingApplications() {
         let updated = false;
         
         for (let i = 0; i < history.length; i++) {
-            if (history[i].synced === false) {
+            if (!history[i].synced) {
                 try {
                     // Supabase REST API config
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
