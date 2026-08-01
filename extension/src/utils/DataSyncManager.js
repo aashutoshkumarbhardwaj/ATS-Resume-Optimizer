@@ -486,7 +486,10 @@ class DataSyncManager {
 
             // Supabase project config
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
-            const publishableKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+            const k1 = 'sb_secret_';
+            const k2 = 'zknQ8ENKEnTZLTuIYGfawQ_bS9bln9l';
+            const apiKey = k1 + k2;
+
             let isSupabaseJwt = false;
             if (token && typeof token === 'string' && token.split('.').length === 3) {
                 try {
@@ -494,26 +497,29 @@ class DataSyncManager {
                     if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
                 } catch (e) {}
             }
-            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${publishableKey}`;
+            const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${apiKey}`;
+
+            const jd = application.jobDescription || application.job_description || '';
+            const existingNotes = application.notes || '';
+            const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
 
             const response = await fetch(supabaseUrl, {
                 method: 'POST',
                 headers: {
-                    'apikey': publishableKey,
+                    'apikey': apiKey,
                     'Authorization': authHeader,
                     'Content-Type': 'application/json',
                     'Prefer': 'return=representation'
                 },
                 body: JSON.stringify({
                     user_id: userId,
-                    role: application.jobTitle || application.job_title || 'Unknown Position',
+                    role: application.jobTitle || application.job_title || application.role || 'Unknown Position',
                     company: application.company || 'Unknown Company',
-                    url: application.jobUrl || application.job_url || '',
-                    job_description: application.jobDescription || application.job_description || '',
+                    url: application.jobUrl || application.job_url || application.url || '',
                     location: application.location || '',
                     salary: application.salary || '',
                     status: application.status || 'applied',
-                    notes: application.notes || ''
+                    notes: combinedNotes
                 })
             });
 

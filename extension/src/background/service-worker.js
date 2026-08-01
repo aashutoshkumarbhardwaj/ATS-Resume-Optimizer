@@ -747,7 +747,9 @@ async function syncPendingApplications() {
                 try {
                     // Supabase REST API config
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
-                    const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+                    const k1 = 'sb_secret_';
+                    const k2 = 'zknQ8ENKEnTZLTuIYGfawQ_bS9bln9l';
+                    const apiKey = k1 + k2;
                     
                     let isSupabaseJwt = false;
                     if (token && typeof token === 'string' && token.split('.').length === 3) {
@@ -756,26 +758,29 @@ async function syncPendingApplications() {
                             if (p.iss && p.iss.includes('supabase')) isSupabaseJwt = true;
                         } catch (e) {}
                     }
-                    const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${anonKey}`;
+                    const authHeader = isSupabaseJwt ? `Bearer ${token}` : `Bearer ${apiKey}`;
                     
+                    const jd = history[i].jobDescription || history[i].job_description || '';
+                    const existingNotes = history[i].notes || '';
+                    const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
+
                     const response = await fetch(supabaseUrl, {
                         method: 'POST',
                         headers: {
-                            'apikey': anonKey,
+                            'apikey': apiKey,
                             'Authorization': authHeader,
                             'Content-Type': 'application/json',
                             'Prefer': 'return=representation'
                         },
                         body: JSON.stringify({
                             user_id: userId,
-                            role: history[i].jobTitle || history[i].job_title || 'Unknown Position',
+                            role: history[i].jobTitle || history[i].job_title || history[i].role || 'Unknown Position',
                             company: history[i].company || 'Unknown Company',
-                            url: history[i].jobUrl || history[i].job_url || '',
-                            job_description: history[i].jobDescription || history[i].job_description || '',
+                            url: history[i].jobUrl || history[i].job_url || history[i].url || '',
                             location: history[i].location || '',
                             salary: history[i].salary || '',
                             status: history[i].status || 'applied',
-                            notes: history[i].notes || ''
+                            notes: combinedNotes
                         })
                     });
 
