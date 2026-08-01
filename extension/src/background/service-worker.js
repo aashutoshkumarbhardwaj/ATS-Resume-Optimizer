@@ -747,7 +747,7 @@ async function syncPendingApplications() {
                 try {
                     // Supabase REST API config
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
-                    const anonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRzYmtqa3dlZnN6cXF6dWtnZHRrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MTEyMjUzOTAsImV4cCI6MjAyNjc5MzM5MH0.zknQ8ENKEnTZLTuIYGfawQ_bS9bln9l';
+                    const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
                     
                     const response = await fetch(supabaseUrl, {
                         method: 'POST',
