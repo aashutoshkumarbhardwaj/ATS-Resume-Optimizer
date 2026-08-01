@@ -224,18 +224,19 @@ class FieldDetector {
     }
 
     /**
-     * Detect field information
+     * Detect field information with Accessibility Tree (AXTree) attributes
      */
     detectField(element) {
         const fieldInfo = {
             element,
             type: this.getFieldType(element),
-            name: element.name || element.id || '',
+            name: element.name || element.id || element.getAttribute('data-automation-id') || '',
             label: this.extractLabel(element),
-            placeholder: element.placeholder || '',
+            placeholder: element.placeholder || element.getAttribute('aria-placeholder') || '',
             ariaLabel: element.getAttribute('aria-label') || '',
             ariaDescribedBy: element.getAttribute('aria-describedby') || '',
-            isRequired: element.required || element.hasAttribute('aria-required'),
+            role: element.getAttribute('role') || '',
+            isRequired: element.required || element.hasAttribute('aria-required') || element.getAttribute('aria-required') === 'true',
             isVisible: this.isVisible(element),
             isInteractive: this.isInteractive(element),
             dataAttributes: this.extractDataAttributes(element),
@@ -246,67 +247,106 @@ class FieldDetector {
     }
 
     /**
-     * Get field type
+     * Get field type (supports standard HTML, Shadow DOM, and ARIA roles)
      */
     getFieldType(element) {
         const tagName = element.tagName.toLowerCase();
+        const role = (element.getAttribute('role') || '').toLowerCase();
 
         if (tagName === 'input') {
             return element.type || 'text';
-        } else if (tagName === 'textarea') {
+        } else if (tagName === 'textarea' || role === 'textbox') {
             return 'textarea';
-        } else if (tagName === 'select') {
+        } else if (tagName === 'select' || role === 'combobox' || role === 'listbox') {
             return 'select';
         } else if (element.contentEditable === 'true') {
             return 'contenteditable';
+        } else if (role === 'checkbox') {
+            return 'checkbox';
+        } else if (role === 'radio') {
+            return 'radio';
         }
 
         return 'unknown';
     }
 
     /**
-     * Extract label for field
+     * Extract label for field using Chrome Accessibility Tree (AXTree) resolution
      */
     extractLabel(element) {
-        // Try associated label
-        if (element.id) {
-            const label = document.querySelector(`label[for="${element.id}"]`);
-            if (label) {
-                return label.textContent.trim();
-            }
-        }
+        if (!element) return '';
 
-        // Try aria-label
-        const ariaLabel = element.getAttribute('aria-label');
-        if (ariaLabel) {
-            return ariaLabel;
-        }
-
-        // Try aria-labelledby
+        // 1. AXTree Resolution: Check aria-labelledby (supports multi-id spaces)
         const ariaLabelledBy = element.getAttribute('aria-labelledby');
         if (ariaLabelledBy) {
-            const labelElement = document.getElementById(ariaLabelledBy);
-            if (labelElement) {
-                return labelElement.textContent.trim();
+            const ids = ariaLabelledBy.split(/\s+/).filter(Boolean);
+            const labelTexts = ids.map(id => {
+                const labelEl = document.getElementById(id);
+                return labelEl ? labelEl.textContent.trim() : '';
+            }).filter(Boolean);
+
+            if (labelTexts.length > 0) {
+                return labelTexts.join(' ');
             }
         }
 
-        // Try placeholder
-        if (element.placeholder) {
-            return element.placeholder;
+        // 2. AXTree Resolution: Check direct aria-label
+        const ariaLabel = element.getAttribute('aria-label');
+        if (ariaLabel && ariaLabel.trim()) {
+            return ariaLabel.trim();
         }
 
-        // Try nearby label
+        // 3. Associated <label for="id">
+        if (element.id) {
+            const label = document.querySelector(`label[for="${element.id}"]`);
+            if (label && label.textContent.trim()) {
+                return label.textContent.trim();
+            }
+        }
+
+        // 4. Check title attribute or placeholder / aria-placeholder
+        if (element.title && element.title.trim()) {
+            return element.title.trim();
+        }
+
+        if (element.placeholder && element.placeholder.trim()) {
+            return element.placeholder.trim();
+        }
+
+        const ariaPlaceholder = element.getAttribute('aria-placeholder');
+        if (ariaPlaceholder && ariaPlaceholder.trim()) {
+            return ariaPlaceholder.trim();
+        }
+
+        // 5. Parent <label> container wrapping the element
+        const parentLabel = element.closest('label');
+        if (parentLabel && parentLabel.textContent.trim()) {
+            return parentLabel.textContent.trim();
+        }
+
+        // 6. AXTree Group Context: Check nearest fieldset legend or [role="group"]
+        const groupContainer = element.closest('fieldset, [role="group"], [role="radiogroup"]');
+        let groupLabel = '';
+        if (groupContainer) {
+            const legend = groupContainer.querySelector('legend, [class*="legend"], [class*="label"], header, h3, h4');
+            if (legend && legend.textContent.trim()) {
+                groupLabel = legend.textContent.trim();
+            }
+        }
+
+        // 7. Nearby DOM Text (preceding sibling / parent tree search)
+        let nearbyText = '';
         let parent = element.parentElement;
         for (let i = 0; i < 3 && parent; i++) {
-            const label = parent.querySelector('label');
-            if (label) {
-                return label.textContent.trim();
+            const labelEl = parent.querySelector('label, [class*="label"], [class*="title"], [class*="heading"]');
+            if (labelEl && labelEl !== element) {
+                nearbyText = labelEl.textContent.trim();
+                if (nearbyText) break;
             }
             parent = parent.parentElement;
         }
 
-        return '';
+        return groupLabel ? `${groupLabel} ${nearbyText}`.trim() : nearbyText;
     }
 
     /**

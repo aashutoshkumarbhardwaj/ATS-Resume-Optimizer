@@ -15,34 +15,51 @@ class EventDispatcher {
         if (!element) return false;
 
         try {
-            // 1. Check if it's a React component
-            const isReact = this.isReactComponent(element);
-            if (isReact) {
+            // 0. Focus element first
+            element.focus();
+            element.dispatchEvent(new Event('focus', { bubbles: true, cancelable: true }));
+
+            // 1. Native Property Descriptor Setter (Bypasses React/Vue/Angular value override tracking)
+            const prototype = element.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+            const nativeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+            if (nativeValueSetter) {
+                nativeValueSetter.call(element, value);
+            } else {
+                element.value = value;
+            }
+
+            // 2. Trigger React component Fiber update if detected
+            if (this.isReactComponent(element)) {
                 this.triggerReactUpdate(element, value);
             }
 
-            // 2. Set the value
-            element.value = value;
+            // 3. Dispatch beforeinput & input events
+            try {
+                element.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: String(value) }));
+            } catch (e) {}
 
-            // 3. Dispatch input event (for most frameworks)
             element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-
-            // Small delay
             await this.wait(delay / 3);
 
-            // 4. Dispatch change event (for form recognition)
+            // 4. Dispatch change event
             element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-
-            // Small delay
             await this.wait(delay / 3);
 
-            // 5. Dispatch blur event (for validation)
+            // 5. Post-Fill Verification
+            let isVerified = (element.value === value || element.textContent === value);
+            
+            // If post-fill verification failed (e.g. React state reset value to empty), try execCommand / keypress fallback
+            if (!isVerified) {
+                try {
+                    element.select();
+                    document.execCommand('insertText', false, value);
+                    isVerified = (element.value === value || element.textContent === value);
+                } catch (cmdErr) {}
+            }
+
+            // 6. Dispatch blur event
             element.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
-
-            // Small delay
-            await this.wait(delay / 3);
-
-            // 6. Dispatch custom events that some frameworks might listen to
             element.dispatchEvent(new CustomEvent('update', { bubbles: true, detail: { value } }));
 
             return true;

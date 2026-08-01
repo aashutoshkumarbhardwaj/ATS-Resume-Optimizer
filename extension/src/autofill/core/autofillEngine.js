@@ -100,21 +100,21 @@ class AutofillEngine {
         await this.waitForDomStable();
 
         const fields = [];
-        const inputs = document.querySelectorAll('input, textarea, select');
+        const candidateElements = this.queryAllInteractiveElements(document.body);
 
-        inputs.forEach((element, index) => {
+        candidateElements.forEach((element, index) => {
             if (this.isVisibleAndInteractive(element)) {
                 const field = {
-                    id: element.id || `field_${index}`,
+                    id: element.id || element.getAttribute('data-automation-id') || `field_${index}`,
                     element,
                     type: this.detectFieldType(element),
                     label: this.extractLabel(element),
-                    placeholder: element.placeholder || '',
+                    placeholder: element.placeholder || element.getAttribute('aria-placeholder') || '',
                     ariaLabel: element.getAttribute('aria-label') || '',
                     name: element.name || '',
-                    value: element.value || '',
+                    value: element.value || element.textContent || '',
                     nearbyText: this.getNearbyText(element),
-                    isRequired: element.required || element.hasAttribute('aria-required'),
+                    isRequired: element.required || element.hasAttribute('aria-required') || element.getAttribute('aria-required') === 'true',
                     detectContext: {
                         tagName: element.tagName,
                         className: element.className,
@@ -127,6 +127,29 @@ class AutofillEngine {
         });
 
         return fields;
+    }
+
+    /**
+     * Query all interactive elements across Light DOM and Shadow DOM
+     */
+    queryAllInteractiveElements(root) {
+        if (!root) return [];
+        const results = [];
+        const selector = 'input, textarea, select, [role="textbox"], [role="combobox"], [role="listbox"], [role="checkbox"], [role="radio"], [contenteditable="true"]';
+
+        const elements = root.querySelectorAll(selector);
+        elements.forEach(el => results.push(el));
+
+        // Traverse Shadow Roots recursively
+        const allElements = root.querySelectorAll('*');
+        allElements.forEach(el => {
+            if (el.shadowRoot) {
+                const shadowResults = this.queryAllInteractiveElements(el.shadowRoot);
+                results.push(...shadowResults);
+            }
+        });
+
+        return Array.from(new Set(results));
     }
 
     /**
