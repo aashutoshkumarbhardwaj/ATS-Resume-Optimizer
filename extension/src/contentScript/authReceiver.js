@@ -20,8 +20,25 @@ window.addEventListener('message', function(event) {
 });
 
 /**
+ * Decode JWT token safely without external library
+ */
+function decodeJWT(token) {
+    if (!token || typeof token !== 'string') return null;
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        const payloadB64 = parts[1];
+        const fixed = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonStr = decodeURIComponent(atob(fixed).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+        return JSON.parse(jsonStr);
+    } catch(e) {
+        return null;
+    }
+}
+
+/**
  * Automatically sync session from web app's localStorage
- * If user is logged into Job Orbit website, sync token to extension background!
+ * Scans for extension_session_token, auth_token, sb-*-auth-token, etc.
  */
 let lastSyncedToken = null;
 
@@ -32,55 +49,94 @@ function syncWebsiteSession() {
                                window.location.hostname.includes('localhost');
         if (!isJobOrbitSite) return;
 
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key) continue;
+        let detectedToken = null;
+        let detectedUser = null;
+        let detectedExpiresIn = 86400;
 
-            // Match Supabase auth token keys
-            if (key.includes('auth-token') || key.includes('supabase') || key.startsWith('sb-')) {
-                const rawVal = localStorage.getItem(key);
-                if (!rawVal) continue;
+        // 1. Direct key checks in localStorage
+        const directTokenKeys = ['extension_session_token', 'auth_token', 'accessToken'];
+        for (const key of directTokenKeys) {
+            const val = localStorage.getItem(key);
+            if (val && typeof val === 'string' && val.startsWith('ey')) {
+                detectedToken = val;
+                const decoded = decodeJWT(val);
+                if (decoded) {
+                    detectedUser = {
+                        id: decoded.sub,
+                        email: decoded.email || decoded.user_metadata?.email
+                    };
+                    if (decoded.exp) {
+                        detectedExpiresIn = Math.max(0, Math.floor(decoded.exp - (Date.now() / 1000)));
+                    }
+                }
+                break;
+            }
+        }
 
-                try {
-                    const parsed = JSON.parse(rawVal);
-                    const accessToken = parsed.access_token || parsed.currentSession?.access_token;
-                    const user = parsed.user || parsed.currentSession?.user;
-                    const expiresAt = parsed.expires_at || parsed.currentSession?.expires_at;
+        // 2. Fallback: Scan all localStorage keys for Supabase session objects
+        if (!detectedToken) {
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (!key) continue;
 
-                    if (accessToken && accessToken !== lastSyncedToken) {
-                        console.log('[ContentScript] 🔑 Detected active Job Orbit session in localStorage:', key);
-                        lastSyncedToken = accessToken;
+                if (key.includes('auth') || key.includes('token') || key.includes('supabase') || key.startsWith('sb-')) {
+                    const rawVal = localStorage.getItem(key);
+                    if (!rawVal) continue;
 
-                        let expiresIn = 86400;
-                        if (expiresAt) {
-                            expiresIn = Math.max(0, Math.floor(expiresAt - (Date.now() / 1000)));
+                    // Check if raw value is already a JWT
+                    if (typeof rawVal === 'string' && rawVal.startsWith('ey')) {
+                        detectedToken = rawVal;
+                        const decoded = decodeJWT(rawVal);
+                        if (decoded) {
+                            detectedUser = { id: decoded.sub, email: decoded.email || decoded.user_metadata?.email };
+                            if (decoded.exp) detectedExpiresIn = Math.max(0, Math.floor(decoded.exp - (Date.now() / 1000)));
                         }
-
-                        chrome.runtime.sendMessage({
-                            type: 'JOBORBIT_AUTH_RESPONSE',
-                            data: {
-                                extensionToken: accessToken,
-                                expiresIn: expiresIn,
-                                user: user || null
-                            }
-                        }, function(response) {
-                            console.log('[ContentScript] 📤 Auto-synced website session to extension background, result:', response);
-                        });
                         break;
                     }
-                } catch (e) {
-                    // Ignore non-JSON localStorage items
+
+                    // Check if JSON object
+                    try {
+                        const parsed = JSON.parse(rawVal);
+                        const tokenStr = parsed.access_token || parsed.token || parsed.extensionToken || parsed.currentSession?.access_token;
+                        if (tokenStr && typeof tokenStr === 'string') {
+                            detectedToken = tokenStr;
+                            const userObj = parsed.user || parsed.currentSession?.user;
+                            const decoded = decodeJWT(tokenStr);
+                            detectedUser = userObj || (decoded ? { id: decoded.sub, email: decoded.email || decoded.user_metadata?.email } : null);
+                            const exp = parsed.expires_at || parsed.currentSession?.expires_at;
+                            if (exp) detectedExpiresIn = Math.max(0, Math.floor(exp - (Date.now() / 1000)));
+                            else if (decoded && decoded.exp) detectedExpiresIn = Math.max(0, Math.floor(decoded.exp - (Date.now() / 1000)));
+                            break;
+                        }
+                    } catch (e) {
+                        // Skip non-JSON
+                    }
                 }
             }
         }
+
+        if (detectedToken && detectedToken !== lastSyncedToken) {
+            console.log('[ContentScript] 🔑 Detected active Job Orbit token in localStorage');
+            lastSyncedToken = detectedToken;
+
+            chrome.runtime.sendMessage({
+                type: 'JOBORBIT_AUTH_RESPONSE',
+                data: {
+                    extensionToken: detectedToken,
+                    expiresIn: detectedExpiresIn,
+                    user: detectedUser
+                }
+            }, function(response) {
+                console.log('[ContentScript] 📤 Auto-synced session to background, result:', response);
+            });
+        }
     } catch (e) {
-        console.warn('[ContentScript] Could not access localStorage for session auto-sync:', e.message);
+        console.warn('[ContentScript] Could not access localStorage for session sync:', e.message);
     }
 }
 
-// Execute session auto-sync on load
+// Run auto-sync immediately and periodically
 syncWebsiteSession();
-// Check periodically every 5 seconds for session changes
-setInterval(syncWebsiteSession, 5000);
+setInterval(syncWebsiteSession, 3000);
 
-console.log('[ContentScript] 🚀 Auth receiver initialized with automatic localStorage session detection');
+console.log('[ContentScript] 🚀 Auth receiver initialized with robust token scanning');

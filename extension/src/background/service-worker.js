@@ -291,6 +291,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Use try-catch to ensure sendResponse is called once
     try {
         switch (request.type) {
+            case 'PING':
+                sendResponse({ success: true, pong: true });
+                return true;
+                
             case 'PROCESS_FILE':
                 processFile(request.payload, sendResponse);
                 return true;
