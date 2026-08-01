@@ -784,25 +784,25 @@ async function syncPendingApplications() {
                         notes: combinedNotes
                     };
 
-                    let response = await fetch(supabaseUrl, {
-                        method: 'POST',
-                        headers: reqHeaders,
-                        body: JSON.stringify({
-                            user_id: appData.user_id,
-                            role: appData.role,
-                            company: appData.company,
-                            url: appData.url,
-                            location: appData.location,
-                            salary: appData.salary,
-                            status: appData.status,
-                            applied_date: appData.applied_date,
-                            notes: appData.notes
-                        })
-                    });
-
-                    if (!response.ok) {
-                        // Fallback to Render backend API
-                        console.log(`[ServiceWorker] Direct Supabase insert status: ${response.status}, attempting Render backend fallback...`);
+                    let response;
+                    if (isSupabaseJwt) {
+                        response = await fetch(supabaseUrl, {
+                            method: 'POST',
+                            headers: reqHeaders,
+                            body: JSON.stringify({
+                                user_id: appData.user_id,
+                                role: appData.role,
+                                company: appData.company,
+                                url: appData.url,
+                                location: appData.location,
+                                salary: appData.salary,
+                                status: appData.status,
+                                applied_date: appData.applied_date,
+                                notes: appData.notes
+                            })
+                        });
+                    } else {
+                        // Route directly to Render backend for extension session tokens
                         const backendUrl = 'https://ats-resume-optimizer-359j.onrender.com/api/applications';
                         response = await fetch(backendUrl, {
                             method: 'POST',

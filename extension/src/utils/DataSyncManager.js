@@ -522,25 +522,25 @@ class DataSyncManager {
                 notes: combinedNotes
             };
 
-            let response = await fetch(supabaseUrl, {
-                method: 'POST',
-                headers: reqHeaders,
-                body: JSON.stringify({
-                    user_id: appPayload.user_id,
-                    role: appPayload.role,
-                    company: appPayload.company,
-                    url: appPayload.url,
-                    location: appPayload.location,
-                    salary: appPayload.salary,
-                    status: appPayload.status,
-                    applied_date: appPayload.applied_date,
-                    notes: appPayload.notes
-                })
-            });
-
-            if (!response.ok) {
-                // Fallback to Render backend API
-                console.log(`[DataSync] Direct Supabase insert status: ${response.status}, attempting Render backend fallback...`);
+            let response;
+            if (isSupabaseJwt) {
+                response = await fetch(supabaseUrl, {
+                    method: 'POST',
+                    headers: reqHeaders,
+                    body: JSON.stringify({
+                        user_id: appPayload.user_id,
+                        role: appPayload.role,
+                        company: appPayload.company,
+                        url: appPayload.url,
+                        location: appPayload.location,
+                        salary: appPayload.salary,
+                        status: appPayload.status,
+                        applied_date: appPayload.applied_date,
+                        notes: appPayload.notes
+                    })
+                });
+            } else {
+                // Route directly to Render backend for extension session tokens
                 const backendUrl = 'https://ats-resume-optimizer-359j.onrender.com/api/applications';
                 response = await fetch(backendUrl, {
                     method: 'POST',
