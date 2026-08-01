@@ -109,8 +109,15 @@ class TokenVerifier {
     /**
      * Alias for getStoredToken (backwards compatibility)
      */
-    static async verifyExtensionToken() {
+    static async verifyExtensionToken(token) {
+        if (token) {
+            return await this.verifyToken(token);
+        }
         return await this.getStoredToken();
+    }
+
+    async verifyExtensionToken(token) {
+        return await TokenVerifier.verifyExtensionToken(token);
     }
 
     /**
