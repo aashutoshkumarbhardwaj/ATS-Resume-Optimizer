@@ -519,6 +519,7 @@ class DataSyncManager {
                     location: application.location || '',
                     salary: application.salary || '',
                     status: application.status || 'applied',
+                    applied_date: application.applied_date || (application.timestamp ? new Date(application.timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
                     notes: combinedNotes
                 })
             });

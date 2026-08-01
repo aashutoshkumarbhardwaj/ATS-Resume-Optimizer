@@ -780,6 +780,7 @@ async function syncPendingApplications() {
                             location: history[i].location || '',
                             salary: history[i].salary || '',
                             status: history[i].status || 'applied',
+                            applied_date: history[i].applied_date || (history[i].timestamp ? new Date(history[i].timestamp).toISOString().split('T')[0] : new Date().toISOString().split('T')[0]),
                             notes: combinedNotes
                         })
                     });
