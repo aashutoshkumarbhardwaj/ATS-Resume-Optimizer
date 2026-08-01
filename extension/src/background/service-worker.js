@@ -748,12 +748,13 @@ async function syncPendingApplications() {
                     // Supabase REST API config
                     const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
                     const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+                    const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
                     
                     const response = await fetch(supabaseUrl, {
                         method: 'POST',
                         headers: {
                             'apikey': anonKey,
-                            'Authorization': `Bearer ${token}`,
+                            'Authorization': authHeader,
                             'Content-Type': 'application/json',
                             'Prefer': 'return=representation'
                         },
@@ -766,10 +767,7 @@ async function syncPendingApplications() {
                             location: history[i].location || '',
                             salary: history[i].salary || '',
                             status: history[i].status || 'applied',
-                            notes: history[i].notes || '',
-                            applied_date: history[i].timestamp || new Date().toISOString(),
-                            source: history[i].source || 'Extension',
-                            extension_saved: true
+                            notes: history[i].notes || ''
                         })
                     });
 

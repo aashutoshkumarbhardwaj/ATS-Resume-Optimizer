@@ -108,12 +108,13 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/profiles?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
                 headers: {
                     'apikey': anonKey,
-                    'Authorization': `Bearer ${token}`,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json'
                 }
             });
@@ -261,12 +262,13 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/resumes?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
                 headers: {
                     'apikey': anonKey,
-                    'Authorization': `Bearer ${token}`,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json'
                 }
             });
@@ -300,12 +302,13 @@ class DataSyncManager {
         try {
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs?select=*';
             const anonKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${anonKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'GET',
                 headers: {
                     'apikey': anonKey,
-                    'Authorization': `Bearer ${token}`,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json'
                 }
             });
@@ -463,12 +466,13 @@ class DataSyncManager {
             // Supabase project config
             const supabaseUrl = 'https://dsbkjkwefszqqzukgdtk.supabase.co/rest/v1/jobs';
             const publishableKey = 'sb_publishable_KbTCR-8BEKmM3AZYDGauhg_A3i41bVt';
+            const authHeader = (token && typeof token === 'string' && token.split('.').length === 3) ? `Bearer ${token}` : `Bearer ${publishableKey}`;
 
             const response = await fetch(supabaseUrl, {
                 method: 'POST',
                 headers: {
                     'apikey': publishableKey,
-                    'Authorization': `Bearer ${token}`,
+                    'Authorization': authHeader,
                     'Content-Type': 'application/json',
                     'Prefer': 'return=representation'
                 },
@@ -481,10 +485,7 @@ class DataSyncManager {
                     location: application.location || '',
                     salary: application.salary || '',
                     status: application.status || 'applied',
-                    notes: application.notes || '',
-                    applied_date: application.timestamp || application.date || new Date().toISOString(),
-                    source: application.source || 'Extension',
-                    extension_saved: true
+                    notes: application.notes || ''
                 })
             });
 
