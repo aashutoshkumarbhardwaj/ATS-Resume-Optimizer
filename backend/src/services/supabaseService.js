@@ -392,19 +392,20 @@ async function createApplication(profileId, applicationData, userId = null) {
         // 1. Try to insert into Job Orbit's "jobs" table for dashboard visibility
         if (userId) {
             try {
+                const jd = applicationData.jobDescription || applicationData.job_description || '';
+                const existingNotes = applicationData.notes || '';
+                const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
+
                 const { data, error } = await sb.from('jobs').insert([{
                     user_id: userId,
-                    role: applicationData.jobTitle,
-                    company: applicationData.company,
-                    url: applicationData.jobUrl,
-                    job_description: applicationData.jobDescription,
-                    location: applicationData.location,
-                    salary: applicationData.salary,
+                    role: applicationData.jobTitle || 'Unknown Position',
+                    company: applicationData.company || 'Unknown Company',
+                    url: applicationData.jobUrl || '',
+                    location: applicationData.location || '',
+                    salary: applicationData.salary || '',
                     status: applicationData.status || 'applied',
-                    notes: applicationData.notes,
-                    applied_date: new Date().toISOString(),
-                    source: applicationData.source || 'Extension',
-                    extension_saved: true
+                    notes: combinedNotes,
+                    applied_date: new Date().toISOString().split('T')[0]
                 }]).select().single();
                 
                 if (error) throw error;
