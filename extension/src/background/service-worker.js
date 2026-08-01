@@ -115,6 +115,12 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
     console.log('[ServiceWorker] From URL:', sender.url);
     console.log('[ServiceWorker] Request data:', request);
     
+    if (request.type === 'PING') {
+        console.log('[ServiceWorker] 🏓 External PING received');
+        sendResponse({ success: true, pong: true, extensionId: chrome.runtime.id });
+        return true;
+    }
+    
     if (request.type === 'JOBORBIT_AUTH_RESPONSE') {
         console.log("[AUTH] Received callback payload:", request);
         console.log('[ServiceWorker] ✅ Processing Job Orbit auth response');
