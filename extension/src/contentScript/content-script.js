@@ -2141,12 +2141,35 @@ function autoDetectJob() {
                 // Ensure detectedJob is updated so TRACK_MANUAL_APPLICATION has data
                 detectedJob = payload;
                 
-                let experienceText = null;
-                if (payload.description) {
+                let experienceText = "Not specified";
+                if (payload && payload.description) {
                     experienceText = extractExperienceFromText(payload.description);
                 }
                 
+                // Fallback 1: Check dedicated job details / description container if payload was partial
+                if (!experienceText || experienceText === "Not specified") {
+                    const jobContainer = document.querySelector('#job-details, .jobs-description__content, .jobs-box__html-content, article, [class*="job-description"], [class*="jobDescription"]');
+                    if (jobContainer && jobContainer.textContent) {
+                        experienceText = extractExperienceFromText(jobContainer.textContent);
+                    }
+                }
+                
+                // Fallback 2: Check full body innerText (captures SPA dynamic renders)
+                if (!experienceText || experienceText === "Not specified") {
+                    experienceText = extractExperienceFromText(document.body.innerText);
+                }
+                
                 injectJobDetectionIndicator(experienceText);
+                
+                // If experience was Not specified initially, schedule a retry after SPA content finishes rendering
+                if (!experienceText || experienceText === "Not specified") {
+                    setTimeout(() => {
+                        let retryExp = extractExperienceFromText(document.body.innerText);
+                        if (retryExp && retryExp !== "Not specified") {
+                            injectJobDetectionIndicator(retryExp);
+                        }
+                    }, 1500);
+                }
                 
                 // Notify service worker
                 if (isExtensionContextValid()) {
