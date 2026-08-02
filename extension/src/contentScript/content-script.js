@@ -851,17 +851,34 @@ function parseTitleFromMetaString(str) {
     if (!str) return { jobTitle: '', company: '' };
     
     // Remove site suffixes like "| LinkedIn", "- Indeed.com", "- Naukri.com", "- Wellfound"
-    let clean = str.replace(/\s*[-|–—]\s*(?:LinkedIn|Indeed|Naukri|Foundit|Wellfound|Glassdoor|Monster|ZipRecruiter|Careers|Job Orbit).*$/i, '').trim();
+    let clean = str.replace(/\s*[-|–—|•:]\s*(?:LinkedIn|Indeed|Naukri|Foundit|Wellfound|AngelList|Glassdoor|Monster|ZipRecruiter|Careers|Jobs|Job Orbit|Y Combinator|Workday|Greenhouse|Lever).*$/i, '').trim();
 
     // Match "Job Title at Company" or "Job Title - Company" or "Job Title @ Company"
-    const match = clean.match(/^(.*?)\s+(?:at|@|in|for)\s+(.*)$/i) || clean.match(/^(.*?)\s+[-|–—]\s+(.*)$/);
+    const match = clean.match(/^(.*?)\s+(?:at|@|for)\s+(.*)$/i) || clean.match(/^(.*?)\s+[-|–—|•]\s+(.*)$/);
     if (match) {
-        const potentialTitle = match[1].trim();
-        const potentialCompany = match[2].trim();
-        return {
-            jobTitle: isValidJobTitle(potentialTitle) ? cleanTitleString(potentialTitle) : '',
-            company: isValidCompanyName(potentialCompany) ? cleanCompanyString(potentialCompany) : ''
-        };
+        let potentialTitle = match[1].trim();
+        let potentialCompany = match[2].trim();
+        
+        // Strip trailing experience / location in parentheses if present e.g. "Research Engineer (1.5-3 yrs exp)"
+        const baseTitle = potentialTitle.replace(/\s*[\(\[\{].*?[\)\]\}]\s*/g, ' ').trim();
+        
+        if (isValidJobTitle(baseTitle)) {
+            return {
+                jobTitle: cleanTitleString(baseTitle),
+                company: isValidCompanyName(potentialCompany) ? cleanCompanyString(potentialCompany) : ''
+            };
+        } else if (isValidJobTitle(potentialTitle)) {
+            return {
+                jobTitle: cleanTitleString(potentialTitle),
+                company: isValidCompanyName(potentialCompany) ? cleanCompanyString(potentialCompany) : ''
+            };
+        }
+    }
+
+    // Strip parenthetical text for title evaluation
+    const baseClean = clean.replace(/\s*[\(\[\{].*?[\)\]\}]\s*/g, ' ').trim();
+    if (isValidJobTitle(baseClean)) {
+        return { jobTitle: cleanTitleString(baseClean), company: '' };
     }
 
     if (isValidJobTitle(clean)) {
@@ -895,7 +912,7 @@ function extractJobTitle() {
         const el = document.querySelector('h1.job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, .top-card-layout__title, h1.t-24, .job-title');
         if (el && el.textContent) title = el.textContent;
     } else if (url.includes('wellfound.com') || url.includes('angel.co')) {
-        const el = document.querySelector('[data-test="JobTitle"], h1[class*="title"], .styles_title__');
+        const el = document.querySelector('[data-test="JobTitle"], h1[class*="title"], h2[class*="title"], .styles_title__');
         if (el && el.textContent) title = el.textContent;
     } else if (url.includes('indeed.com')) {
         const el = document.querySelector('h1.jobsearch-JobInfoHeader-title, [data-testid="simulated-h1"], h1');
@@ -935,12 +952,37 @@ function extractJobTitle() {
         if (parsed.jobTitle) return parsed.jobTitle;
     }
 
-    // 5. General H1 DOM Search
-    const h1s = document.querySelectorAll('h1');
-    for (const h1 of h1s) {
-        const txt = h1.textContent.trim();
+    // 5. General Headings Search (h1, h2, h3)
+    const headings = document.querySelectorAll('h1, h2, h3');
+    for (const h of headings) {
+        const txt = h.textContent.trim();
+        const baseTxt = txt.replace(/\s*[\(\[\{].*?[\)\]\}]\s*/g, ' ').trim();
+        if (isValidJobTitle(baseTxt)) return cleanTitleString(baseTxt);
         if (isValidJobTitle(txt)) return cleanTitleString(txt);
     }
+
+    // 6. Common Job Title Class Selectors
+    const classSelectors = document.querySelectorAll('[class*="job-title"], [class*="jobTitle"], [class*="position-title"], [class*="role-title"]');
+    for (const el of classSelectors) {
+        const txt = el.textContent.trim();
+        const baseTxt = txt.replace(/\s*[\(\[\{].*?[\)\]\}]\s*/g, ' ').trim();
+        if (isValidJobTitle(baseTxt)) return cleanTitleString(baseTxt);
+        if (isValidJobTitle(txt)) return cleanTitleString(txt);
+    }
+
+    // 7. URL Slug Parsing Fallback (e.g. "/jobs/research-engineer" -> "Research Engineer")
+    try {
+        const pathSegments = window.location.pathname.split('/').filter(Boolean);
+        for (const seg of pathSegments) {
+            if (seg.includes('-') || seg.includes('_')) {
+                const slugTitle = seg.replace(/[\d]+/, '').replace(/[-_]+/g, ' ').trim();
+                const capitalized = slugTitle.replace(/\b\w/g, c => c.toUpperCase());
+                if (isValidJobTitle(capitalized)) {
+                    return cleanTitleString(capitalized);
+                }
+            }
+        }
+    } catch (e) {}
 
     return '';
 }
