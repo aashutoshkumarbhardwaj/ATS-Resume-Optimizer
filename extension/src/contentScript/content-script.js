@@ -1967,77 +1967,62 @@ function cleanExperienceString(str) {
 
 /**
  * Extract required years of experience from job description with 100% precision
- * Supports decimals (1.5-3 yrs), en-dashes (–), parentheses, YOE, and word numbers
+ * Handles bullet points, lines starting with "Experience:", decimals, ranges, and multi-word contexts
  */
 function extractExperienceFromText(text) {
     if (!text) return "Not specified";
     
-    // Normalize text: strip HTML tags if present, normalize unicode dashes and whitespace
+    // Normalize text: replace unicode dashes with hyphens and preserve line/bullet breaks
     const cleanText = text
-        .replace(/<[^>]*>/g, ' ')
-        .replace(/[\u2013\u2014\u2015]/g, '-') // Normalize en-dash & em-dash to standard hyphen
-        .replace(/\s+/g, ' ');
+        .replace(/<[^>]*>/g, '\n')
+        .replace(/[\u2013\u2014\u2015]/g, '-')
+        .replace(/[rR]equired\s+[eE]xperience\s*&\s*[sS]kills/gi, '\n---REQUIREMENTS---\n');
 
-    // Tier 1: Parenthetical / Explicit Enclosure Patterns (e.g. "(1.5-3 yrs exp)", "[2-4 yrs exp]")
+    // Split text into individual lines/bullet points for high-precision line scanning
+    const lines = cleanText.split(/[\r\n•▪\-*\u2022\u2023\u2043]+/);
+
+    // Pass 1: Line-by-line scanning for explicit experience statements
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line || line.length < 5) continue;
+
+        // Pattern 1: "Experience: 12+ years...", "Experience: 5-7 years...", "Required Experience: 3+ yrs"
+        const lineExpMatch = line.match(/(?:^|[\s:])(?:experience|required\s+experience|overall\s+experience)\s*:\s*(\d+(?:\.\d+)?\s*(?:-|to|and)?\s*\d*(?:\.\d+)?\+?\s*(?:years?|yrs?\.?))/i);
+        if (lineExpMatch && lineExpMatch[1]) {
+            return cleanExperienceString(lineExpMatch[1]);
+        }
+
+        // Pattern 2: "12+ years of software/systems engineering experience", "5+ years dedicated to..."
+        const lineYearsMatch = line.match(/(\d+(?:\.\d+)?\s*(?:-|to|and)?\s*\d*(?:\.\d+)?\+?\s*(?:years?|yrs?\.?))\b(?:\s+\w+){0,10}\s+(?:experience|exp|yoe|dedicated|building|leading|managing|software|engineering|development|industry|field)\b/i);
+        if (lineYearsMatch && lineYearsMatch[1]) {
+            const num = parseFloat(lineYearsMatch[1]);
+            if (!isNaN(num) && num >= 0 && num <= 35) {
+                return cleanExperienceString(lineYearsMatch[1]);
+            }
+        }
+    }
+
+    // Pass 2: Parenthetical / Explicit Enclosure Patterns (e.g. "(1.5-3 yrs exp)", "[2-4 yrs exp]")
+    const singleLineClean = cleanText.replace(/\s+/g, ' ');
     const enclosureRegex = /[\(\[\{]\s*(\d+(?:\.\d+)?\s*(?:-|to|and)\s*\d+(?:\.\d+)?|\d+(?:\.\d+)?\+?)\s*(?:yrs?\.?|years?|yoe|y\.o\.e\.)(?:\s*(?:exp|experience))?\s*[\)\]\}]/i;
-    const enclosureMatch = cleanText.match(enclosureRegex);
+    const enclosureMatch = singleLineClean.match(enclosureRegex);
     if (enclosureMatch && enclosureMatch[1]) {
         const matchedStr = enclosureMatch[0].replace(/[\(\[\{]/, '').replace(/[\)\]\}]/, '').trim();
         return cleanExperienceString(matchedStr);
     }
 
-    // Tier 2: Fresher / Entry Level / 0 Years Detection
+    // Pass 3: Fresher / Entry Level / 0 Years Detection
     const fresherRegex = /\b(?:fresher[s]?|entry[\s-]level|no\s+prior\s+experience|no\s+experience\s+(?:required|needed)|0[\s-]1\s*years?)\b/i;
-    if (fresherRegex.test(cleanText)) {
+    if (fresherRegex.test(singleLineClean)) {
         return "Fresher / 0-1 Years";
     }
 
-    // Tier 3: Decimal & Range YOE Shorthands (e.g. "1.5-3 yrs exp", "1.5-3 yrs", "2.5+ YOE", "3+ YOE", "1.5-3 yrs. exp")
-    const yoeRegex = /(?:^|[^\w])(\d+(?:\.\d+)?\s*(?:-|to|and)\s*\d+(?:\.\d+)?\+?|\d+(?:\.\d+)?\+?)\s*(?:yrs?\.?|years?|yoe|y\.o\.e\.)(?:\s*(?:exp|experience|relevant|of\s+exp))?/i;
-    const yoeMatch = cleanText.match(yoeRegex);
-    if (yoeMatch && yoeMatch[1]) {
-        const fullPhrase = yoeMatch[0].replace(/^[^\w\d]+/, '').trim();
-        return cleanExperienceString(fullPhrase);
-    }
-
-    // Tier 4: Years pattern constructor supporting decimals, digits, and word numbers
-    const numWords = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen";
-    const num = `(?:\\d+(?:\\.\\d+)?|${numWords})`;
-    const range = `${num}(?:\\s*(?:-|to|and)\\s*${num})?\\+?`;
-    
-    // Pattern A: "Experience: 1.5-3 years" or "Required Experience: 1.5+ yrs"
-    const patternA = new RegExp(`(?:experience|required|qualification|background|minimum|at least)\\s*(?::|\\s+of)?\\s*(?:minimum|at least)?\\s*(${range}\\s*(?:years?|yrs?\\.?))\\b`, 'i');
-    const matchA = cleanText.match(patternA);
-    if (matchA && matchA[1]) {
-        return cleanExperienceString(matchA[1]);
-    }
-
-    // Pattern B: "1.5+ years of experience", "1.5-3 years relevant experience", "1.5+ years working with"
-    const patternB = new RegExp(`(?:^|[^\w])(${range}\\s*(?:years?|yrs?\\.?)(?:'|’)?)\\b(?:\\s+\\w+){0,6}\\s+(?:experience|exp|in\\b|working|role|software|engineering|development|industry)`, 'i');
-    const matchB = cleanText.match(patternB);
-    if (matchB && matchB[1]) {
-        return cleanExperienceString(matchB[1]);
-    }
-
-    // Pattern C: "Minimum 1.5 years" or "At least 2 years"
-    const patternC = new RegExp(`(?:minimum|at\\s+least|min)\\s+(?:of\\s+)?(${range}\\s*(?:years?|yrs?\\.?))\\b`, 'i');
-    const matchC = cleanText.match(patternC);
-    if (matchC && matchC[1]) {
-        return cleanExperienceString(matchC[1]);
-    }
-
-    // Pattern D: Standalone "X-Y yrs", "X+ years", "X yrs" with sanity validation (0-30 years)
-    const patternD = new RegExp(`(?:^|[^\w])(${range}\\s*(?:years?|yrs?\\.?))\\b`, 'i');
-    const matchD = cleanText.match(patternD);
-    if (matchD && matchD[1]) {
-        const digits = matchD[1].match(/\d+(?:\.\d+)?/g);
-        if (digits) {
-            const firstVal = parseFloat(digits[0]);
-            if (firstVal >= 0 && firstVal <= 30) {
-                return cleanExperienceString(matchD[1]);
-            }
-        } else {
-            return cleanExperienceString(matchD[1]);
+    // Pass 4: Global YOE Shorthands & Patterns
+    const globalMatch = singleLineClean.match(/(?:experience|required|minimum|at least)?\s*:?\s*(\d+(?:\.\d+)?\s*(?:-|to|and)?\s*\d*(?:\.\d+)?\+?\s*(?:years?|yrs?\.?))\b(?:\s+(?:of|in|with|working|building|leading|managing|software|engineering|relevant|overall|total|experience|exp|yoe))?/i);
+    if (globalMatch && globalMatch[1]) {
+        const num = parseFloat(globalMatch[1]);
+        if (!isNaN(num) && num >= 0 && num <= 35) {
+            return cleanExperienceString(globalMatch[1]);
         }
     }
 
