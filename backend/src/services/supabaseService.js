@@ -3,8 +3,6 @@
  * Handles database operations with Supabase
  */
 
-const { createClient } = require('@supabase/supabase-js');
-
 let supabase = null;
 
 /**
@@ -12,6 +10,7 @@ let supabase = null;
  */
 function getSupabaseClient() {
     if (!supabase) {
+        const { createClient } = require('@supabase/supabase-js');
         const SUPABASE_URL = process.env.SUPABASE_URL;
         const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY;
 
@@ -155,6 +154,20 @@ async function initializeTables() {
                     );
                     CREATE INDEX IF NOT EXISTS idx_ai_memory_profile_id ON ai_memory(profile_id);
                     CREATE INDEX IF NOT EXISTS idx_ai_memory_created_at ON ai_memory(profile_id, created_at DESC);
+                `
+            },
+            user_context_graphs: {
+                schema: `
+                    CREATE TABLE IF NOT EXISTS user_context_graphs (
+                        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                        user_id UUID NOT NULL,
+                        profile_name TEXT,
+                        graph_data JSONB DEFAULT '{}'::jsonb,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(user_id)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_user_context_graphs_user_id ON user_context_graphs(user_id);
                 `
             }
         };
@@ -394,7 +407,11 @@ async function createApplication(profileId, applicationData, userId = null) {
             try {
                 const jd = applicationData.jobDescription || applicationData.job_description || '';
                 const existingNotes = applicationData.notes || '';
-                const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}` : existingNotes) : (jd ? `JD: ${jd}` : '');
+                const rawFormData = applicationData.formData || applicationData.form_data;
+                const formSummary = Array.isArray(rawFormData) && rawFormData.length > 0
+                    ? ` | Form Snapshot (${rawFormData.length} fields): ` + rawFormData.map(f => `${f.label || f.id}: ${f.value}`).slice(0, 15).join('; ')
+                    : '';
+                const combinedNotes = existingNotes ? (jd ? `${existingNotes} | JD: ${jd}${formSummary}` : `${existingNotes}${formSummary}`) : (jd ? `JD: ${jd}${formSummary}` : formSummary.replace(/^ \| /, ''));
 
                 const { data, error } = await sb.from('jobs').insert([{
                     user_id: userId,
@@ -579,6 +596,190 @@ async function updateAIMemory(memoryId, updates) {
     }
 }
 
+/**
+ * Get user context graph by user ID
+ */
+async function getContextGraph(userId) {
+    try {
+        const sb = getSupabaseClient();
+        const { data, error } = await sb
+            .from('user_context_graphs')
+            .select('*')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (error && error.code !== 'PGRST116') {
+            console.warn('[Supabase] getContextGraph notice:', error.message);
+        }
+        if (data && data.graph_data) {
+            return data.graph_data;
+        }
+
+        // If not in dedicated table, build dynamically from profile, resumes, applications, and ai_memory
+        const profile = await getProfile(userId).catch(() => null);
+        const applications = await getApplications(userId).catch(() => []);
+        const aiMemory = await getAIMemory(userId).catch(() => []);
+
+        return {
+            meta: {
+                version: '2.0.0',
+                userId,
+                profileName: profile?.full_name || '',
+                updatedAt: new Date().toISOString()
+            },
+            nodes: {
+                identity: {
+                    fullName: profile?.full_name || '',
+                    firstName: profile?.first_name || '',
+                    lastName: profile?.last_name || '',
+                    email: profile?.email || '',
+                    phone: profile?.phone || '',
+                    address: {
+                        city: profile?.city || '',
+                        state: profile?.state || '',
+                        zip: profile?.zip || '',
+                        country: profile?.country || 'United States',
+                        street: profile?.street_address || ''
+                    },
+                    socials: {
+                        linkedin: profile?.linkedin || '',
+                        github: profile?.github || '',
+                        portfolio: profile?.portfolio || ''
+                    }
+                },
+                professional: {
+                    currentTitle: profile?.current_title || '',
+                    currentCompany: profile?.current_company || '',
+                    yearsOfExperience: profile?.years_of_experience || '',
+                    noticePeriod: profile?.notice_period || 'Immediately',
+                    expectedSalary: profile?.expected_salary || '',
+                    workAuthorization: profile?.work_authorization || 'Yes',
+                    sponsorshipRequired: profile?.require_sponsorship || 'No'
+                },
+                skills: {
+                    all: profile?.skills ? profile.skills.split(/[,;|\n]+/).map(s => s.trim()).filter(Boolean) : []
+                },
+                education: [],
+                experience: [],
+                qaGraph: (aiMemory || []).map(m => ({
+                    canonicalIntent: m.question_type,
+                    question: m.context?.question || m.question_type,
+                    answer: m.response_content,
+                    confidence: 0.95
+                }))
+            },
+            applicationHistory: (applications || []).map(a => ({
+                id: a.id,
+                timestamp: a.application_date || a.created_at,
+                url: a.job_url,
+                company: a.company,
+                jobTitle: a.job_title,
+                status: a.status,
+                formData: a.form_data || []
+            }))
+        };
+    } catch (error) {
+        console.error('[Supabase] Get Context Graph error:', error);
+        throw error;
+    }
+}
+
+/**
+ * Save / upsert user context graph
+ */
+async function saveContextGraph(userId, profileName, graphData) {
+    try {
+        const sb = getSupabaseClient();
+        const updatedAt = new Date().toISOString();
+
+        // 1. Upsert into user_context_graphs table
+        try {
+            const { data, error } = await sb
+                .from('user_context_graphs')
+                .upsert([
+                    {
+                        user_id: userId,
+                        profile_name: profileName || graphData?.meta?.profileName || 'Candidate',
+                        graph_data: graphData,
+                        updated_at: updatedAt
+                    }
+                ], { onConflict: 'user_id' })
+                .select()
+                .maybeSingle();
+
+            if (!error && data) {
+                console.log('[Supabase] ✅ Upserted user_context_graphs table successfully.');
+            }
+        } catch (e) {
+            console.warn('[Supabase] Notice on user_context_graphs upsert:', e.message);
+        }
+
+        // 2. Synchronize extracted profile updates back to profiles table
+        if (graphData?.nodes?.identity) {
+            const ident = graphData.nodes.identity;
+            const prof = graphData.nodes.professional || {};
+            const profileUpdates = {};
+            if (ident.fullName) profileUpdates.full_name = ident.fullName;
+            if (ident.firstName) profileUpdates.first_name = ident.firstName;
+            if (ident.lastName) profileUpdates.last_name = ident.lastName;
+            if (ident.phone) profileUpdates.phone = ident.phone;
+            if (ident.address?.city) profileUpdates.city = ident.address.city;
+            if (ident.address?.state) profileUpdates.state = ident.address.state;
+            if (ident.address?.zip) profileUpdates.zip = ident.address.zip;
+            if (ident.address?.country) profileUpdates.country = ident.address.country;
+            if (ident.socials?.linkedin) profileUpdates.linkedin = ident.socials.linkedin;
+            if (ident.socials?.github) profileUpdates.github = ident.socials.github;
+            if (ident.socials?.portfolio) profileUpdates.portfolio = ident.socials.portfolio;
+            if (prof.currentTitle) profileUpdates.current_title = prof.currentTitle;
+            if (prof.currentCompany) profileUpdates.current_company = prof.currentCompany;
+            if (prof.expectedSalary) profileUpdates.expected_salary = prof.expectedSalary;
+            if (prof.noticePeriod) profileUpdates.notice_period = prof.noticePeriod;
+            if (prof.workAuthorization) profileUpdates.work_authorization = prof.workAuthorization;
+
+            if (Object.keys(profileUpdates).length > 0) {
+                await sb.from('profiles').update(profileUpdates).eq('user_id', userId).catch(() => {});
+            }
+        }
+
+        return graphData;
+    } catch (error) {
+        console.error('[Supabase] Save Context Graph error:', error);
+        throw error;
+    }
+}
+
+/**
+ * Record a single form application snapshot into user context graph
+ */
+async function recordFormApplication(userId, profileName, formRecord) {
+    try {
+        const currentGraph = await getContextGraph(userId);
+        if (!currentGraph.applicationHistory) currentGraph.applicationHistory = [];
+
+        currentGraph.applicationHistory.unshift({
+            id: formRecord.id || ('form_app_' + Date.now()),
+            timestamp: formRecord.timestamp || new Date().toISOString(),
+            url: formRecord.url || formRecord.jobUrl || '',
+            company: formRecord.company || 'Company',
+            jobTitle: formRecord.jobTitle || 'Role',
+            profileName: profileName || formRecord.profileName || currentGraph.meta?.profileName || 'Candidate',
+            platform: formRecord.platform || 'ATS',
+            status: formRecord.status || 'applied',
+            formData: formRecord.formData || []
+        });
+
+        if (currentGraph.applicationHistory.length > 250) {
+            currentGraph.applicationHistory = currentGraph.applicationHistory.slice(0, 250);
+        }
+
+        await saveContextGraph(userId, profileName, currentGraph);
+        return currentGraph;
+    } catch (err) {
+        console.error('[Supabase] recordFormApplication error:', err);
+        throw err;
+    }
+}
+
 module.exports = {
     getSupabaseClient,
     initializeTables,
@@ -595,5 +796,8 @@ module.exports = {
     deleteApplication,
     getAIMemory,
     createAIMemory,
-    updateAIMemory
+    updateAIMemory,
+    getContextGraph,
+    saveContextGraph,
+    recordFormApplication
 };

@@ -67,6 +67,7 @@ async function loadRoutes() {
         ['/api/resumes',         './routes/resumes'],
         ['/api/applications',    './routes/applications'],
         ['/api/ai-memory',       './routes/ai-memory'],
+        ['/api/context-graph',   './routes/contextGraph'],
         ['/api/auth',            './routes/auth'],
         ['/api/extension-auth',  './routes/extension-auth'],
     ];

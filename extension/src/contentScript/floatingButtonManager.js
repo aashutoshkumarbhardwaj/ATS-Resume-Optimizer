@@ -17,12 +17,24 @@ window.UnifiedAutofillButton = class {
         this.checkInterval = 10000; // 10 seconds
         this.monitorIntervalId = null;
         this.isProcessing = false;
+        this.agentState = 'idle'; // 'idle' | 'running'
+        this.activeOrchestrator = null;
+        this.agentBtn = null;
+        this.instantBtn = null;
+        this.toast = null;
+        this.wrapperEl = null;
     }
 
     /**
      * Initialize and inject button
      */
     async init() {
+        // Guard against child iframes: The main floating controller UI belongs in the top-level window
+        if (typeof window !== 'undefined' && window.self !== window.top) {
+            console.log('[UnifiedButton] Child frame detected — skipping floating button creation in iframe.');
+            return;
+        }
+
         // Prevent multiple initializations
         if (window.__unifiedAutofillButtonInstance) {
             console.warn('[UnifiedButton] ⚠️ Button already initialized, skipping duplicate');
@@ -34,6 +46,8 @@ window.UnifiedAutofillButton = class {
         await this.loadPreferences();
         this.injectButton();
         this.startMonitoring();
+        this.setupStorageListeners();
+        this.checkAndResumeSession();
         console.log('[UnifiedButton] ✅ Initialized successfully');
     }
 
@@ -88,36 +102,73 @@ window.UnifiedAutofillButton = class {
                     display: flex;
                     align-items: center;
                     justify-content: center;
+                    gap: 6px;
+                    background: rgba(17, 24, 39, 0.85);
+                    backdrop-filter: blur(10px);
+                    -webkit-backdrop-filter: blur(10px);
+                    padding: 4px 6px;
+                    border-radius: 24px;
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
                 }
                 
                 .autofill-btn {
                     display: flex;
                     align-items: center;
-                    gap: 8px;
-                    padding: 12px 18px;
-                    background: #99462a; /* primary */
+                    gap: 6px;
+                    padding: 9px 14px;
                     color: white;
-                    border: 1px solid #d1cdc7; /* pencil-grey */
-                    border-radius: 4px 6px 3px 5px; /* organic radius */
+                    border: none;
+                    border-radius: 18px;
                     cursor: pointer;
-                    font-size: 13px;
+                    font-size: 12px;
                     font-weight: 600;
                     transition: all 0.2s ease;
                     user-select: none;
                     white-space: nowrap;
-                    letter-spacing: 0.05em;
-                    text-transform: uppercase;
+                    letter-spacing: 0.02em;
                 }
-                
-                .autofill-btn:hover {
-                    background: #d97757; /* primary-container */
-                    color: #541400; /* on-primary-container */
-                    transform: translateY(-2px);
-                    border-width: 1.5px;
+
+                .agent-btn {
+                    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+                    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+                }
+
+                .agent-btn:hover {
+                    background: linear-gradient(135deg, #4338ca 0%, #6d28d9 100%);
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+                }
+
+                .stop-btn {
+                    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+                    box-shadow: 0 2px 10px rgba(239, 68, 68, 0.5) !important;
+                    animation: stopBtnPulse 2s infinite ease-in-out !important;
+                }
+
+                .stop-btn:hover {
+                    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+                    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.75) !important;
+                    transform: translateY(-1px);
+                }
+
+                @keyframes stopBtnPulse {
+                    0%, 100% { box-shadow: 0 2px 10px rgba(239, 68, 68, 0.5); }
+                    50% { box-shadow: 0 0 18px rgba(239, 68, 68, 0.85); }
+                }
+
+                .instant-btn {
+                    background: rgba(255, 255, 255, 0.1);
+                    color: #e5e7eb;
+                }
+
+                .instant-btn:hover {
+                    background: rgba(255, 255, 255, 0.18);
+                    color: #ffffff;
                 }
                 
                 .autofill-btn:active {
-                    transform: scale(0.98);
+                    transform: scale(0.97);
                 }
                 
                 .autofill-btn.loading {
@@ -126,13 +177,12 @@ window.UnifiedAutofillButton = class {
                 }
                 
                 .autofill-btn.success {
-                    background: #596245; /* secondary (sage) */
+                    background: #10b981;
                     color: white;
-                    border-color: #5d6648;
                 }
                 
                 .autofill-btn.error {
-                    background: #ba1a1a; /* error */
+                    background: #ef4444;
                     color: white;
                 }
                 
@@ -140,8 +190,7 @@ window.UnifiedAutofillButton = class {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    width: 20px;
-                    height: 20px;
+                    font-size: 14px;
                 }
                 
                 .btn-icon.spinner {
@@ -154,39 +203,39 @@ window.UnifiedAutofillButton = class {
                 }
                 
                 .close-btn {
-                    position: absolute;
-                    top: -8px;
-                    right: -8px;
-                    width: 24px;
-                    height: 24px;
+                    width: 20px;
+                    height: 20px;
                     padding: 0;
-                    background: rgba(0, 0, 0, 0.6);
-                    color: white;
+                    background: rgba(255, 255, 255, 0.15);
+                    color: #9ca3af;
                     border: none;
                     border-radius: 50%;
                     cursor: pointer;
-                    font-size: 18px;
+                    font-size: 14px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    transition: background 0.2s;
+                    transition: all 0.2s;
                     line-height: 1;
+                    margin-left: 2px;
                 }
                 
                 .close-btn:hover {
-                    background: rgba(0, 0, 0, 0.8);
+                    background: rgba(255, 255, 255, 0.25);
+                    color: #ffffff;
                 }
                 
                 .toast-notification {
                     position: absolute;
-                    bottom: 60px;
+                    bottom: 50px;
                     right: 0;
-                    background: #1f2937;
+                    background: #111827;
+                    border: 1px solid rgba(255, 255, 255, 0.15);
                     color: white;
-                    padding: 10px 14px;
+                    padding: 8px 12px;
                     border-radius: 8px;
                     font-size: 12px;
-                    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
                     opacity: 0;
                     transform: translateY(10px);
                     transition: all 0.3s ease;
@@ -208,9 +257,13 @@ window.UnifiedAutofillButton = class {
             const wrapper = document.createElement('div');
             wrapper.className = 'button-wrapper';
             wrapper.innerHTML = `
-                <button class="autofill-btn" title="Auto-fill this form with your information">
+                <button class="autofill-btn agent-btn" id="run-agent-btn" title="Run Autonomous AI Agent with Visual Virtual Cursor">
+                    <span class="btn-icon">🤖</span>
+                    <span class="btn-text">Run Agent</span>
+                </button>
+                <button class="autofill-btn instant-btn" id="instant-fill-btn" title="Instant Fast Autofill">
                     <span class="btn-icon">⚡</span>
-                    <span class="btn-text">Autofill Form</span>
+                    <span class="btn-text">Instant</span>
                 </button>
                 <button class="close-btn" title="Dismiss">×</button>
                 <div class="toast-notification"></div>
@@ -221,12 +274,25 @@ window.UnifiedAutofillButton = class {
             document.body.appendChild(container);
             
             // Get elements from shadow DOM
-            const btn = wrapper.querySelector('.autofill-btn');
+            const agentBtn = wrapper.querySelector('#run-agent-btn');
+            const instantBtn = wrapper.querySelector('#instant-fill-btn');
             const closeBtn = wrapper.querySelector('.close-btn');
             const toast = wrapper.querySelector('.toast-notification');
+
+            this.agentBtn = agentBtn;
+            this.instantBtn = instantBtn;
+            this.toast = toast;
+            this.wrapperEl = wrapper;
             
             // Attach event listeners
-            btn.addEventListener('click', () => this.performAutofill(toast, btn, wrapper));
+            agentBtn.addEventListener('click', () => {
+                if (this.agentState === 'running') {
+                    this.stopAutonomousAgent();
+                } else {
+                    this.performAutofill(toast, agentBtn, wrapper, 'autonomous');
+                }
+            });
+            instantBtn.addEventListener('click', () => this.performAutofill(toast, instantBtn, wrapper, 'simple'));
             closeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.hideButton();
@@ -239,122 +305,217 @@ window.UnifiedAutofillButton = class {
     }
 
     /**
+     * Switch button appearance between Idle (Run Agent) and Running (Stop Agent)
+     */
+    setRunningState(isRunning) {
+        this.agentState = isRunning ? 'running' : 'idle';
+        if (!this.agentBtn && this.buttonId) {
+            const host = document.getElementById(this.buttonId);
+            if (host && host.shadowRoot) {
+                this.agentBtn = host.shadowRoot.querySelector('#run-agent-btn');
+                this.instantBtn = host.shadowRoot.querySelector('#instant-fill-btn');
+                this.toast = host.shadowRoot.querySelector('.toast-notification');
+                this.wrapperEl = host.shadowRoot.querySelector('.button-wrapper');
+            }
+        }
+
+        if (!this.agentBtn) return;
+
+        const iconSpan = this.agentBtn.querySelector('.btn-icon');
+        const textSpan = this.agentBtn.querySelector('.btn-text');
+
+        if (isRunning) {
+            this.agentBtn.classList.remove('agent-btn', 'loading', 'success', 'error');
+            this.agentBtn.classList.add('stop-btn');
+            this.agentBtn.title = 'Stop Autonomous AI Agent';
+            if (iconSpan) {
+                iconSpan.textContent = '⏹';
+                iconSpan.classList.remove('spinner');
+            }
+            if (textSpan) textSpan.textContent = 'Stop Agent';
+            if (this.instantBtn) this.instantBtn.style.display = 'none';
+        } else {
+            this.isProcessing = false;
+            this.agentBtn.classList.remove('stop-btn', 'loading', 'success', 'error');
+            this.agentBtn.classList.add('agent-btn');
+            this.agentBtn.title = 'Run Autonomous AI Agent with Visual Virtual Cursor';
+            if (iconSpan) {
+                iconSpan.textContent = '🤖';
+                iconSpan.classList.remove('spinner');
+            }
+            if (textSpan) textSpan.textContent = 'Run Agent';
+            if (this.instantBtn) this.instantBtn.style.display = 'flex';
+        }
+    }
+
+    /**
+     * Stop Autonomous Agent immediately and reset UI
+     */
+    stopAutonomousAgent() {
+        console.log('[UnifiedButton] ⏹ Stopping autonomous agent on user request...');
+        if (this.activeOrchestrator && typeof this.activeOrchestrator.stop === 'function') {
+            this.activeOrchestrator.stop(true);
+            this.activeOrchestrator = null;
+        }
+        if (typeof window !== 'undefined' && window.__autonomousAgentOrchestratorInstance && typeof window.__autonomousAgentOrchestratorInstance.stop === 'function') {
+            window.__autonomousAgentOrchestratorInstance.stop(true);
+            window.__autonomousAgentOrchestratorInstance = null;
+        }
+
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({ autonomousAgentSession: { isActive: false, stoppedAt: Date.now() } });
+        }
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ type: 'AGENT_SESSION_STOP' }).catch(() => {});
+        }
+
+        this.setRunningState(false);
+        if (this.toast) {
+            this.showToast(this.toast, '⏹ Agent stopped', 'info');
+        }
+    }
+
+    /**
+     * Check if an active agent session exists from a previous page navigation or redirect, and auto-resume
+     */
+    checkAndResumeSession() {
+        try {
+            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) return;
+            chrome.storage.local.get(['autonomousAgentSession'], (result) => {
+                const session = result.autonomousAgentSession;
+                if (session && session.isActive) {
+                    const age = Date.now() - (session.timestamp || 0);
+                    // Check if session is fresh (within 3 minutes)
+                    if (age < 180000) {
+                        console.log(`[UnifiedButton] 🔄 Active session found across page navigation! Age: ${Math.round(age/1000)}s. Resuming agent...`);
+                        this.setRunningState(true);
+                        setTimeout(() => {
+                            if (this.agentState === 'running') {
+                                this.performAutofill(this.toast, this.agentBtn, this.wrapperEl, 'autonomous', { resumeSession: true, session });
+                            }
+                        }, 1200);
+                    } else {
+                        console.log('[UnifiedButton] Stale agent session detected (> 3m). Resetting session...');
+                        chrome.storage.local.set({ autonomousAgentSession: { isActive: false } });
+                    }
+                }
+            });
+        } catch (e) {
+            console.warn('[UnifiedButton] Error checking agent session:', e);
+        }
+    }
+
+    /**
+     * Resume session triggered from background worker or runtime message
+     */
+    resumeSession(session) {
+        console.log('[UnifiedButton] 🚀 Explicit resumeSession signal received');
+        this.setRunningState(true);
+        setTimeout(() => {
+            this.performAutofill(this.toast, this.agentBtn, this.wrapperEl, 'autonomous', { resumeSession: true, session });
+        }, 500);
+    }
+
+    /**
+     * Listen for storage changes to sync button state across tabs
+     */
+    setupStorageListeners() {
+        try {
+            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.onChanged) return;
+            chrome.storage.onChanged.addListener((changes, area) => {
+                if (area === 'local' && changes.autonomousAgentSession) {
+                    const newVal = changes.autonomousAgentSession.newValue;
+                    if (newVal && newVal.isActive === false && this.agentState === 'running') {
+                        console.log('[UnifiedButton] ⏹ Agent session deactivated. Reverting button UI to idle.');
+                        this.setRunningState(false);
+                    }
+                }
+            });
+        } catch (e) {}
+    }
+
+    /**
      * Perform autofill action - DIRECT ORCHESTRATOR CALL
      * NO MESSAGING - button is in content script context, calls orchestrator directly
      */
-    performAutofill(toastEl, btnEl, wrapperEl) {
-        if (this.isProcessing) {
-            console.log('[UnifiedButton] ⏳ Autofill already in progress, ignoring');
+    performAutofill(toastEl, btnEl, wrapperEl, mode = 'autonomous', customOptions = {}) {
+        if (this.isProcessing && !customOptions.resumeSession) {
+            console.log('[UnifiedButton] ⏳ Autofill already in progress, ignoring duplicate call');
             return;
         }
         this.isProcessing = true;
         
-        console.log('[UnifiedButton] 🚀 Starting autofill process...');
-        
-        // Show loading state
-        btnEl.classList.add('loading');
-        const textSpan = btnEl.querySelector('.btn-text');
-        const originalText = textSpan.textContent;
-        textSpan.textContent = 'Filling...';
-        const iconSpan = btnEl.querySelector('.btn-icon');
-        const originalIcon = iconSpan.textContent;
-        iconSpan.textContent = '⏳';
-        iconSpan.classList.add('spinner');
+        console.log(`[UnifiedButton] 🚀 Starting autofill process in ${mode} mode...`);
+
+        if (mode === 'autonomous') {
+            this.setRunningState(true);
+        } else {
+            // Show simple loading state for instant mode
+            btnEl.classList.add('loading');
+            const textSpan = btnEl.querySelector('.btn-text');
+            if (textSpan) textSpan.textContent = 'Filling...';
+            const iconSpan = btnEl.querySelector('.btn-icon');
+            if (iconSpan) {
+                iconSpan.textContent = '⏳';
+                iconSpan.classList.add('spinner');
+            }
+        }
         
         try {
-            // Get profile from storage
-            chrome.storage.local.get(['autofillProfile'], (result) => {
-                const profile = result.autofillProfile;
+            // Get profile from storage (check multiple storage keys)
+            chrome.storage.local.get(['autofillProfile', 'user_profile', 'profile', 'candidate_profile'], (result) => {
+                const profile = result.autofillProfile || result.user_profile || result.profile || result.candidate_profile || {};
                 
                 console.log('[UnifiedButton] 📦 Profile:', profile ? `present (${Object.keys(profile).length} keys)` : 'MISSING');
                 
                 if (!profile || Object.keys(profile).length === 0) {
                     console.warn('[UnifiedButton] ⚠️ No profile in storage');
                     this.showToast(toastEl, 'Please fill profile in popup first!', 'error');
-                    btnEl.classList.remove('loading');
-                    btnEl.classList.add('error');
-                    textSpan.textContent = 'No Profile';
-                    iconSpan.textContent = '❌';
-                    iconSpan.classList.remove('spinner');
-                    
-                    setTimeout(() => {
-                        btnEl.classList.remove('error');
-                        textSpan.textContent = originalText;
-                        iconSpan.textContent = originalIcon;
-                        this.isProcessing = false;
-                    }, 3000);
+                    this.setRunningState(false);
                     return;
                 }
                 
                 // Call AutofillOrchestrator directly - no messaging!
-                console.log('[UnifiedButton] 🚀 Calling AutofillOrchestrator directly...');
+                console.log(`[UnifiedButton] 🚀 Calling AutofillOrchestrator in ${mode} mode...`);
                 
                 try {
-                    if (typeof AutofillOrchestrator === 'undefined') {
-                        throw new Error('AutofillOrchestrator not available');
+                    const OrchClass = (typeof window !== 'undefined' && window.AutofillOrchestrator) || (typeof AutofillOrchestrator !== 'undefined' ? AutofillOrchestrator : null);
+                    if (!OrchClass) {
+                        throw new Error('AutofillOrchestrator not available. Please reload the webpage (Ctrl+R / Cmd+R).');
                     }
                     
-                    const orchestrator = new AutofillOrchestrator();
+                    const orchestrator = new OrchClass();
+                    this.activeOrchestrator = orchestrator;
                     
-                    orchestrator.start({ profile }).then(result => {
+                    const startOptions = Object.assign({ profile, mode }, customOptions);
+                    orchestrator.start(startOptions).then(result => {
                         console.log('[UnifiedButton] ✅ Autofill done:', result);
                         
-                        const filledCount = (result && result.data) ? (result.data.filled || 0) : 0;
+                        const filledCount = (result && result.data) ? (result.data.filled || 0) : ((result && result.stats) ? result.stats.filled : 0);
                         
                         if (filledCount > 0) {
                             this.showToast(toastEl, `✅ Filled ${filledCount} field${filledCount !== 1 ? 's' : ''}!`, 'success');
-                            btnEl.classList.add('success');
-                            textSpan.textContent = 'Complete!';
-                            iconSpan.textContent = '✓';
                         } else {
-                            this.showToast(toastEl, 'No matching fields found', 'info');
+                            this.showToast(toastEl, 'Scan complete', 'info');
                         }
                         
-                        // Reset after 2.5 seconds
-                        setTimeout(() => {
-                            btnEl.classList.remove('loading', 'success', 'error');
-                            textSpan.textContent = originalText;
-                            iconSpan.textContent = originalIcon;
-                            iconSpan.classList.remove('spinner');
-                            this.isProcessing = false;
-                        }, 2500);
+                        this.setRunningState(false);
                     }).catch(error => {
                         console.error('[UnifiedButton] ❌ Orchestrator error:', error.message);
                         this.showToast(toastEl, 'Autofill failed: ' + error.message, 'error');
-                        btnEl.classList.remove('loading');
-                        btnEl.classList.add('error');
-                        textSpan.textContent = 'Error';
-                        iconSpan.textContent = '❌';
-                        iconSpan.classList.remove('spinner');
-                        
-                        setTimeout(() => {
-                            btnEl.classList.remove('error');
-                            textSpan.textContent = originalText;
-                            iconSpan.textContent = originalIcon;
-                            this.isProcessing = false;
-                        }, 3000);
+                        this.setRunningState(false);
                     });
                     
                 } catch (error) {
                     console.error('[UnifiedButton] ❌ Error:', error.message);
                     this.showToast(toastEl, 'Error: ' + error.message, 'error');
-                    btnEl.classList.remove('loading');
-                    btnEl.classList.add('error');
-                    textSpan.textContent = 'Error';
-                    iconSpan.textContent = '❌';
-                    iconSpan.classList.remove('spinner');
-                    this.isProcessing = false;
+                    this.setRunningState(false);
                 }
             });
         } catch (error) {
             console.error('[UnifiedButton] ❌ Outer error:', error.message);
             this.showToast(toastEl, 'Error: ' + error.message, 'error');
-            btnEl.classList.remove('loading');
-            btnEl.classList.add('error');
-            textSpan.textContent = 'Error';
-            iconSpan.textContent = '❌';
-            iconSpan.classList.remove('spinner');
-            this.isProcessing = false;
+            this.setRunningState(false);
         }
     }
 

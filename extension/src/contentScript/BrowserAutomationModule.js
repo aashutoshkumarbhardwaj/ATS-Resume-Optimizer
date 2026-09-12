@@ -149,11 +149,67 @@ class BrowserAutomationModule {
         onProgress(mapping.length, mapping.length, `Completed filling ${results.filled}/${mapping.length} fields.`);
         return results;
     }
+
+    /**
+     * Dispatch full human-like pointer event cascade (pointerover, mouseover, pointerdown, mousedown, focus, pointerup, mouseup, click)
+     */
+    async clickHumanLike(element) {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const clientX = rect.left + rect.width / 2;
+        const clientY = rect.top + rect.height / 2;
+
+        const mouseOpts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+
+        element.dispatchEvent(new PointerEvent('pointerover', mouseOpts));
+        element.dispatchEvent(new MouseEvent('mouseover', mouseOpts));
+        element.dispatchEvent(new PointerEvent('pointerdown', mouseOpts));
+        element.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+        element.focus();
+        await this.sleep(40);
+
+        element.dispatchEvent(new PointerEvent('pointerup', mouseOpts));
+        element.dispatchEvent(new MouseEvent('mouseup', mouseOpts));
+        element.dispatchEvent(new MouseEvent('click', mouseOpts));
+        return true;
+    }
+
+    /**
+     * Dispatch realistic keystroke events per character
+     */
+    async typeHumanLike(element, text, options = {}) {
+        if (!element) return false;
+        await this.clickHumanLike(element);
+
+        const str = String(text || '');
+        let current = '';
+
+        for (let i = 0; i < str.length; i++) {
+            const char = str[i];
+            current += char;
+
+            const keyOpts = { key: char, code: `Key${char.toUpperCase()}`, bubbles: true, cancelable: true };
+            element.dispatchEvent(new KeyboardEvent('keydown', keyOpts));
+            element.dispatchEvent(new KeyboardEvent('keypress', keyOpts));
+
+            this.setNativeValue(element, current);
+            element.dispatchEvent(new InputEvent('input', { bubbles: true, data: char }));
+            element.dispatchEvent(new KeyboardEvent('keyup', keyOpts));
+
+            const delay = 18 + Math.random() * 25;
+            await this.sleep(delay);
+        }
+
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.blur();
+        return true;
+    }
 }
 
 // Export
+if (typeof window !== 'undefined') {
+    window.BrowserAutomationModule = BrowserAutomationModule;
+}
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = BrowserAutomationModule;
-} else {
-    window.BrowserAutomationModule = BrowserAutomationModule;
 }

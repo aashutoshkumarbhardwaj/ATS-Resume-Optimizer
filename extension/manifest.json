@@ -38,7 +38,8 @@
     {
       "matches": [
         "https://*/*",
-        "http://*/*"
+        "http://*/*",
+        "file:///*"
       ],
       "js": [
         "src/contentScript/authReceiver.js",
@@ -48,8 +49,16 @@
         "src/contentScript/IntelligentFormFiller.js",
         "src/contentScript/floatingButtonManager.js",
         "src/contentScript/autofillOrchestrator.js",
+        "src/contentScript/virtualCursor/VirtualCursorStyles.js",
+        "src/contentScript/virtualCursor/VirtualCursorEngine.js",
+        "src/contentScript/agent/FreeLLMClient.js",
+        "src/contentScript/agent/UserContextGraphEngine.js",
+        "src/utils/smartAnswerEngine.js",
+        "src/contentScript/agent/PersonalAgentBrain.js",
+        "src/contentScript/agent/AutonomousAgentOrchestrator.js",
         "src/contentScript/content-script.js"
       ],
+      "all_frames": true,
       "run_at": "document_start"
     }
   ],

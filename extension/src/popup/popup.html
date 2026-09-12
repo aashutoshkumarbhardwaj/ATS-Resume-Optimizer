@@ -54,6 +54,31 @@
                         </div>
                     </div>
 
+                    <!-- Autonomous AI Agent Hero Card -->
+                    <div style="background: linear-gradient(135deg, #1e1e2f 0%, #2d1b4e 100%); padding: 14px; border-radius: 10px; margin-bottom: 16px; border: 1px solid rgba(139, 92, 246, 0.4); box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25); color: white;">
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 22px;">🤖</span>
+                                <div>
+                                    <strong style="font-size: 13px; color: #fff; letter-spacing: 0.02em;">Autonomous Visual Agent</strong>
+                                    <span style="font-size: 9px; background: #8b5cf6; color: white; padding: 2px 6px; border-radius: 10px; margin-left: 6px; text-transform: uppercase; font-weight: 700;">Active Tab</span>
+                                </div>
+                            </div>
+                        </div>
+                        <p style="font-size: 11px; color: #d1d5db; margin: 0 0 12px 0; line-height: 1.4;">
+                            Glides a visual virtual cursor to inspect, fill, and answer questions autonomously on your current webpage.
+                        </p>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="popupRunAgentBtn" style="flex: 2; display: flex; align-items: center; justify-content: center; gap: 6px; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; border: none; padding: 10px 14px; border-radius: 8px; font-weight: 600; font-size: 12px; cursor: pointer; transition: all 0.2s; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);">
+                                <span>🚀</span> <span>Run Agent on Current Page</span>
+                            </button>
+                            <button id="popupFastAutofillBtn" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; background: rgba(255, 255, 255, 0.12); color: #e5e7eb; border: 1px solid rgba(255, 255, 255, 0.2); padding: 10px 8px; border-radius: 8px; font-weight: 500; font-size: 11px; cursor: pointer; transition: all 0.2s;">
+                                <span>⚡</span> <span>Instant</span>
+                            </button>
+                        </div>
+                        <div id="popupAgentStatus" style="font-size: 11px; color: #a78bfa; margin-top: 8px; display: none; text-align: center; font-weight: 500;"></div>
+                    </div>
+
                     <!-- Quick Actions -->
                     <div style="margin-bottom: 16px;">
                         <p style="font-size: 12px; color: #666; font-weight: 600; margin-bottom: 10px;">Quick Actions</p>
@@ -414,6 +439,60 @@
                         </div>
                     </div>
 
+                    <!-- Autonomous AI Agent Settings -->
+                    <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
+                        <h4 style="margin-top: 0; font-size: 13px; color: #333;">🤖 Autonomous AI Agent (Visual Co-Pilot)</h4>
+                        
+                        <div style="background: #f9f9f9; padding: 12px; border-radius: 6px; border-left: 4px solid #7c3aed;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 10px;">
+                                <input type="checkbox" id="enableVisualAgent" checked style="width: 16px; height: 16px; cursor: pointer;">
+                                <span style="font-size: 12px; font-weight: 600; color: #111827;">Enable Visual Ghost Cursor</span>
+                            </label>
+                            <p style="font-size: 11px; color: #6b7280; margin: 0 0 10px 24px; line-height: 1.3;">
+                                Watches the agent glide across screen, inspect fields, and type with humanized motion without freezing your physical mouse pointer.
+                            </p>
+
+                            <div style="margin-bottom: 10px;">
+                                <label style="display: block; font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 4px;">Free AI Brain Provider:</label>
+                                <select id="agentProviderSelect" style="width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid #d1d5db; font-size: 12px;">
+                                    <option value="gemini" selected>Google Gemini 1.5 Flash (Free Tier)</option>
+                                    <option value="groq">Groq LLaMA 3.3 70B (Free Tier, Ultra Fast)</option>
+                                    <option value="window_ai">Chrome Built-in AI (Gemini Nano - Local)</option>
+                                    <option value="offline">Offline Rule-based</option>
+                                </select>
+                            </div>
+
+                            <div id="geminiKeyGroup" style="margin-bottom: 10px;">
+                                <label style="display: block; font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 4px;">Gemini API Key (Free):</label>
+                                <input type="password" id="geminiApiKeyInput" placeholder="AIzaSy..." style="width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 4px; border: 1px solid #d1d5db; font-size: 11px;">
+                                <small style="display: block; font-size: 10px; color: #6b7280; margin-top: 2px;">
+                                    Get 100% free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color: #6366f1;">aistudio.google.com</a>
+                                </small>
+                            </div>
+
+                            <div id="groqKeyGroup" style="margin-bottom: 10px; display: none;">
+                                <label style="display: block; font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 4px;">Groq API Key (Free):</label>
+                                <input type="password" id="groqApiKeyInput" placeholder="gsk_..." style="width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 4px; border: 1px solid #d1d5db; font-size: 11px;">
+                                <small style="display: block; font-size: 10px; color: #6b7280; margin-top: 2px;">
+                                    Get 100% free key at <a href="https://console.groq.com" target="_blank" style="color: #6366f1;">console.groq.com</a>
+                                </small>
+                            </div>
+
+                            <div style="margin-bottom: 12px;">
+                                <label style="display: block; font-size: 11px; font-weight: 600; color: #374151; margin-bottom: 4px;">Cursor Speed:</label>
+                                <select id="agentSpeedSelect" style="width: 100%; padding: 6px 8px; border-radius: 4px; border: 1px solid #d1d5db; font-size: 12px;">
+                                    <option value="normal" selected>Realistic Human (Smooth Bezier)</option>
+                                    <option value="fast">Fast (Swift Glide)</option>
+                                    <option value="slow">Slow & Cinematic</option>
+                                </select>
+                            </div>
+
+                            <button id="saveAgentSettingsBtn" class="btn btn-primary" style="width: 100%; font-size: 11px; padding: 8px;">
+                                💾 Save Agent Settings
+                            </button>
+                        </div>
+                    </div>
+
                     <!-- Autofill Settings -->
                     <div style="border-bottom: 1px solid #e0e0e0; padding-bottom: 16px; margin-bottom: 16px;">
                         <h4 style="margin-top: 0; font-size: 13px; color: #333;">⚡ Autofill Preferences</h4>
@@ -460,6 +539,15 @@
                     <p style="font-size: 11px; color: #666; margin-bottom: 12px; line-height: 1.4;">
                         Fill in your profile details once. We will auto-fill them when you visit a job application page. All data is stored locally.
                     </p>
+
+                    <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                        <button type="button" id="autofillTabRunAgentBtn" style="flex: 2; background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); color: white; border: none; font-weight: 600; font-size: 12px; padding: 9px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 6px rgba(99, 102, 241, 0.4);">
+                            <span>🤖</span> <span>Run Agent on Current Page</span>
+                        </button>
+                        <button type="button" id="autofillTabInstantBtn" style="flex: 1; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; font-size: 11px; font-weight: 500; padding: 9px 8px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px;">
+                            <span>⚡</span> <span>Instant</span>
+                        </button>
+                    </div>
                     
                     <form id="autofillForm">
                         <div class="form-section-title">👤 Personal Info</div>

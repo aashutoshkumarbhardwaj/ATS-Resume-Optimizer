@@ -3243,16 +3243,47 @@ function exportJobsToCSV() {
  */
 async function loadSettings() {
     const result = await new Promise((resolve) => {
-        chrome.storage.sync.get([
+        chrome.storage.local.get([
             'autoStartAutofill',
             'showFloatingButton',
-            'enableNotifications'
+            'enableNotifications',
+            'enableVisualAgent',
+            'ai_agent_provider',
+            'gemini_api_key',
+            'groq_api_key',
+            'agent_speed'
         ], resolve);
     });
     
-    document.getElementById('autoStartAutofill').checked = result.autoStartAutofill !== false;
-    document.getElementById('showFloatingButton').checked = result.showFloatingButton !== false;
-    document.getElementById('enableNotifications').checked = result.enableNotifications !== false;
+    if (document.getElementById('autoStartAutofill')) document.getElementById('autoStartAutofill').checked = result.autoStartAutofill !== false;
+    if (document.getElementById('showFloatingButton')) document.getElementById('showFloatingButton').checked = result.showFloatingButton !== false;
+    if (document.getElementById('enableNotifications')) document.getElementById('enableNotifications').checked = result.enableNotifications !== false;
+    
+    // AI Agent settings
+    const visualAgentEl = document.getElementById('enableVisualAgent');
+    if (visualAgentEl) visualAgentEl.checked = result.enableVisualAgent !== false;
+
+    const providerSelect = document.getElementById('agentProviderSelect');
+    if (providerSelect) {
+        providerSelect.value = result.ai_agent_provider || 'gemini';
+        updateKeyVisibility(providerSelect.value);
+    }
+
+    const geminiInput = document.getElementById('geminiApiKeyInput');
+    if (geminiInput && result.gemini_api_key) geminiInput.value = result.gemini_api_key;
+
+    const groqInput = document.getElementById('groqApiKeyInput');
+    if (groqInput && result.groq_api_key) groqInput.value = result.groq_api_key;
+
+    const speedSelect = document.getElementById('agentSpeedSelect');
+    if (speedSelect && result.agent_speed) speedSelect.value = result.agent_speed;
+}
+
+function updateKeyVisibility(provider) {
+    const geminiGroup = document.getElementById('geminiKeyGroup');
+    const groqGroup = document.getElementById('groqKeyGroup');
+    if (geminiGroup) geminiGroup.style.display = provider === 'gemini' ? 'block' : 'none';
+    if (groqGroup) groqGroup.style.display = provider === 'groq' ? 'block' : 'none';
 }
 
 /**
@@ -3260,13 +3291,20 @@ async function loadSettings() {
  */
 function saveSettings() {
     const settings = {
-        autoStartAutofill: document.getElementById('autoStartAutofill').checked,
-        showFloatingButton: document.getElementById('showFloatingButton').checked,
-        enableNotifications: document.getElementById('enableNotifications').checked
+        autoStartAutofill: document.getElementById('autoStartAutofill')?.checked ?? true,
+        showFloatingButton: document.getElementById('showFloatingButton')?.checked ?? true,
+        enableNotifications: document.getElementById('enableNotifications')?.checked ?? true,
+        enableVisualAgent: document.getElementById('enableVisualAgent')?.checked ?? true,
+        ai_agent_provider: document.getElementById('agentProviderSelect')?.value || 'gemini',
+        gemini_api_key: document.getElementById('geminiApiKeyInput')?.value?.trim() || '',
+        groq_api_key: document.getElementById('groqApiKeyInput')?.value?.trim() || '',
+        agent_speed: document.getElementById('agentSpeedSelect')?.value || 'normal'
     };
     
-    chrome.storage.sync.set(settings, () => {
-        showNotification('✅ Settings saved!', 'success');
+    chrome.storage.local.set(settings, () => {
+        chrome.storage.sync.set(settings, () => {
+            showNotification('✅ Agent & Autofill settings saved!', 'success');
+        });
     });
 }
 
@@ -3364,12 +3402,25 @@ function setupSettingsListeners() {
     }
     
     // Settings toggles - auto-save
-    ['autoStartAutofill', 'showFloatingButton', 'enableNotifications'].forEach(id => {
+    ['autoStartAutofill', 'showFloatingButton', 'enableNotifications', 'enableVisualAgent', 'agentSpeedSelect'].forEach(id => {
         const elem = document.getElementById(id);
         if (elem) {
             elem.addEventListener('change', saveSettings);
         }
     });
+
+    const agentProviderSelect = document.getElementById('agentProviderSelect');
+    if (agentProviderSelect) {
+        agentProviderSelect.addEventListener('change', (e) => {
+            updateKeyVisibility(e.target.value);
+            saveSettings();
+        });
+    }
+
+    const saveAgentBtn = document.getElementById('saveAgentSettingsBtn');
+    if (saveAgentBtn) {
+        saveAgentBtn.addEventListener('click', saveSettings);
+    }
     
     // Check if already connected to Job Orbit
     checkJobOrbitConnection();
@@ -4362,4 +4413,143 @@ async function loadRecentApplications() {
         console.error('[Popup] Failed to load recent applications:', error);
     }
 }
+
+/**
+ * Autonomous AI Agent Trigger Handlers for Extension Popup Widget
+ */
+function initAgentTriggerHandlers() {
+    const runAgentBtn = document.getElementById('popupRunAgentBtn');
+    const fastAutofillBtn = document.getElementById('popupFastAutofillBtn');
+    const autofillTabRunBtn = document.getElementById('autofillTabRunAgentBtn');
+    const autofillTabInstantBtn = document.getElementById('autofillTabInstantBtn');
+    const statusEl = document.getElementById('popupAgentStatus');
+
+    function updateStatus(msg, type = 'info') {
+        if (!statusEl) return;
+        statusEl.style.display = 'block';
+        statusEl.textContent = msg;
+        if (type === 'error') {
+            statusEl.style.color = '#f87171';
+        } else if (type === 'success') {
+            statusEl.style.color = '#34d399';
+        } else {
+            statusEl.style.color = '#a78bfa';
+        }
+    }
+
+    async function triggerAgent(mode = 'autonomous') {
+        updateStatus('⏳ Checking profile...', 'info');
+
+        // Check profile
+        const storageData = await new Promise((resolve) => {
+            chrome.storage.local.get(['autofillProfile', 'user_profile', 'profile', 'candidate_profile'], resolve);
+        });
+
+        const profile = storageData.autofillProfile || storageData.user_profile || storageData.profile || storageData.candidate_profile;
+
+        if (!profile || Object.keys(profile).length === 0) {
+            updateStatus('⚠️ Please fill your profile details in Autofill tab first!', 'error');
+            const autofillTabBtn = document.querySelector('[data-tab="autofill"]');
+            if (autofillTabBtn) autofillTabBtn.click();
+            return;
+        }
+
+        chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+            if (!tabs || !tabs[0] || !tabs[0].id) {
+                updateStatus('❌ No active tab detected', 'error');
+                return;
+            }
+
+            const activeTab = tabs[0];
+
+            if (activeTab.url && (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('edge://') || activeTab.url.startsWith('chrome-extension://') || activeTab.url.startsWith('about:'))) {
+                updateStatus('⚠️ Please navigate to a job application webpage first!', 'error');
+                return;
+            }
+
+            updateStatus(`🚀 Launching ${mode === 'autonomous' ? 'Autonomous Agent' : 'Instant Autofill'}...`, 'info');
+
+            // Try sending message
+            chrome.tabs.sendMessage(activeTab.id, {
+                type: mode === 'autonomous' ? 'RUN_AUTONOMOUS_AGENT' : 'PERFORM_AUTOFILL',
+                mode: mode,
+                profile: profile
+            }, (response) => {
+                if (chrome.runtime.lastError || (response && response.error && response.error.includes('AutonomousAgentOrchestrator'))) {
+                    console.log('[Popup] Content script not responding or missing agent, injecting scripts dynamically...');
+                    injectAndRunAgent(activeTab.id, mode, profile, updateStatus);
+                } else if (response && response.success === false) {
+                    console.error('[Popup] Agent failed to start:', response.error);
+                    updateStatus(`⚠️ ${response.error || 'Agent failed to start'}`, 'error');
+                } else {
+                    updateStatus('✨ Agent running on page! Check your active tab.', 'success');
+                    setTimeout(() => window.close(), 1200);
+                }
+            });
+        });
+    }
+
+    async function injectAndRunAgent(tabId, mode, profile, updateStatus) {
+        updateStatus('💉 Initializing agent on webpage...', 'info');
+        try {
+            const scriptFiles = [
+                'src/contentScript/authReceiver.js',
+                'src/contentScript/QuestionExtractionEngine.js',
+                'src/contentScript/BrowserAutomationModule.js',
+                'src/contentScript/ApplicationUnderstandingEngine.js',
+                'src/contentScript/IntelligentFormFiller.js',
+                'src/contentScript/floatingButtonManager.js',
+                'src/contentScript/autofillOrchestrator.js',
+                'src/contentScript/virtualCursor/VirtualCursorStyles.js',
+                'src/contentScript/virtualCursor/VirtualCursorEngine.js',
+                'src/contentScript/agent/FreeLLMClient.js',
+                'src/utils/smartAnswerEngine.js',
+                'src/contentScript/agent/PersonalAgentBrain.js',
+                'src/contentScript/agent/AutonomousAgentOrchestrator.js',
+                'src/contentScript/content-script.js'
+            ];
+
+            for (const file of scriptFiles) {
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId },
+                        files: [file]
+                    });
+                } catch (e) {
+                    console.warn(`[Popup] Injection warning for ${file}:`, e);
+                }
+            }
+
+            setTimeout(() => {
+                chrome.tabs.sendMessage(tabId, {
+                    type: mode === 'autonomous' ? 'RUN_AUTONOMOUS_AGENT' : 'PERFORM_AUTOFILL',
+                    mode: mode,
+                    profile: profile
+                }, (resp) => {
+                    if (resp && resp.success === false) {
+                        console.error('[Popup] Post-injection agent error:', resp.error);
+                        updateStatus(`⚠️ ${resp.error || 'Agent failed to start'}`, 'error');
+                    } else {
+                        updateStatus('✨ Agent running on page! Check your active tab.', 'success');
+                        setTimeout(() => window.close(), 1200);
+                    }
+                });
+            }, 300);
+        } catch (err) {
+            console.error('[Popup] Script injection error:', err);
+            updateStatus('⚠️ Please refresh the job webpage to activate the agent.', 'error');
+        }
+    }
+
+    if (runAgentBtn) runAgentBtn.addEventListener('click', () => triggerAgent('autonomous'));
+    if (fastAutofillBtn) fastAutofillBtn.addEventListener('click', () => triggerAgent('simple'));
+    if (autofillTabRunBtn) autofillTabRunBtn.addEventListener('click', () => triggerAgent('autonomous'));
+    if (autofillTabInstantBtn) autofillTabInstantBtn.addEventListener('click', () => triggerAgent('simple'));
+}
+
+// Initialize Agent Trigger Handlers
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(initAgentTriggerHandlers, 200);
+});
+
 

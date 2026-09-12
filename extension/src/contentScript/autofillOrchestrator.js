@@ -22,6 +22,17 @@ class AutofillOrchestrator {
             console.log('[Orchestrator] 🚀 Starting autofill workflow...');
             console.log('[Orchestrator] Options received:', options ? `${Object.keys(options).length} keys` : 'none');
 
+            // Check if autonomous visual agent mode is requested
+            if (options.mode === 'autonomous' || options.visualAgent || options.autonomousMode) {
+                console.log('[Orchestrator] 🤖 Using AUTONOMOUS VISUAL AGENT MODE');
+                const AgentClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
+                if (!AgentClass) {
+                    throw new Error('AutonomousAgentOrchestrator class not found. Please reload the webpage (Ctrl+R / Cmd+R).');
+                }
+                const agent = new AgentClass();
+                return await agent.start(options);
+            }
+
             // Check if intelligent mode is enabled
             const useIntelligentMode = options.intelligentMode || this.intelligentMode;
 
@@ -827,6 +838,9 @@ class AutofillOrchestrator {
 }
 
 // Export for use
+if (typeof window !== 'undefined') {
+    window.AutofillOrchestrator = AutofillOrchestrator;
+}
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = AutofillOrchestrator;
 }

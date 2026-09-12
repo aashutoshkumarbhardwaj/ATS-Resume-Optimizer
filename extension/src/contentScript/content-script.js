@@ -259,6 +259,55 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
     } else if (request.type === 'GET_DETECTED_JOB') {
         sendResponse({ success: true, job: detectedJob });
+    } else if (request.type === 'RUN_AUTONOMOUS_AGENT' || request.action === 'RUN_AUTONOMOUS_AGENT') {
+        console.log('[Content] 🤖 Launching Autonomous Agent via message trigger...');
+        try {
+            const OrchestratorClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
+            if (!OrchestratorClass) {
+                throw new Error('AutonomousAgentOrchestrator class not found. Please reload the webpage (Ctrl+R / Cmd+R).');
+            }
+            const orchestrator = new OrchestratorClass();
+            orchestrator.start({ mode: 'autonomous', visualAgent: true, profile: request.profile }).then(result => {
+                sendResponse({ success: true, result });
+            }).catch(err => {
+                console.error('[Content] ❌ Agent run error:', err);
+                sendResponse({ success: false, error: err.message });
+            });
+            return true; // Keep channel open for async response
+        } catch (e) {
+            console.error('[Content] Error running autonomous agent:', e);
+            sendResponse({ success: false, error: e.message });
+        }
+    } else if (request.type === 'RESUME_AUTONOMOUS_AGENT') {
+        console.log('[Content] 🔄 Received RESUME_AUTONOMOUS_AGENT signal from background...');
+        if (window.__unifiedAutofillButtonInstance && typeof window.__unifiedAutofillButtonInstance.resumeSession === 'function') {
+            window.__unifiedAutofillButtonInstance.resumeSession(request.session);
+            sendResponse({ success: true, handledBy: 'UnifiedAutofillButton' });
+        } else {
+            const OrchestratorClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
+            if (OrchestratorClass) {
+                const orchestrator = new OrchestratorClass();
+                orchestrator.start({ mode: 'autonomous', resumeSession: true, session: request.session }).then(result => {
+                    sendResponse({ success: true, result });
+                }).catch(err => {
+                    sendResponse({ success: false, error: err.message });
+                });
+                return true;
+            } else {
+                sendResponse({ success: false, error: 'Orchestrator not available' });
+            }
+        }
+        return true;
+    } else if (request.type === 'AGENT_SESSION_STOP') {
+        console.log('[Content] ⏹ Received AGENT_SESSION_STOP signal...');
+        if (window.__unifiedAutofillButtonInstance) {
+            window.__unifiedAutofillButtonInstance.setRunningState(false);
+        }
+        if (window.__autonomousAgentOrchestratorInstance) {
+            window.__autonomousAgentOrchestratorInstance.stop(false);
+        }
+        sendResponse({ success: true });
+        return true;
     } else if (request.type === 'PERFORM_AUTOFILL') {
         try {
             const result = performAutofill(request.profile);

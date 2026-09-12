@@ -185,7 +185,10 @@ router.post('/', async (req, res) => {
             status: status || 'applied',
             resumeId: resume_id,
             notes,
-            source: req.body.source
+            source: req.body.source || 'AutonomousAgent',
+            platform: req.body.platform,
+            profileName: req.body.profileName || req.body.profile_name,
+            formData: req.body.formData || req.body.form_data
         }, userId);
 
         res.status(201).json({

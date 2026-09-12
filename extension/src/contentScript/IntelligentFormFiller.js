@@ -239,10 +239,20 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Fill text input
+     * Fill text input (supporting React, Vue, Angular synthetic event dispatching)
      */
     async fillTextInput(element, value) {
-        element.value = String(value);
+        const strVal = String(value);
+        try {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (nativeSetter) {
+                nativeSetter.call(element, strVal);
+            } else {
+                element.value = strVal;
+            }
+        } catch (e) {
+            element.value = strVal;
+        }
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
         element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
@@ -250,10 +260,20 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Fill textarea
+     * Fill textarea (supporting React, Vue synthetic events)
      */
     async fillTextarea(element, value) {
-        element.value = String(value);
+        const strVal = String(value);
+        try {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (nativeSetter) {
+                nativeSetter.call(element, strVal);
+            } else {
+                element.value = strVal;
+            }
+        } catch (e) {
+            element.value = strVal;
+        }
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
@@ -396,7 +416,18 @@ class IntelligentFormFiller {
      * Fill contenteditable element
      */
     async fillContentEditable(element, value) {
-        element.textContent = String(value);
+        const strVal = String(value);
+        try {
+            if (typeof InputEvent !== 'undefined') {
+                element.dispatchEvent(new InputEvent('beforeinput', {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: 'insertText',
+                    data: strVal
+                }));
+            }
+        } catch (e) {}
+        element.textContent = strVal;
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
         return true;
@@ -539,4 +570,7 @@ class IntelligentFormFiller {
 // Export
 if (typeof window !== 'undefined') {
     window.IntelligentFormFiller = IntelligentFormFiller;
+}
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = IntelligentFormFiller;
 }

@@ -58,9 +58,14 @@ class ApplicationUnderstandingEngine {
             '[contenteditable="true"]',
             '[role="textbox"]',
             '[role="combobox"]',
-            // React/MUI/Ant Design custom selects
+            '[role="listbox"]',
+            '[aria-haspopup="listbox"]',
+            // React/MUI/Ant Design/MS Forms custom selects & dropdowns
             '[class*="select"]',
             '[class*="Select"]',
+            '[class*="dropdown"]',
+            '[class*="Dropdown"]',
+            '[data-automation-id="selectOption"]',
             '[data-testid*="select"]',
             // Radio and checkbox groups
             'input[type="radio"]',
@@ -71,19 +76,87 @@ class ApplicationUnderstandingEngine {
             '[class*="Date"]'
         ];
 
-        for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-            for (const element of elements) {
-                if (this.isVisible(element) && !this.isDuplicate(element, fields)) {
-                    const fieldData = await this.extractFieldData(element);
-                    if (fieldData) {
-                        fields.push(fieldData);
-                    }
+        const allSelector = selectors.join(',');
+        const rawElements = this.collectElementsDeep(document, allSelector);
+
+        // Sort elements strictly by visual page coordinates (top-to-bottom, then left-to-right)
+        const scrollY = (typeof window !== 'undefined' ? window.scrollY : 0);
+        const scrollX = (typeof window !== 'undefined' ? window.scrollX : 0);
+
+        rawElements.sort((a, b) => {
+            if (a === b) return 0;
+            const rectA = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };
+            const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
+
+            const topA = (rectA.top || 0) + scrollY;
+            const topB = (rectB.top || 0) + scrollY;
+            const leftA = (rectA.left || 0) + scrollX;
+            const leftB = (rectB.left || 0) + scrollX;
+
+            // If elements are on the same visual row (within 24px), sort left-to-right
+            if (Math.abs(topA - topB) <= 24) {
+                return leftA - leftB;
+            }
+
+            // Otherwise, sort strictly top-to-bottom
+            return topA - topB;
+        });
+
+        for (const element of rawElements) {
+            if (this.isVisible(element) && this.isJobApplicationField(element) && !this.isDuplicate(element, fields)) {
+                const fieldData = await this.extractFieldData(element);
+                if (fieldData) {
+                    fields.push(fieldData);
                 }
             }
         }
 
         return fields;
+    }
+
+    /**
+     * Collect elements deeply across document, accessible child iframes, and open shadow roots
+     */
+    collectElementsDeep(rootNode = document, selector = '', collected = [], visited = new Set(), depth = 0) {
+        if (!rootNode || depth > 5 || visited.has(rootNode)) return collected;
+        visited.add(rootNode);
+
+        try {
+            // 1. Direct query inside rootNode
+            if (typeof rootNode.querySelectorAll === 'function') {
+                const els = rootNode.querySelectorAll(selector);
+                for (let i = 0; i < els.length; i++) {
+                    collected.push(els[i]);
+                }
+            }
+
+            // 2. Traverse shadow roots
+            const allNodes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('*') : [];
+            for (let i = 0; i < allNodes.length; i++) {
+                const node = allNodes[i];
+                if (node && node.shadowRoot && !visited.has(node.shadowRoot)) {
+                    this.collectElementsDeep(node.shadowRoot, selector, collected, visited, depth + 1);
+                }
+            }
+
+            // 3. Traverse accessible iframes (same-origin / embedded frames)
+            const iframes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('iframe, frame') : [];
+            for (let i = 0; i < iframes.length; i++) {
+                try {
+                    const iframe = iframes[i];
+                    const iframeDoc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                    if (iframeDoc && !visited.has(iframeDoc)) {
+                        this.collectElementsDeep(iframeDoc, selector, collected, visited, depth + 1);
+                    }
+                } catch (frameErr) {
+                    // Cross-origin iframe: protected by browser SOP; will be handled by content script injected via all_frames: true
+                }
+            }
+        } catch (e) {
+            console.warn('[AUE] Error traversing deep DOM nodes:', e);
+        }
+
+        return collected;
     }
 
     /**
@@ -136,11 +209,12 @@ class ApplicationUnderstandingEngine {
             return 'select';
         }
 
-        // Custom select components (React Select, MUI, Ant Design)
+        // Custom select & dropdown components (React Select, MUI, Ant Design, MS Forms, Google Forms)
         const classList = Array.from(element.classList).join(' ').toLowerCase();
         const role = element.getAttribute('role');
+        const hasPopup = element.getAttribute('aria-haspopup');
 
-        if (role === 'combobox' || classList.includes('select')) {
+        if (role === 'combobox' || role === 'listbox' || hasPopup === 'listbox' || classList.includes('select') || classList.includes('dropdown')) {
             return 'custom-select';
         }
         if (role === 'textbox' || element.hasAttribute('contenteditable')) {
@@ -154,41 +228,77 @@ class ApplicationUnderstandingEngine {
     }
 
     /**
+     * Check if extracted label is a useless generic framework placeholder
+     */
+    isGenericLabel(text) {
+        if (!text) return true;
+        const norm = text.trim().toLowerCase();
+        return /^(?:single\s*line\s*text|multi\s*line\s*text|text\s*box|text\s*input|text|input|text\s*question|choice\s*question|rating|date|please\s*enter\s*your\s*answer|enter\s*your\s*answer|please\s*enter\s*a\s*url|enter\s*a\s*url|required|\*)$/i.test(norm);
+    }
+
+    /**
      * Extract label text for a field (comprehensive approach)
      */
     extractLabel(element) {
-        // Try associated label
+        // 1. First, check dedicated question containers (Microsoft Forms, Google Forms, Greenhouse, Lever, Workday)
+        const questionContainer = element.closest('[data-automation-id="questionItem"], [data-item-id], .office-form-question, .freebirdFormviewerViewNumberedItemContainer, [role="listitem"], .form-group, .field, [class*="questionItem"], [class*="form-group"]');
+        if (questionContainer) {
+            const titleEl = questionContainer.querySelector('[data-automation-id="questionTitle"], [role="heading"], h1, h2, h3, h4, .office-form-question-title, [class*="questionTitle"], [class*="title"], [class*="label"], [class*="Label"]');
+            if (titleEl) {
+                const titleText = this.cleanText(titleEl.textContent);
+                if (titleText && !this.isGenericLabel(titleText)) return titleText;
+            }
+            const containerText = this.cleanText(questionContainer.textContent.replace(element.textContent || '', ''));
+            if (containerText && containerText.length < 200 && !this.isGenericLabel(containerText)) return containerText;
+        }
+
+        // 2. Try associated HTML label
         if (element.id) {
             const label = document.querySelector(`label[for="${element.id}"]`);
-            if (label) return this.cleanText(label.textContent);
+            if (label) {
+                const text = this.cleanText(label.textContent);
+                if (text && !this.isGenericLabel(text)) return text;
+            }
         }
 
-        // Try parent label
+        // 3. Try parent label
         const parentLabel = element.closest('label');
         if (parentLabel) {
-            return this.cleanText(parentLabel.textContent.replace(element.textContent, ''));
+            const text = this.cleanText(parentLabel.textContent.replace(element.textContent || '', ''));
+            if (text && !this.isGenericLabel(text)) return text;
         }
 
-        // Try aria-label
-        const ariaLabel = element.getAttribute('aria-label');
-        if (ariaLabel) return this.cleanText(ariaLabel);
-
-        // Try aria-labelledby
+        // 4. Try aria-labelledby (handles multi-id lists, filters out boilerplate helper IDs)
         const labelledBy = element.getAttribute('aria-labelledby');
         if (labelledBy) {
-            const labelElement = document.getElementById(labelledBy);
-            if (labelElement) return this.cleanText(labelElement.textContent);
+            const ids = labelledBy.split(/\s+/).filter(Boolean);
+            const textParts = ids.map(id => {
+                const el = document.getElementById(id);
+                return el ? this.cleanText(el.textContent) : '';
+            }).filter(t => t && !this.isGenericLabel(t) && !/^(?:please\s*enter|required|\*)/i.test(t));
+            if (textParts.length > 0) return textParts.join(' ');
         }
 
-        // Try placeholder
-        if (element.placeholder) return this.cleanText(element.placeholder);
+        // 5. Try aria-label (skip generic screen-reader types like "Single line text")
+        const ariaLabel = element.getAttribute('aria-label');
+        if (ariaLabel) {
+            const cleanAria = this.cleanText(ariaLabel);
+            if (cleanAria && !this.isGenericLabel(cleanAria)) return cleanAria;
+        }
 
-        // Try name attribute (convert to human-readable)
+        // 6. Try placeholder (if non-generic)
+        if (element.placeholder) {
+            const cleanPlaceholder = this.cleanText(element.placeholder);
+            if (cleanPlaceholder && !this.isGenericLabel(cleanPlaceholder)) return cleanPlaceholder;
+        }
+
+        // 7. Try name attribute (convert to human-readable)
         if (element.name) {
-            return this.cleanText(element.name.replace(/[_-]/g, ' '));
+            const cleanName = this.cleanText(element.name.replace(/[_-]/g, ' '));
+            if (cleanName && !this.isGenericLabel(cleanName)) return cleanName;
         }
 
-        // Look for nearby text (previous sibling, parent text, etc.)
+        // 8. Look for nearby text (previous sibling, parent text, etc.)
         return this.extractNearbyText(element);
     }
 
@@ -196,6 +306,22 @@ class ApplicationUnderstandingEngine {
      * Extract nearby text to determine field label
      */
     extractNearbyText(element) {
+        // Walk up parents (up to 5 levels) to look for question text
+        let parent = element.parentElement;
+        for (let i = 0; i < 5 && parent; i++) {
+            if (parent.tagName === 'BODY' || parent.tagName === 'HTML' || parent.tagName === 'FORM') break;
+            const titleEl = parent.querySelector('[role="heading"], h1, h2, h3, h4, [class*="title"], [class*="label"]');
+            if (titleEl && titleEl !== element) {
+                const titleText = this.cleanText(titleEl.textContent);
+                if (titleText && titleText.length < 250) return titleText;
+            }
+            const text = this.cleanText(parent.innerText || parent.textContent);
+            if (text && text.length > 0 && text.length < 250) {
+                return text;
+            }
+            parent = parent.parentElement;
+        }
+
         // Check previous sibling
         let sibling = element.previousElementSibling;
         while (sibling && sibling.tagName !== 'FORM') {
@@ -204,16 +330,6 @@ class ApplicationUnderstandingEngine {
                 return text;
             }
             sibling = sibling.previousElementSibling;
-        }
-
-        // Check parent's text content
-        const parent = element.parentElement;
-        if (parent) {
-            const parentText = Array.from(parent.childNodes)
-                .filter(node => node.nodeType === Node.TEXT_NODE)
-                .map(node => this.cleanText(node.textContent))
-                .join(' ');
-            if (parentText) return parentText;
         }
 
         return '';
@@ -330,6 +446,7 @@ class ApplicationUnderstandingEngine {
             totalFields: fields.length,
             sections: this.groupFieldsBySections(fields),
             fields: fields.map(f => ({
+                element: f.element,
                 id: f.id,
                 type: f.type,
                 label: f.label,
@@ -412,20 +529,32 @@ class ApplicationUnderstandingEngine {
      * Check if field is required
      */
     isRequired(element) {
-        // Check required attribute
-        if (element.hasAttribute('required') || element.required) {
+        if (!element) return false;
+        // Check standard HTML required
+        if (element.hasAttribute && (element.hasAttribute('required') || element.required)) {
             return true;
         }
 
         // Check aria-required
-        if (element.getAttribute('aria-required') === 'true') {
+        if (typeof element.getAttribute === 'function' && element.getAttribute('aria-required') === 'true') {
             return true;
         }
 
-        // Check for asterisk in label
-        const label = this.extractLabel(element);
-        if (label.includes('*') || label.includes('required')) {
+        // Check for asterisk or required in label
+        const label = this.extractLabel(element) || '';
+        if (label.includes('*') || /\brequired\b/i.test(label)) {
             return true;
+        }
+
+        // Check question container for required star / indicator (Microsoft Forms, Google Forms, Greenhouse, Workday)
+        if (typeof element.closest === 'function') {
+            const container = element.closest('[data-automation-id="questionItem"], .office-form-question, .form-group, .field, [role="listitem"], .freebirdFormviewerViewNumberedItemContainer');
+            if (container) {
+                const star = container.querySelector('.required, .required-star, [class*="required"], [class*="star"], [aria-label*="required"]');
+                if (star || (container.textContent && container.textContent.includes('*'))) {
+                    return true;
+                }
+            }
         }
 
         return false;
@@ -449,11 +578,16 @@ class ApplicationUnderstandingEngine {
      */
     isVisible(element) {
         if (!element) return false;
-        const style = window.getComputedStyle(element);
-        return style.display !== 'none' && 
-               style.visibility !== 'hidden' && 
-               style.opacity !== '0' &&
-               element.offsetParent !== null;
+        try {
+            const rect = element.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+                const style = window.getComputedStyle(element);
+                return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+            }
+            return false;
+        } catch (e) {
+            return true;
+        }
     }
 
     /**
@@ -461,6 +595,84 @@ class ApplicationUnderstandingEngine {
      */
     isDuplicate(element, existingFields) {
         return existingFields.some(f => f.element === element);
+    }
+
+    /**
+     * Strictly verify that an interactive element belongs to a real job application form
+     * and is NOT a website header/navigation, language switcher, site search, or cookie banner.
+     */
+    isJobApplicationField(element) {
+        if (!element) return false;
+
+        // 1. Check if element is inside website navigation, header, footer, or banners
+        if (typeof element.closest === 'function') {
+            const forbiddenContainer = element.closest(`
+                header, nav, footer,
+                #header, #nav, #navbar, #footer,
+                .header, .nav, .navbar, .footer, .site-header, .site-footer,
+                .navigation, .main-nav, .top-bar, .menu,
+                .cookie-banner, .cookie-consent, #cookieConsent, #onetrust-consent-sdk,
+                .goog-te-gadget, #google_translate_element, .skiptranslate,
+                .translation-bar, .language-selector, .locale-picker, .language-menu
+            `);
+
+            // If it's inside one of these non-application containers, reject it!
+            if (forbiddenContainer) {
+                // Exception: if the container is ALSO explicitly an application modal/form
+                const isFormModal = element.closest('form, [role="dialog"], .application-form, #application_form, [data-automation-id*="application"], .jobs-easy-apply-modal');
+                if (!isFormModal || (typeof forbiddenContainer.contains === 'function' && forbiddenContainer.contains(isFormModal))) {
+                    return false;
+                }
+
+            }
+        }
+
+        // 2. Reject website language switchers and translation widgets
+        const tag = (element.tagName || '').toLowerCase();
+        const className = (typeof element.className === 'string' ? element.className : '') || '';
+        const id = element.id || '';
+        const name = element.name || '';
+        const ariaLabel = (typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : '') || '';
+        const placeholder = element.placeholder || '';
+        const testId = (typeof element.getAttribute === 'function' ? element.getAttribute('data-testid') : '') || '';
+
+        const allAttrs = `${className} ${id} ${name} ${ariaLabel} ${placeholder} ${testId}`.toLowerCase();
+
+        // Language / Currency / Translation widgets
+        if (/goog-te|google_translate|googtrans|\btranslate\b|skiptranslate/i.test(allAttrs)) {
+            return false;
+        }
+
+        // Language / Locale switcher (unless it is a question inside the form like "Languages spoken")
+        if (/(?:select|choose|change|switch)\s*(?:a\s*)?language|language\s*selector|locale\s*picker|\blang\b|select-language|site-language/i.test(allAttrs)) {
+            if (!allAttrs.includes('proficiency') && !allAttrs.includes('spoken') && !allAttrs.includes('known')) {
+                return false;
+            }
+        }
+
+        // If it's a select element whose only options are languages (e.g. English, Español, Français, Deutsch, etc.)
+        if (tag === 'select' && element.options && element.options.length > 1) {
+            const optTexts = Array.from(element.options).slice(0, 6).map(o => (o.text || '').toLowerCase().trim());
+            const isLanguageDropdown = optTexts.some(t => /^(?:english|español|spanish|french|français|deutsch|german|chinese|japanese|português|arabic)$/i.test(t));
+            if (isLanguageDropdown && !allAttrs.includes('proficiency') && !allAttrs.includes('spoken') && !allAttrs.includes('known')) {
+                return false;
+            }
+        }
+
+        // 3. Reject global site search bars
+        if (element.type === 'search' || (typeof element.getAttribute === 'function' && element.getAttribute('role') === 'searchbox')) {
+            return false;
+        }
+        if (allAttrs.includes('search-input') || allAttrs.includes('global-search') || allAttrs.includes('site-search')) {
+            return false;
+        }
+
+        // 4. Reject newsletter subscription fields
+        if (/newsletter|subscribe|mailing\s*list/i.test(allAttrs)) {
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -615,8 +827,58 @@ class PlatformDetector {
         }
 
         // SmartRecruiters
-        if (hostname.includes('smartrecruiters.com')) {
+        if (hostname.includes('smartrecruiters.com') || html.includes('smartrecruiters')) {
             return { name: 'SmartRecruiters', type: 'smartrecruiters' };
+        }
+
+        // Breezy HR
+        if (hostname.includes('breezy.hr') || html.includes('breezy-hr') || html.includes('breezy-app')) {
+            return { name: 'Breezy HR', type: 'breezy' };
+        }
+
+        // Rippling
+        if (hostname.includes('rippling.com') || html.includes('rippling-ats')) {
+            return { name: 'Rippling', type: 'rippling' };
+        }
+
+        // JazzHR
+        if (hostname.includes('jazz.co') || hostname.includes('applytojob.com') || html.includes('jazzhr')) {
+            return { name: 'JazzHR', type: 'jazzhr' };
+        }
+
+        // Bullhorn
+        if (hostname.includes('bullhorn.com') || hostname.includes('bullhornstaffing.com')) {
+            return { name: 'Bullhorn', type: 'bullhorn' };
+        }
+
+        // Recruitee
+        if (hostname.includes('recruitee.com') || html.includes('recruitee')) {
+            return { name: 'Recruitee', type: 'recruitee' };
+        }
+
+        // Workable
+        if (hostname.includes('workable.com') || html.includes('workable-application')) {
+            return { name: 'Workable', type: 'workable' };
+        }
+
+        // SAP SuccessFactors
+        if (hostname.includes('successfactors.com') || hostname.includes('sapsf.com')) {
+            return { name: 'SuccessFactors', type: 'successfactors' };
+        }
+
+        // Oracle Cloud HCM
+        if (hostname.includes('oraclecloud.com') || html.includes('ora-form')) {
+            return { name: 'Oracle Cloud', type: 'oracle-cloud' };
+        }
+
+        // Microsoft Forms
+        if (hostname.includes('forms.office.com') || html.includes('office-form')) {
+            return { name: 'Microsoft Forms', type: 'ms-forms' };
+        }
+
+        // Indeed
+        if (hostname.includes('indeed.com')) {
+            return { name: 'Indeed', type: 'indeed' };
         }
 
         // Custom/Unknown
@@ -1642,3 +1904,13 @@ if (typeof window !== 'undefined') {
     window.IntelligentOptionMatcher = IntelligentOptionMatcher;
     window.LearningEngine = LearningEngine;
 }
+
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = ApplicationUnderstandingEngine;
+    module.exports.ApplicationUnderstandingEngine = ApplicationUnderstandingEngine;
+    module.exports.PlatformDetector = PlatformDetector;
+    module.exports.FieldClassifier = FieldClassifier;
+    module.exports.IntelligentOptionMatcher = IntelligentOptionMatcher;
+    module.exports.LearningEngine = LearningEngine;
+}
+

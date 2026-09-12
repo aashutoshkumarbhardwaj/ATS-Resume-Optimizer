@@ -188,4 +188,9 @@ const SmartAnswerEngine = (() => {
     };
 })();
 
-if (typeof module !== 'undefined') module.exports = SmartAnswerEngine;
+if (typeof window !== 'undefined') {
+    window.SmartAnswerEngine = SmartAnswerEngine;
+}
+if (typeof module !== 'undefined') {
+    module.exports = SmartAnswerEngine;
+}
