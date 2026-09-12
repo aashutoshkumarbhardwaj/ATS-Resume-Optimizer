@@ -356,7 +356,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 return true;
 
             case 'AGENT_SESSION_STOP':
-                chrome.storage.local.set({ autonomousAgentSession: { isActive: false, stoppedAt: Date.now() } });
+                chrome.storage.local.remove(['autonomousAgentSession']);
                 chrome.tabs.query({}, (tabs) => {
                     if (tabs) {
                         tabs.forEach(t => {
@@ -1068,44 +1068,7 @@ if (ModuleAvailability.storageCleanup) {
 
 console.log('[ServiceWorker] ✅ Initialization complete');
 
-// Monitor new tabs opened during active agent session
-chrome.tabs.onCreated.addListener((tab) => {
-    chrome.storage.local.get(['autonomousAgentSession'], (result) => {
-        const session = result.autonomousAgentSession;
-        if (session && session.isActive) {
-            console.log('[ServiceWorker] 🎯 New tab opened during active agent session:', tab.id);
-            session.targetTabId = tab.id;
-            session.timestamp = Date.now();
-            chrome.storage.local.set({ autonomousAgentSession: session });
-        }
-    });
-});
-
-// Watch for authentication URL redirect and agent session resumption
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo.status === 'complete') {
-        chrome.storage.local.get(['autonomousAgentSession'], (result) => {
-            const session = result.autonomousAgentSession;
-            if (session && session.isActive) {
-                const isTargetTab = session.targetTabId === tabId;
-                const isNavigatedTab = session.currentTabId === tabId;
-                const isJobUrl = tab.url && /(?:apply|job|career|workday|greenhouse|lever|smartrecruiters|taleo|icims)/i.test(tab.url);
-                const age = Date.now() - (session.timestamp || 0);
-
-                if ((isTargetTab || isNavigatedTab || isJobUrl) && age < 180000) {
-                    console.log('[ServiceWorker] 🚀 Sending RESUME_AUTONOMOUS_AGENT to tab:', tabId, tab.url);
-                    setTimeout(() => {
-                        chrome.tabs.sendMessage(tabId, {
-                            type: 'RESUME_AUTONOMOUS_AGENT',
-                            session: session
-                        }).catch(() => {
-                            // Handled by content script storage check
-                        });
-                    }, 800);
-                }
-            }
-        });
-    }
+// Note: Auto-resume on reload/tab update is disabled so refreshing never restarts the agent unexpectedly.
 
     if (changeInfo.url && changeInfo.url.includes('ext_status=connected') && changeInfo.url.includes('ext_token=')) {
         console.log('[ServiceWorker] 🔍 Detected auth redirect URL:', changeInfo.url);

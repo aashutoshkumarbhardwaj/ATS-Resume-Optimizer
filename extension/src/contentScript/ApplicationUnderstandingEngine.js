@@ -51,29 +51,18 @@ class ApplicationUnderstandingEngine {
         const fields = [];
         const selectors = [
             // Standard HTML inputs
-            'input:not([type="hidden"]):not([type="button"]):not([type="submit"])',
+            'input:not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"])',
             'textarea',
             'select',
-            // Contenteditable
+            // Contenteditable & ARIA controls
             '[contenteditable="true"]',
             '[role="textbox"]',
             '[role="combobox"]',
             '[role="listbox"]',
             '[aria-haspopup="listbox"]',
-            // React/MUI/Ant Design/MS Forms custom selects & dropdowns
-            '[class*="select"]',
-            '[class*="Select"]',
-            '[class*="dropdown"]',
-            '[class*="Dropdown"]',
+            // Explicit custom dropdown trigger controls
             '[data-automation-id="selectOption"]',
-            '[data-testid*="select"]',
-            // Radio and checkbox groups
-            'input[type="radio"]',
-            'input[type="checkbox"]',
-            // Date pickers
-            '[type="date"]',
-            '[class*="date"]',
-            '[class*="Date"]'
+            '[data-testid*="select"]'
         ];
 
         const allSelector = selectors.join(',');
@@ -83,26 +72,45 @@ class ApplicationUnderstandingEngine {
         const scrollY = (typeof window !== 'undefined' ? window.scrollY : 0);
         const scrollX = (typeof window !== 'undefined' ? window.scrollX : 0);
 
+        // Helper to determine true visual coordinate even if element is inside an iframe
+        const getTrueVisualCoords = (el) => {
+            if (!el) return { top: 0, left: 0 };
+            const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { top: 0, left: 0 };
+            let top = (rect.top || 0) + scrollY;
+            let left = (rect.left || 0) + scrollX;
+            try {
+                const win = el.ownerDocument ? el.ownerDocument.defaultView : null;
+                if (win && win !== window && win.frameElement && win.frameElement.getBoundingClientRect) {
+                    const fRect = win.frameElement.getBoundingClientRect();
+                    top += (fRect.top || 0);
+                    left += (fRect.left || 0);
+                }
+            } catch (e) {}
+            return { top, left };
+        };
+
         rawElements.sort((a, b) => {
             if (a === b) return 0;
-            const rectA = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };
-            const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
-
-            const topA = (rectA.top || 0) + scrollY;
-            const topB = (rectB.top || 0) + scrollY;
-            const leftA = (rectA.left || 0) + scrollX;
-            const leftB = (rectB.left || 0) + scrollX;
+            const coordA = getTrueVisualCoords(a);
+            const coordB = getTrueVisualCoords(b);
 
             // If elements are on the same visual row (within 24px), sort left-to-right
-            if (Math.abs(topA - topB) <= 24) {
-                return leftA - leftB;
+            if (Math.abs(coordA.top - coordB.top) <= 24) {
+                return coordA.left - coordB.left;
             }
 
             // Otherwise, sort strictly top-to-bottom
-            return topA - topB;
+            return coordA.top - coordB.top;
         });
 
         for (const element of rawElements) {
+            // Guard: Ignore container elements that already encapsulate a child input/select/textarea
+            if (['DIV', 'SECTION', 'FIELDSET', 'UL', 'LI', 'SPAN'].includes(element.tagName)) {
+                if (element.querySelector && element.querySelector('input, select, textarea, [contenteditable="true"]')) {
+                    continue;
+                }
+            }
+
             if (this.isVisible(element) && this.isJobApplicationField(element) && !this.isDuplicate(element, fields)) {
                 const fieldData = await this.extractFieldData(element);
                 if (fieldData) {
@@ -130,7 +138,7 @@ class ApplicationUnderstandingEngine {
                 }
             }
 
-            // 2. Traverse shadow roots
+            // 2. Traverse shadow roots for Web Components
             const allNodes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('*') : [];
             for (let i = 0; i < allNodes.length; i++) {
                 const node = allNodes[i];
@@ -139,7 +147,7 @@ class ApplicationUnderstandingEngine {
                 }
             }
 
-            // 3. Traverse accessible iframes (same-origin / embedded frames)
+            // 3. Traverse accessible child iframes
             const iframes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('iframe, frame') : [];
             for (let i = 0; i < iframes.length; i++) {
                 try {
@@ -149,7 +157,7 @@ class ApplicationUnderstandingEngine {
                         this.collectElementsDeep(iframeDoc, selector, collected, visited, depth + 1);
                     }
                 } catch (frameErr) {
-                    // Cross-origin iframe: protected by browser SOP; will be handled by content script injected via all_frames: true
+                    // Cross-origin iframe: protected by browser SOP
                 }
             }
         } catch (e) {

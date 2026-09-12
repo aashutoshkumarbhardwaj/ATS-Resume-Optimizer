@@ -124,26 +124,37 @@ class VirtualCursorEngine {
     }
 
     /**
-     * Smoothly and monotonically ensure an element is visible in viewport without violent jumps or centering
+     * Calmly and smoothly ensure an element is visible in the viewport.
+     * Prevents micro-jitter by scrolling in comfortable blocks so subsequent fields
+     * remain completely still on screen while being inspected and filled.
      */
     async ensureElementInView(target) {
         if (!target || typeof target.getBoundingClientRect !== 'function') return;
 
         const vh = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
-        const initialRect = target.getBoundingClientRect();
+        const rect = target.getBoundingClientRect();
 
-        // 1. If element is already comfortably in viewport (not cut off by top header or bottom edge), DO NOT scroll
-        if (initialRect.top >= 70 && initialRect.bottom <= vh - 70) {
+        // 1. If element is comfortably visible in the viewport, DO NOT SCROLL AT ALL!
+        // The element has plenty of clearance from both header (40px) and footer (70px).
+        if (rect.top >= 40 && rect.bottom <= vh - 70) {
             return;
         }
 
-        // 2. Element is below or above viewport: scroll gently with block: 'nearest'
-        if (typeof target.scrollIntoView === 'function') {
-            target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-            // Wait for smooth scroll animation to settle
-            await this.sleep(200);
+        // 2. Element is below the viewport margin:
+        // Perform a single, calm scroll down that brings this field AND the next several fields
+        // into comfortable view (target lands around Y=140px).
+        if (rect.bottom > vh - 70) {
+            const scrollDistance = Math.max(150, rect.top - 140);
+            if (typeof window !== 'undefined' && typeof window.scrollBy === 'function') {
+                window.scrollBy({ top: scrollDistance, behavior: 'smooth' });
+            } else if (typeof target.scrollIntoView === 'function') {
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
 
-            // Ensure motion has stopped before reading coordinates
+            // Wait for smooth scroll animation to settle
+            await this.sleep(350);
+
+            // Settle check
             let prevTop = target.getBoundingClientRect().top;
             for (let i = 0; i < 4; i++) {
                 await this.sleep(40);
@@ -151,6 +162,20 @@ class VirtualCursorEngine {
                 if (Math.abs(currentTop - prevTop) < 2) break;
                 prevTop = currentTop;
             }
+            return;
+        }
+
+        // 3. Element is scrolled above the top margin:
+        // Calmly scroll up only if element is actually clipped above the top edge
+        if (rect.top < 40) {
+            const scrollUpDistance = rect.top - 120;
+            if (typeof window !== 'undefined' && typeof window.scrollBy === 'function') {
+                window.scrollBy({ top: scrollUpDistance, behavior: 'smooth' });
+            } else if (typeof target.scrollIntoView === 'function') {
+                target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+
+            await this.sleep(300);
         }
     }
 

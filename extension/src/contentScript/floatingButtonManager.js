@@ -47,7 +47,10 @@ window.UnifiedAutofillButton = class {
         this.injectButton();
         this.startMonitoring();
         this.setupStorageListeners();
-        this.checkAndResumeSession();
+        // Clear any old active session flag on page load so reload NEVER auto-starts
+        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+            chrome.storage.local.remove(['autonomousAgentSession']);
+        }
         console.log('[UnifiedButton] ✅ Initialized successfully');
     }
 
@@ -363,7 +366,7 @@ window.UnifiedAutofillButton = class {
         }
 
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({ autonomousAgentSession: { isActive: false, stoppedAt: Date.now() } });
+            chrome.storage.local.remove(['autonomousAgentSession']);
         }
         if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
             chrome.runtime.sendMessage({ type: 'AGENT_SESSION_STOP' }).catch(() => {});

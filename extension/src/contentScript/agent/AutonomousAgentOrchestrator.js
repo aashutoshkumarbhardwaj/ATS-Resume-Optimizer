@@ -69,24 +69,14 @@ class AutonomousAgentOrchestrator {
             this.stop(true);
         };
 
-        // Attach beforeunload handler to preserve session during page navigation
+        // Ensure page unload immediately stops the agent and wipes the session so reloads never auto-run
         this.beforeUnloadHandler = () => {
-            if (this.isRunning) {
-                try {
-                    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                        chrome.storage.local.set({
-                            autonomousAgentSession: {
-                                isActive: true,
-                                sessionId: this.sessionId,
-                                startedAt: this.sessionStartedAt,
-                                stats: this.stats,
-                                lastUrl: (typeof window !== 'undefined' && window.location ? window.location.href : ''),
-                                timestamp: Date.now()
-                            }
-                        });
-                    }
-                } catch (e) {}
-            }
+            this.isRunning = false;
+            try {
+                if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                    chrome.storage.local.remove(['autonomousAgentSession']);
+                }
+            } catch (e) {}
         };
         if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
             window.addEventListener('beforeunload', this.beforeUnloadHandler);
@@ -150,12 +140,9 @@ class AutonomousAgentOrchestrator {
                 let pageFields = (formStructure && formStructure.fields) ? formStructure.fields.filter(f => this.isJobApplicationField(f.element)) : [];
                 console.log(`[AgentOrchestrator] Page ${currentPage}: ${pageFields.length} application fields detected.`);
 
-                // Check if the current page has an active job application form (e.g. contains applicant fields or form container)
-                const hasActiveForm = this.hasActiveApplicationForm(pageFields);
-
-                // If on Page 1 and no active application form is open, launch the application (or select job and click Apply)
-                if (!hasActiveForm && currentPage === 1) {
-                    console.log('[AgentOrchestrator] No active job application form on screen yet. Scanning for Apply button or Job card...');
+                // If on Page 1 and no form fields are detected, scan for Apply button or Job card
+                if (pageFields.length === 0 && currentPage === 1) {
+                    console.log('[AgentOrchestrator] No application fields on screen yet. Scanning for Apply button or Job card...');
                     const openedApply = await this.handleInitialApplyButton();
                     if (openedApply) {
                         // Re-run perception analysis now that application form / modal has opened
@@ -236,9 +223,14 @@ class AutonomousAgentOrchestrator {
                     // Verify if field is already filled with a valid user choice
                     if (this.isFieldAlreadyFilled(field, element)) {
                         const currentVal = (element.value || element.textContent || '').trim();
-                        console.log(`[AgentOrchestrator] ✅ Verified pre-filled field: "${field.label}" = "${currentVal}".`);
-                        this.cursor.setStatus(`Verified: ${field.label || 'Field'}`, '✅', 'idle');
+                        console.log(`[AgentOrchestrator] ✅ Field already filled & valid: "${field.label}" = "${currentVal}". Leaving as is.`);
+                        this.cursor.setStatus(`Verified: ${field.label || 'Field'} ✅`, '✅', 'idle');
                         this.cursor.highlightElement(element);
+                        // Mark all radio buttons in this group as processed
+                        if (element.type === 'radio' && element.name) {
+                            const groupRadios = document.querySelectorAll(`input[name="${element.name}"]`);
+                            groupRadios.forEach(r => processedElements.add(r));
+                        }
                         this.filledFieldsRecord.push({
                             id: field.id || field.name || field.label,
                             label: field.label,
@@ -250,7 +242,7 @@ class AutonomousAgentOrchestrator {
                         if (currentVal.length > 0 && this.brain && typeof this.brain.saveToMemory === 'function') {
                             this.brain.saveToMemory(field.label, currentVal, field);
                         }
-                        await this.cursor.sleep(150);
+                        await this.cursor.sleep(180);
                         continue;
                     }
 
@@ -430,7 +422,7 @@ class AutonomousAgentOrchestrator {
         }
 
         // 2. Radio & Checkbox
-        if (field.type === 'radio' || field.type === 'checkbox') {
+        if (field.type === 'radio' || field.type === 'checkbox' || element.type === 'radio' || element.type === 'checkbox') {
             if (element.type === 'radio' && element.name) {
                 const checkedRadio = document.querySelector(`input[name="${element.name}"]:checked`);
                 return !!checkedRadio;
@@ -440,19 +432,19 @@ class AutonomousAgentOrchestrator {
 
         // 3. HTML <select> Element
         if (element.tagName === 'SELECT') {
-            if (element.selectedIndex <= 0) return false;
+            if (element.selectedIndex < 0) return false;
             const opt = element.options[element.selectedIndex];
             if (!opt) return false;
             const text = (opt.text || '').trim();
             const val = (opt.value || '').trim();
-            if (!val || !text) return false;
-            return !/^(?:select|choose|--|\bselect\s*an\s*option\b|\bchoose\s*one\b)/i.test(text);
+            if (!val && !text) return false;
+            return !/^(?:select|choose|--|\bselect\s*an\s*option\b|\bchoose\s*one\b|\bnone\b)$/i.test(text);
         }
 
-        // 4. Custom Dropdowns / Comboboxes
-        if (field.type === 'custom-select' || (typeof element.getAttribute === 'function' && element.getAttribute('role') === 'combobox')) {
+        // 4. Custom Dropdowns, Comboboxes & ARIA listboxes
+        if (field.type === 'custom-select' || (typeof element.getAttribute === 'function' && (element.getAttribute('role') === 'combobox' || element.getAttribute('role') === 'listbox'))) {
             const ariaSelected = (typeof element.querySelector === 'function') 
-                ? element.querySelector('[aria-selected="true"], [class*="singleValue"], .selected-option, .is-selected')
+                ? element.querySelector('[aria-selected="true"], [class*="singleValue"], .selected-option, .is-selected, [class*="value-container"]')
                 : null;
             if (ariaSelected) {
                 const text = (ariaSelected.textContent || '').trim();
@@ -462,12 +454,25 @@ class AutonomousAgentOrchestrator {
             const valAttr = (typeof element.getAttribute === 'function' ? (element.getAttribute('data-value') || element.getAttribute('aria-valuenow')) : '') || '';
             if (valAttr && !/^(?:select|choose|--)/i.test(valAttr)) return true;
 
+            const innerText = (element.innerText || element.textContent || '').trim();
+            if (innerText.length > 0 && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(innerText) && innerText.toLowerCase() !== (field.label || '').toLowerCase()) {
+                return true;
+            }
             return false;
         }
 
-        // 5. Text inputs, textareas, search inputs, dates
+        // 5. Contenteditable & ARIA textbox
+        if ((typeof element.hasAttribute === 'function' && element.hasAttribute('contenteditable')) || (typeof element.getAttribute === 'function' && element.getAttribute('role') === 'textbox')) {
+            const text = (element.innerText || element.textContent || '').trim();
+            return text.length > 0 && text.toLowerCase() !== (field.label || '').toLowerCase();
+        }
+
+        // 6. Text inputs, textareas, search inputs, dates
         const val = (element.value || '').trim();
-        return val.length > 0;
+        const placeholder = (element.placeholder || '').trim();
+        if (!val) return false;
+        if (placeholder && val.toLowerCase() === placeholder.toLowerCase()) return false;
+        return true;
     }
 
     /**
@@ -1464,7 +1469,7 @@ class AutonomousAgentOrchestrator {
     async clearAgentSession() {
         try {
             if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                await new Promise(r => chrome.storage.local.set({ autonomousAgentSession: { isActive: false, endedAt: Date.now() } }, r));
+                await new Promise(r => chrome.storage.local.remove(['autonomousAgentSession'], r));
             }
             if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
                 chrome.runtime.sendMessage({ type: 'AGENT_SESSION_STOP' }).catch(() => {});
