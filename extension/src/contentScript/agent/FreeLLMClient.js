@@ -76,52 +76,85 @@ class FreeLLMClient {
     }
 
     /**
-     * Call Google Gemini 1.5 Flash REST API (Free Tier)
+     * Call Google Gemini REST API (Free Tier: 1.5 Flash / 2.0 Flash)
      */
     async callGemini(systemPrompt, userPrompt) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${this.geminiApiKey}`;
+        const models = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+        let lastError = null;
 
-        const payload = {
-            systemInstruction: {
-                parts: [{ text: systemPrompt }]
-            },
-            contents: [
-                {
-                    role: 'user',
-                    parts: [{ text: userPrompt }]
+        for (const model of models) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.geminiApiKey}`;
+
+            const payload = {
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ text: userPrompt }]
+                    }
+                ],
+                generationConfig: {
+                    temperature: 0.2,
+                    maxOutputTokens: 600
                 }
-            ],
-            generationConfig: {
-                temperature: 0.2,
-                maxOutputTokens: 400
+            };
+
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeout);
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    // If systemInstruction caused 400, retry without systemInstruction
+                    if (res.status === 400 && payload.systemInstruction) {
+                        const fallbackPayload = {
+                            contents: [
+                                {
+                                    role: 'user',
+                                    parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }]
+                                }
+                            ],
+                            generationConfig: { temperature: 0.2, maxOutputTokens: 600 }
+                        };
+                        const retryRes = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(fallbackPayload)
+                        });
+                        if (retryRes.ok) {
+                            const retryData = await retryRes.json();
+                            const t = retryData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                            if (t) return t.trim();
+                        }
+                    }
+                    throw new Error(`Gemini API error ${res.status} on ${model}: ${err}`);
+                }
+
+                const data = await res.json();
+                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text && text.trim().length > 0) {
+                    return text.trim();
+                }
+            } catch (e) {
+                clearTimeout(timeout);
+                lastError = e;
+                console.warn(`[FreeLLMClient] ⚠️ Failed attempt on model ${model}:`, e.message);
+                // Continue to next model if available
             }
-        };
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-
-        try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-                signal: controller.signal
-            });
-
-            clearTimeout(timeout);
-
-            if (!res.ok) {
-                const err = await res.text();
-                throw new Error(`Gemini API error ${res.status}: ${err}`);
-            }
-
-            const data = await res.json();
-            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            return text ? text.trim() : null;
-        } catch (e) {
-            clearTimeout(timeout);
-            throw e;
         }
+
+        throw lastError || new Error('All Gemini model endpoints failed');
     }
 
     /**

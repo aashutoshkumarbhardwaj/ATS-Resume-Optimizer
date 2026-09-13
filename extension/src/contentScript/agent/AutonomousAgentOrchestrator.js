@@ -347,7 +347,11 @@ class AutonomousAgentOrchestrator {
                     }
 
                     // 6. Dynamically check if new conditional fields were unlocked on the form
-                    const newlyRevealed = this.detectNewlyRevealedFields(processedElements);
+                    const knownElements = new Set([
+                        ...processedElements,
+                        ...pageFields.map(f => f.element || (f.id && typeof document !== 'undefined' ? document.getElementById(f.id) : null)).filter(Boolean)
+                    ]);
+                    const newlyRevealed = this.detectNewlyRevealedFields(knownElements);
                     if (newlyRevealed.length > 0) {
                         console.log(`[AgentOrchestrator] 💡 Found ${newlyRevealed.length} newly revealed conditional fields. Merging into sequence.`);
                         const remaining = pageFields.slice(i + 1);
@@ -404,12 +408,15 @@ class AutonomousAgentOrchestrator {
         // 2. Select & Custom Dropdowns
         if (fieldType === 'select' || fieldType === 'custom-select') {
             return await this.selectFromDropdown(field, answer, isRequiredField);
-        } else if (fieldType === 'radio' || fieldType === 'checkbox') {
+        } else if (fieldType === 'radio' || element.type === 'radio') {
+            return await this.selectRadioButton(field, answer, isRequiredField);
+        } else if (fieldType === 'checkbox' || element.type === 'checkbox') {
             this.cursor.setStatus(`Clicking: ${field.label}`, '🖱️', 'moving');
             await this.cursor.moveTo(element);
             this.cursor.highlightElement(element);
             await this.cursor.click(element);
             element.click();
+            element.dispatchEvent(new Event('input', { bubbles: true }));
             element.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
         } else {
@@ -420,6 +427,127 @@ class AutonomousAgentOrchestrator {
             await this.cursor.type(element, answer, { humanSpeed: true });
             return true;
         }
+    }
+
+    /**
+     * Accurately select the matching radio button from an option group
+     */
+    async selectRadioButton(field, answer, isRequiredField = false) {
+        const element = field.element || (field.id ? document.getElementById(field.id) : null);
+        if (!element) return false;
+
+        const name = element.name;
+        let radioGroup = [];
+        if (name) {
+            radioGroup = Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`));
+        }
+        if (radioGroup.length === 0) {
+            const container = (typeof element.closest === 'function' ? element.closest('fieldset, [role="radiogroup"], .form-group, .question, .field') : null) || element.parentElement;
+            if (container) {
+                radioGroup = Array.from(container.querySelectorAll('input[type="radio"]'));
+            }
+        }
+        if (radioGroup.length === 0) {
+            radioGroup = [element];
+        }
+
+        const ansLower = String(answer || '').trim().toLowerCase();
+
+        // Helper to extract label text associated with a radio button
+        const getRadioLabel = (r) => {
+            let labelText = '';
+            if (r.id) {
+                const l = document.querySelector(`label[for="${r.id}"]`);
+                if (l) labelText = l.textContent || '';
+            }
+            if (!labelText && r.parentElement) {
+                labelText = r.parentElement.textContent || '';
+            }
+            if (!labelText && r.nextElementSibling && r.nextElementSibling.tagName === 'LABEL') {
+                labelText = r.nextElementSibling.textContent || '';
+            }
+            return (labelText || r.value || '').trim().toLowerCase();
+        };
+
+        // Find best matching radio
+        let targetRadio = null;
+
+        // 1. Exact match by value or label
+        targetRadio = radioGroup.find(r => {
+            const val = (r.value || '').trim().toLowerCase();
+            const lbl = getRadioLabel(r);
+            return val === ansLower || lbl === ansLower;
+        });
+
+        // 2. Gender specific matching
+        if (!targetRadio && /male|man/i.test(ansLower) && !/fe/i.test(ansLower)) {
+            targetRadio = radioGroup.find(r => {
+                const val = (r.value || '').trim().toLowerCase();
+                const lbl = getRadioLabel(r);
+                return /^(male|man|m)$/i.test(val) || (/male/i.test(lbl) && !/female/i.test(lbl));
+            });
+        } else if (!targetRadio && /female|woman/i.test(ansLower)) {
+            targetRadio = radioGroup.find(r => {
+                const val = (r.value || '').trim().toLowerCase();
+                const lbl = getRadioLabel(r);
+                return /^(female|woman|f)$/i.test(val) || /female/i.test(lbl);
+            });
+        }
+
+        // 3. Boolean Yes / No matching
+        if (!targetRadio && /^(yes|true|y)$/i.test(ansLower)) {
+            targetRadio = radioGroup.find(r => {
+                const val = (r.value || '').trim().toLowerCase();
+                const lbl = getRadioLabel(r);
+                return /^(yes|true|y)$/i.test(val) || /^(yes|true|y)$/i.test(lbl);
+            });
+        } else if (!targetRadio && /^(no|false|n)$/i.test(ansLower)) {
+            targetRadio = radioGroup.find(r => {
+                const val = (r.value || '').trim().toLowerCase();
+                const lbl = getRadioLabel(r);
+                return /^(no|false|n)$/i.test(val) || /^(no|false|n)$/i.test(lbl);
+            });
+        }
+
+        // 4. Substring matching
+        if (!targetRadio && ansLower.length > 2) {
+            targetRadio = radioGroup.find(r => {
+                const val = (r.value || '').trim().toLowerCase();
+                const lbl = getRadioLabel(r);
+                return lbl.includes(ansLower) || ansLower.includes(lbl) || val.includes(ansLower);
+            });
+        }
+
+        // Prompt user if required and not matched
+        if (!targetRadio && isRequiredField && this.cursor && typeof this.cursor.askUser === 'function') {
+            const choices = radioGroup.map(r => getRadioLabel(r) || r.value).filter(Boolean);
+            if (choices.length > 0) {
+                const userChoice = await this.cursor.askUser(`Required Option (*): ${field.label}`, choices);
+                if (userChoice) {
+                    targetRadio = radioGroup.find(r => getRadioLabel(r) === userChoice.toLowerCase().trim() || r.value === userChoice);
+                    if (this.brain && typeof this.brain.saveToMemory === 'function') {
+                        this.brain.saveToMemory(field.label, userChoice, field);
+                    }
+                }
+            }
+        }
+
+        if (targetRadio) {
+            const rLabel = getRadioLabel(targetRadio);
+            if (this.cursor) {
+                this.cursor.setStatus(`Selecting option: "${rLabel || targetRadio.value}"...`, '🔘', 'moving');
+                await this.cursor.moveTo(targetRadio);
+                this.cursor.highlightElement(targetRadio);
+                await this.cursor.click(targetRadio);
+            }
+            targetRadio.checked = true;
+            if (typeof targetRadio.click === 'function') targetRadio.click();
+            targetRadio.dispatchEvent(new Event('input', { bubbles: true }));
+            targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -567,20 +695,52 @@ class AutonomousAgentOrchestrator {
 
         // --- 1. Standard HTML <select> Element ---
         if (element.tagName === 'SELECT') {
-            this.cursor.setStatus(`Selecting option: "${answer || field.label}"...`, '🖱️', 'moving');
-            await this.cursor.moveTo(element);
-            this.cursor.highlightElement(element);
-            await this.cursor.click(element);
+            if (this.cursor) {
+                this.cursor.setStatus(`Selecting option: "${answer || field.label}"...`, '🖱️', 'moving');
+                await this.cursor.moveTo(element);
+                this.cursor.highlightElement(element);
+                await this.cursor.click(element);
+            }
 
             const options = Array.from(element.options);
-            let opt = targetText ? (options.find(o => 
-                o.text.toLowerCase().trim() === targetText ||
-                o.value.toLowerCase().trim() === targetText
-            ) || options.find(o =>
-                o.text.toLowerCase().includes(targetText) ||
-                targetText.includes(o.text.toLowerCase().trim()) ||
-                o.value.toLowerCase().includes(targetText)
-            )) : null;
+            let opt = null;
+            if (targetText) {
+                // Priority 1: Exact match by text or value
+                opt = options.find(o => 
+                    o.text.toLowerCase().trim() === targetText ||
+                    o.value.toLowerCase().trim() === targetText
+                );
+
+                // Priority 2: Gender specific matching (never match female for male)
+                if (!opt && /male|man/i.test(targetText) && !/fe/i.test(targetText)) {
+                    opt = options.find(o => {
+                        const t = o.text.toLowerCase().trim();
+                        return (/^(male|man|m)$/i.test(t) || (t.includes('male') && !t.includes('female')));
+                    });
+                } else if (!opt && /female|woman/i.test(targetText)) {
+                    opt = options.find(o => {
+                        const t = o.text.toLowerCase().trim();
+                        return (/^(female|woman|f)$/i.test(t) || t.includes('female'));
+                    });
+                }
+
+                // Priority 3: Country code matching
+                if (!opt && (targetText.includes('+91') || targetText === '91' || targetText.includes('india'))) {
+                    opt = options.find(o => {
+                        const t = (o.text + ' ' + o.value).toLowerCase();
+                        return t.includes('+91') || t.includes('india') || t.includes('(91)');
+                    });
+                }
+
+                // Priority 4: Safe substring matching
+                if (!opt && !/^(male|man|m|fe)$/i.test(targetText)) {
+                    opt = options.find(o =>
+                        o.text.toLowerCase().includes(targetText) ||
+                        (targetText.length > 4 && targetText.includes(o.text.toLowerCase().trim())) ||
+                        o.value.toLowerCase().includes(targetText)
+                    );
+                }
+            }
 
             if (!opt && isRequiredField && this.cursor && typeof this.cursor.askUser === 'function') {
                 const choices = options.map(o => o.text.trim()).filter(t => t && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(t)).slice(0, 8);
@@ -598,6 +758,14 @@ class AutonomousAgentOrchestrator {
             if (opt) {
                 element.value = opt.value;
                 opt.selected = true;
+                const idx = options.indexOf(opt);
+                if (idx !== -1) element.selectedIndex = idx;
+                try {
+                    const selectSetter = (typeof window !== 'undefined' && window.HTMLSelectElement) 
+                        ? Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+                        : null;
+                    if (selectSetter) selectSetter.call(element, opt.value);
+                } catch (e) {}
                 element.dispatchEvent(new Event('input', { bubbles: true }));
                 element.dispatchEvent(new Event('change', { bubbles: true }));
                 element.blur();
@@ -673,16 +841,37 @@ class AutonomousAgentOrchestrator {
                 return text === targetText;
             });
 
-            // Priority 2: Substring match
-            if (!matchedOption) {
+            // Priority 2: Gender specific matching (never match female for male)
+            if (!matchedOption && /male|man/i.test(targetText) && !/fe/i.test(targetText)) {
                 matchedOption = candidateOptions.find(opt => {
                     const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
-                    return text.includes(targetText) || targetText.includes(text);
+                    return (/^(male|man|m)$/i.test(text) || (text.includes('male') && !text.includes('female')));
+                });
+            } else if (!matchedOption && /female|woman/i.test(targetText)) {
+                matchedOption = candidateOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return (/^(female|woman|f)$/i.test(text) || text.includes('female'));
                 });
             }
 
-            // Priority 3: Token / word overlap match
-            if (!matchedOption) {
+            // Priority 3: Country code matching
+            if (!matchedOption && (targetText.includes('+91') || targetText === '91' || targetText.includes('india'))) {
+                matchedOption = candidateOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return text.includes('+91') || text.includes('india') || text.includes('(91)');
+                });
+            }
+
+            // Priority 4: Substring match (avoiding male inside female)
+            if (!matchedOption && !/^(male|man|m|fe)$/i.test(targetText)) {
+                matchedOption = candidateOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return text.includes(targetText) || (targetText.length > 4 && targetText.includes(text));
+                });
+            }
+
+            // Priority 5: Token / word overlap match
+            if (!matchedOption && !/^(male|man|m|fe)$/i.test(targetText)) {
                 const tokens = targetText.split(/\s+/).filter(w => w.length > 2);
                 matchedOption = candidateOptions.find(opt => {
                     const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
@@ -984,7 +1173,7 @@ class AutonomousAgentOrchestrator {
 
         // 2. Reject website language switchers and translation widgets
         const tag = (element.tagName || '').toLowerCase();
-        const className = (typeof element.className === 'string' ? element.className : '') || '';
+        const className = (typeof element.className === 'string' ? element.className : (typeof element.getAttribute === 'function' ? element.getAttribute('class') : '')) || '';
         const id = element.id || '';
         const name = element.name || '';
         const ariaLabel = (typeof element.getAttribute === 'function' ? element.getAttribute('aria-label') : '') || '';
@@ -1027,6 +1216,14 @@ class AutonomousAgentOrchestrator {
             return false;
         }
 
+        // 5. Reject Captchas, security verification widgets, honeypots, and token responses
+        if (/captcha|recaptcha|hcaptcha|turnstile|challenge-response|cf-turnstile/i.test(allAttrs)) {
+            return false;
+        }
+        if (typeof element.closest === 'function' && element.closest('.h-captcha, .g-recaptcha, .cf-turnstile, [id*="captcha"], [class*="captcha"]')) {
+            return false;
+        }
+
         return true;
     }
 
@@ -1037,8 +1234,8 @@ class AutonomousAgentOrchestrator {
     sortFieldsSequentially(fields) {
         if (!Array.isArray(fields) || fields.length <= 1) return fields;
 
-        const scrollY = (typeof window !== 'undefined' ? window.scrollY : 0);
-        const scrollX = (typeof window !== 'undefined' ? window.scrollX : 0);
+        const scrollY = (typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0);
+        const scrollX = (typeof window !== 'undefined' && typeof window.scrollX === 'number' ? window.scrollX : 0);
 
         return [...fields].sort((a, b) => {
             const elA = a.element || (a.id && typeof document !== 'undefined' ? document.getElementById(a.id) : null);
@@ -1054,13 +1251,11 @@ class AutonomousAgentOrchestrator {
             const leftA = (rectA.left || 0) + scrollX;
             const leftB = (rectB.left || 0) + scrollX;
 
-            // Same visual row (within 24px): sort left-to-right
-            if (Math.abs(topA - topB) <= 24) {
-                return leftA - leftB;
+            // Same visual row (within 8px): sort left-to-right, otherwise top-to-bottom
+            if (Math.abs(topA - topB) > 8) {
+                return topA - topB;
             }
-
-            // Otherwise, strictly top-to-bottom
-            return topA - topB;
+            return leftA - leftB;
         });
     }
 
@@ -1267,52 +1462,80 @@ class AutonomousAgentOrchestrator {
 
     /**
      * Check for Captcha / Security verifications (Cloudflare, reCAPTCHA, hCaptcha, Arkose)
-     * Gracefully pauses the agent, alerts the user with an audio chime, and auto-resumes once solved.
+     * Gracefully pauses the agent only when an active unsolved challenge is present,
+     * alerts the user with an audio chime, and auto-resumes once the user solves it.
      */
     async checkAndHandleCaptcha() {
-        const captchaSelectors = [
-            'iframe[src*="recaptcha"]',
-            '.g-recaptcha',
-            '[id*="recaptcha"]',
-            'iframe[src*="challenges.cloudflare.com"]',
-            'iframe[src*="turnstile"]',
-            '.cf-turnstile',
-            'iframe[src*="hcaptcha"]',
-            '.h-captcha',
-            '[data-sitekey]'
-        ];
+        if (typeof document === 'undefined') return;
 
-        let captchaEl = null;
-        for (const sel of captchaSelectors) {
-            const el = document.querySelector(sel);
-            if (el && this.isElementVisible(el)) {
-                captchaEl = el;
-                break;
+        const isUnsolvedCaptcha = () => {
+            // 1. Active challenge popups or interactive challenge iframes
+            const activeModalSelectors = [
+                'iframe[src*="hcaptcha.com/check"]',
+                'iframe[title*="hCaptcha challenge"]',
+                'iframe[title*="recaptcha challenge"]',
+                'iframe[src*="recaptcha/api2/bframe"]',
+                'div[style*="visibility: visible"] iframe[src*="cloudflare"]'
+            ];
+            for (const sel of activeModalSelectors) {
+                const el = document.querySelector(sel);
+                if (el && this.isElementVisible(el)) return { el, type: 'active_challenge_modal' };
             }
-        }
 
-        if (captchaEl) {
-            console.log('[AgentOrchestrator] ⚠️ Captcha / Security verification detected on page!');
+            // 2. Visible unsolved hCaptcha checkbox
+            const hcaptchaIframe = document.querySelector('iframe[src*="hcaptcha"]');
+            if (hcaptchaIframe && this.isElementVisible(hcaptchaIframe)) {
+                const responseArea = document.querySelector('textarea[name="h-captcha-response"], [data-hcaptcha-response]');
+                const isChecked = hcaptchaIframe.getAttribute('aria-checked') === 'true' ||
+                                  (responseArea && responseArea.value && responseArea.value.trim().length > 0);
+                if (!isChecked) {
+                    return { el: hcaptchaIframe, type: 'hcaptcha_checkbox' };
+                }
+            }
+
+            // 3. Visible unsolved reCAPTCHA checkbox
+            const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
+            if (recaptchaIframe && this.isElementVisible(recaptchaIframe)) {
+                const recaptchaResponse = document.querySelector('textarea[name="g-recaptcha-response"]');
+                if (recaptchaResponse && !recaptchaResponse.value) {
+                    return { el: recaptchaIframe, type: 'recaptcha_checkbox' };
+                }
+            }
+
+            // 4. Visible unsolved Cloudflare Turnstile
+            const turnstileIframe = document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"]');
+            if (turnstileIframe && this.isElementVisible(turnstileIframe)) {
+                const turnstileResponse = document.querySelector('input[name="cf-turnstile-response"]');
+                if (turnstileResponse && !turnstileResponse.value) {
+                    return { el: turnstileIframe, type: 'turnstile_checkbox' };
+                }
+            }
+
+            return null;
+        };
+
+        const activeCaptcha = isUnsolvedCaptcha();
+        if (activeCaptcha) {
+            console.log('[AgentOrchestrator] ⚠️ Unsolved security challenge detected:', activeCaptcha.type);
             if (this.cursor && typeof this.cursor.playChime === 'function') {
                 this.cursor.playChime('alert');
             }
             this.cursor.setStatus('Security Check Detected: Please complete it on screen...', '🛡️', 'asking');
-            this.cursor.highlightElement(captchaEl);
+            this.cursor.highlightElement(activeCaptcha.el);
 
-            // Wait until the captcha is resolved or disappears
+            // Wait until the captcha is resolved or verified
             const maxWaitMs = 120000; // 2 minutes max
             const startWait = Date.now();
 
             while (this.isRunning && Date.now() - startWait < maxWaitMs) {
                 await this.cursor.sleep(1500);
-                const stillPresent = Array.from(document.querySelectorAll(captchaSelectors.join(','))).some(el => this.isElementVisible(el));
-                if (!stillPresent) {
-                    console.log('[AgentOrchestrator] ✅ Captcha resolved / bypassed!');
+                if (!isUnsolvedCaptcha()) {
+                    console.log('[AgentOrchestrator] ✅ Security verification passed / resolved!');
                     if (this.cursor && typeof this.cursor.playChime === 'function') {
                         this.cursor.playChime('prompt');
                     }
                     this.cursor.setStatus('Security check passed! Resuming agent...', '✅', 'moving');
-                    await this.cursor.sleep(600);
+                    await this.cursor.sleep(500);
                     break;
                 }
             }

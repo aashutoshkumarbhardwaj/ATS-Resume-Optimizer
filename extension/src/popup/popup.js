@@ -1974,6 +1974,18 @@ async function loadAutofillProfile() {
             
             const phoneEl = document.getElementById('phone');
             if (phoneEl) phoneEl.value = p.phone || '';
+
+            const countryCodeEl = document.getElementById('country_code');
+            if (countryCodeEl) countryCodeEl.value = p.country_code || '+91';
+
+            const genderEl = document.getElementById('gender');
+            if (genderEl) genderEl.value = p.gender || 'Male';
+
+            const streetAddressEl = document.getElementById('street_address');
+            if (streetAddressEl) streetAddressEl.value = p.street_address || p.address || '';
+
+            const addressLine2El = document.getElementById('address_line2');
+            if (addressLine2El) addressLine2El.value = p.address_line2 || '';
             
             const cityEl = document.getElementById('city');
             if (cityEl) cityEl.value = p.city || '';
@@ -2101,7 +2113,12 @@ async function handleSaveProfile(e) {
             first_name: document.getElementById('first_name').value.trim(),
             last_name: document.getElementById('last_name').value.trim(),
             email: document.getElementById('email').value.trim(),
+            country_code: document.getElementById('country_code')?.value.trim() || '+91',
             phone: document.getElementById('phone').value.trim(),
+            gender: document.getElementById('gender')?.value || 'Male',
+            street_address: document.getElementById('street_address')?.value.trim() || '',
+            address_line2: document.getElementById('address_line2')?.value.trim() || '',
+            address: document.getElementById('street_address')?.value.trim() || '',
             city: document.getElementById('city').value.trim(),
             state: document.getElementById('state')?.value.trim() || '',
             zip: document.getElementById('zip')?.value.trim() || '',

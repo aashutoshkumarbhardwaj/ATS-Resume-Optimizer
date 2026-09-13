@@ -47,8 +47,9 @@ class PersonalAgentBrain {
             const targetKeys = [
                 'jobOrbitSession', 'jobOrbitSyncData', 'autofillProfile',
                 'userProfile', 'currentProfile', 'profile', 'user_profile', 'candidate_profile',
-                'parsedResume', 'uploadedResume', 'resume', 'default_resume',
+                'parsedResume', 'uploadedResume', 'resume', 'default_resume', 'resumeData',
                 'ai_memory', 'aiAnswers', 'activePersona', 'personas',
+                'gemini_api_key', 'ai_agent_provider', 'groq_api_key',
                 'geminiApiKey', 'groqApiKey', 'llmProvider'
             ];
 
@@ -64,7 +65,7 @@ class PersonalAgentBrain {
             // Step 2: Read targeted sync storage
             const syncData = await new Promise(resolve => {
                 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-                    chrome.storage.sync.get(['jobOrbitSession', 'autofillProfile', 'activePersona'], resolve);
+                    chrome.storage.sync.get(['jobOrbitSession', 'autofillProfile', 'activePersona', 'gemini_api_key', 'ai_agent_provider', 'groq_api_key', 'geminiApiKey', 'groqApiKey', 'llmProvider'], resolve);
                 } else {
                     resolve({});
                 }
@@ -112,17 +113,20 @@ class PersonalAgentBrain {
                 first_name: pickVal('first_name', 'firstName', 'given_name', 'givenName'),
                 last_name: pickVal('last_name', 'lastName', 'family_name', 'familyName', 'surname'),
                 preferred_name: pickVal('preferred_name', 'preferredName', 'nickname'),
+                gender: pickVal('gender', 'sex') || 'Male',
                 
                 // Contact
                 email: pickVal('email', 'userEmail', 'user_email', 'contact_email'),
                 phone: pickVal('phone', 'phoneNumber', 'phone_number', 'mobile', 'mobileNumber', 'mobile_number', 'contact', 'contactNumber', 'contact_number', 'mobilePhone', 'cellPhone', 'cell_phone', 'tel'),
+                country_code: pickVal('country_code', 'countryCode', 'dial_code', 'dialCode', 'phone_country_code'),
                 
                 // Location
                 city: pickVal('city', 'location', 'currentCity'),
                 state: pickVal('state', 'province', 'region'),
-                country: pickVal('country', 'currentCountry') || 'United States',
+                country: pickVal('country', 'currentCountry') || '',
                 zip: pickVal('zip', 'postal_code', 'postalCode', 'pinCode', 'pincode', 'zipCode'),
-                street_address: pickVal('street_address', 'address', 'addressLine1', 'street'),
+                street_address: pickVal('street_address', 'address', 'addressLine1', 'address_line1', 'street'),
+                address_line2: pickVal('address_line2', 'addressLine2', 'apt', 'suite', 'unit', 'building'),
                 
                 // Online Presence & Portfolio
                 linkedin: pickVal('linkedin', 'linkedIn', 'linkedinUrl', 'linkedin_url'),
@@ -155,6 +159,27 @@ class PersonalAgentBrain {
                 why_interested: pickVal('why_interested', 'whyInterested', 'interest')
             };
 
+            // Auto-detect Country and Country Code
+            const phoneStr = this.profile.phone || '';
+            if (!this.profile.country_code) {
+                if (phoneStr.startsWith('+91') || phoneStr.startsWith('91') || /india/i.test(this.profile.country)) {
+                    this.profile.country_code = '+91';
+                } else if (phoneStr.startsWith('+1') || /united states|usa|us/i.test(this.profile.country)) {
+                    this.profile.country_code = '+1';
+                } else if (phoneStr.startsWith('+44') || /united kingdom|uk/i.test(this.profile.country)) {
+                    this.profile.country_code = '+44';
+                } else {
+                    this.profile.country_code = '+91';
+                }
+            }
+            if (!this.profile.country) {
+                if (this.profile.country_code === '+91' || phoneStr.startsWith('+91') || /bengaluru|bangalore|delhi|mumbai|hyderabad|chennai|pune|noida|gurgaon|kolkata|ahmedabad|karnataka|maharashtra|tamil nadu|uttar pradesh/i.test(this.profile.city || '')) {
+                    this.profile.country = 'India';
+                } else {
+                    this.profile.country = 'India';
+                }
+            }
+
             // Derive first/last name if only full_name is present
             if (!this.profile.first_name && this.profile.full_name) {
                 const parts = this.profile.full_name.trim().split(/\s+/);
@@ -166,6 +191,7 @@ class PersonalAgentBrain {
 
             // Extract Resume Data
             this.resumeData = localData.parsedResume || 
+                              localData.resumeData ||
                               syncStore.resumes?.[0] || 
                               session.cachedResumes?.[0] || 
                               localData.uploadedResume || 
@@ -192,6 +218,26 @@ class PersonalAgentBrain {
             }
             if (!this.profile.university && this.resumeData.education?.[0]?.institution) {
                 this.profile.university = this.resumeData.education[0].institution;
+            }
+
+            // Build candidate verified past employers list
+            this.knownCompanies = new Set();
+            if (this.profile.current_company) {
+                this.knownCompanies.add(this.profile.current_company.toLowerCase().trim());
+            }
+            if (Array.isArray(this.resumeData.experience)) {
+                this.resumeData.experience.forEach(exp => {
+                    if (exp && exp.company) {
+                        this.knownCompanies.add(exp.company.toLowerCase().trim());
+                    }
+                });
+            }
+            if (Array.isArray(this.profile.work_history)) {
+                this.profile.work_history.forEach(exp => {
+                    if (exp && (exp.company || exp.name)) {
+                        this.knownCompanies.add((exp.company || exp.name).toLowerCase().trim());
+                    }
+                });
             }
 
             // Augment missing contact and identity from plain resume text if missing
@@ -242,18 +288,23 @@ class PersonalAgentBrain {
                 }
             }
 
-            // Configure LLM Client
+            // Configure LLM Client with local and sync keys
             if (!this.llmClient) {
                 const ClientClass = getFreeLLMClientClass();
                 if (ClientClass) this.llmClient = new ClientClass();
             }
 
+            const activeGeminiKey = localData.gemini_api_key || syncData.gemini_api_key || localData.geminiApiKey || syncData.geminiApiKey || '';
+            const activeGroqKey = localData.groq_api_key || syncData.groq_api_key || localData.groqApiKey || syncData.groqApiKey || '';
+            const activeProvider = localData.ai_agent_provider || syncData.ai_agent_provider || localData.llmProvider || syncData.llmProvider || 'gemini';
+
             if (this.llmClient) {
                 this.llmClient.configure({
-                    provider: localData.ai_agent_provider || 'gemini',
-                    geminiApiKey: localData.gemini_api_key || '',
-                    groqApiKey: localData.groq_api_key || ''
+                    provider: activeProvider,
+                    geminiApiKey: activeGeminiKey,
+                    groqApiKey: activeGroqKey
                 });
+                console.log(`[PersonalAgentBrain] 🤖 LLM Client configured: provider=${activeProvider}, hasGeminiKey=${!!activeGeminiKey}, hasGroqKey=${!!activeGroqKey}`);
             }
 
             // Initialize User Context Graph
@@ -267,6 +318,9 @@ class PersonalAgentBrain {
                 name: this.profile.full_name,
                 email: this.profile.email,
                 phone: this.profile.phone,
+                country: this.profile.country,
+                country_code: this.profile.country_code,
+                gender: this.profile.gender,
                 keysCount: Object.values(this.profile).filter(Boolean).length,
                 memoryCount: this.aiMemory.length
             });
@@ -274,6 +328,103 @@ class PersonalAgentBrain {
             console.error('[PersonalAgentBrain] ❌ Initialization failed:', e);
             this.isInitialized = true;
         }
+    }
+
+    /**
+     * Calculate earliest start date by adding candidate notice period to current date
+     */
+    calculateEarliestStartDate(formatHint = 'YYYY-MM-DD') {
+        const notice = (this.profile.notice_period || 'Immediately').toLowerCase().trim();
+        let daysToAdd = 1; // Default to 1 day for Immediate
+
+        if (/(\d+)\s*month/i.test(notice)) {
+            const m = notice.match(/(\d+)\s*month/i);
+            daysToAdd = parseInt(m[1], 10) * 30;
+        } else if (/(\d+)\s*week/i.test(notice)) {
+            const w = notice.match(/(\d+)\s*week/i);
+            daysToAdd = parseInt(w[1], 10) * 7;
+        } else if (/(\d+)\s*day/i.test(notice)) {
+            const d = notice.match(/(\d+)\s*day/i);
+            daysToAdd = Math.max(1, parseInt(d[1], 10));
+        } else if (/\b(?:immediate|now|none)\b/i.test(notice)) {
+            daysToAdd = 1;
+        } else {
+            daysToAdd = 15;
+        }
+
+        const target = new Date();
+        target.setDate(target.getDate() + daysToAdd);
+
+        const yyyy = target.getFullYear();
+        const mm = String(target.getMonth() + 1).padStart(2, '0');
+        const dd = String(target.getDate()).padStart(2, '0');
+
+        if (formatHint === 'date_input' || formatHint === 'YYYY-MM-DD') {
+            return `${yyyy}-${mm}-${dd}`;
+        }
+        if (formatHint === 'DD/MM/YYYY' || formatHint === 'DD-MM-YYYY') {
+            return `${dd}/${mm}/${yyyy}`;
+        }
+        if (formatHint === 'MM/DD/YYYY') {
+            return `${mm}/${dd}/${yyyy}`;
+        }
+
+        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        return `${monthNames[target.getMonth()]} ${target.getDate()}, ${yyyy}`;
+    }
+
+    /**
+     * Get candidate country code (e.g. +91 or 91)
+     */
+    getCountryCode(formatWithPlus = true) {
+        let code = this.profile.country_code || '';
+        if (!code) {
+            const country = (this.profile.country || '').toLowerCase();
+            const phone = (this.profile.phone || '');
+            if (country.includes('india') || phone.startsWith('+91') || phone.startsWith('91')) {
+                code = '+91';
+            } else if (country.includes('united states') || country.includes('usa') || phone.startsWith('+1')) {
+                code = '+1';
+            } else if (country.includes('uk') || phone.startsWith('+44')) {
+                code = '+44';
+            } else {
+                code = '+91';
+            }
+        }
+        if (!formatWithPlus) {
+            return code.replace(/^\+/, '');
+        }
+        return code.startsWith('+') ? code : `+${code}`;
+    }
+
+    /**
+     * Check if candidate previously worked for a target company
+     */
+    isCandidateFormerEmployee(targetCompany) {
+        if (!targetCompany || !this.knownCompanies) return false;
+        const normTarget = targetCompany.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+        for (const comp of this.knownCompanies) {
+            const normComp = comp.replace(/[^a-z0-9]/g, ' ').trim();
+            if (normComp && (normTarget.includes(normComp) || normComp.includes(normTarget))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if candidate is eligible to work in target country
+     */
+    isEligibleInCountry(targetCountry) {
+        const candCountry = (this.profile.country || 'India').toLowerCase();
+        const normTarget = (targetCountry || '').toLowerCase();
+        if (normTarget.includes(candCountry) || candCountry.includes(normTarget)) {
+            return true;
+        }
+        if (/india/i.test(candCountry) && /india/i.test(normTarget)) {
+            return true;
+        }
+        return this.profile.work_authorization === 'Yes';
     }
 
     /**
@@ -433,10 +584,24 @@ class PersonalAgentBrain {
             return p.full_name || (p.first_name && p.last_name ? `${p.first_name} ${p.last_name}` : null);
         }
 
-        // --- 2. Contact: Email & Phone / Mobile (100% Synonyms) ---
+        // --- 2. Contact: Email, Phone, Country Code ---
         if (intent === 'email' || /e-?mail/i.test(cleanLabel) || /e-?mail/i.test(placeholder) || inputType === 'email') {
             return p.email || (this.resumeText.match(/[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}/)?.[0] || null);
         }
+
+        // Country code / Dialing code
+        if (
+            intent === 'country_code' ||
+            /country\s*code|dial(?:ing)?\s*code|phone\s*prefix|isd\s*code|\bisd\b|calling\s*code|\bintl(?:_|\s*)?code/i.test(cleanLabel) ||
+            /country\s*code|dial(?:ing)?\s*code|\bisd\b/i.test(placeholder) ||
+            /country.*code|dial.*code|isd|intl.*code/i.test(nameAttr) ||
+            /country.*code|dial.*code|isd|intl.*code/i.test(idAttr)
+        ) {
+            const withPlus = !/^\d+$/.test(placeholder) && !/digits\s*only/i.test(placeholder);
+            return this.getCountryCode(withPlus);
+        }
+
+        // Main Phone Number (Clean 10-digit phone if separate country code or short format)
         if (
             intent === 'phone' ||
             /phone|mobile|cell|contact|telephone|tel\b|phno|whatsapp/i.test(cleanLabel) ||
@@ -445,18 +610,25 @@ class PersonalAgentBrain {
             /phone|mobile|contact/i.test(nameAttr) ||
             /phone|mobile|contact/i.test(idAttr)
         ) {
-            return p.phone || (this.resumeText.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || null);
+            let ph = p.phone || (this.resumeText.match(/(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0] || null);
+            if (ph && (fieldData.maxLength === 10 || /10\s*digit/i.test(placeholder) || /10\s*digit/i.test(cleanLabel))) {
+                ph = ph.replace(/^\+91[\s-]?|^91[\s-]?|^\+1[\s-]?/, '').replace(/\D/g, '');
+            }
+            return ph;
         }
 
         // --- 3. Location & Address ---
-        if (/street\s*address|address\s*line|residential\s*address|home\s*address|current\s*address|(?:^|\b)address\b/i.test(cleanLabel)) {
-            return p.street_address || p.city || null;
+        if (/address\s*line\s*2|apartment|apt|suite|unit\b|building|flat/i.test(cleanLabel)) {
+            return p.address_line2 || '';
+        }
+        if (/street\s*address|address\s*line\s*1|address\s*1|residential\s*address|home\s*address|current\s*address|(?:^|\b)address\b/i.test(cleanLabel)) {
+            return p.street_address || p.address || p.city || null;
         }
         if (/(?:^|\b)city\b|current\s*city|residing\s*city|town/i.test(cleanLabel)) {
             return p.city || null;
         }
         if (/country(?:\s*[\/\-]?\s*region)?|nationality/i.test(cleanLabel)) {
-            return p.country || 'United States';
+            return p.country || 'India';
         }
         if (/(?:^|\b)state\b|province|\bregion\b|state\/province/i.test(cleanLabel)) {
             return p.state || null;
@@ -466,7 +638,6 @@ class PersonalAgentBrain {
         }
 
         // --- 4. Resume & Links ---
-        // Specifically handles "Upload your Resume: Host your resume on an accessible link..."
         if (/resume|cv|curriculum\s*vitae/i.test(cleanLabel) || /paste.*resume|upload.*resume|host.*resume/i.test(cleanLabel)) {
             return p.resume_url || p.resume_link || p.portfolio || p.linkedin || p.github || (p.full_name ? `https://${p.full_name.toLowerCase().replace(/\s+/g, '')}-resume.dev` : null);
         }
@@ -479,7 +650,6 @@ class PersonalAgentBrain {
         if (intent === 'portfolio' || /portfolio|personal\s*website|website|blog|personal\s*site/i.test(cleanLabel)) {
             return p.portfolio || p.github || null;
         }
-        // Generic URL input where placeholder or type says URL
         if (inputType === 'url' || placeholder.includes('url') || placeholder.includes('link') || placeholder.includes('http')) {
             if (/resume/i.test(cleanLabel)) return p.resume_url || p.portfolio || p.linkedin;
             if (/github/i.test(cleanLabel)) return p.github;
@@ -488,7 +658,50 @@ class PersonalAgentBrain {
             return p.portfolio || p.linkedin || p.github || p.resume_url || null;
         }
 
-        // --- 5. Professional Experience ---
+        // --- 5. Gender ---
+        if (intent === 'gender' || /\bgender\b|\bsex\b/i.test(cleanLabel)) {
+            return p.gender || 'Male';
+        }
+
+        // --- 6. Earliest Start Date & Notice Period Reasoning ---
+        if (/earliest\s*(?:start|joining|date|available)|start\s*date|joining\s*date|when\s*can\s*you\s*start|available\s*(?:start\s*)?date|earliest\s*date/i.test(cleanLabel)) {
+            const isDateField = inputType === 'date' || /yyyy|dd[\/-]mm|mm[\/-]dd|date/i.test(placeholder) || /date/i.test(nameAttr);
+            const formatHint = inputType === 'date' ? 'date_input' : (/dd[\/-]mm/i.test(placeholder) ? 'DD/MM/YYYY' : (/mm[\/-]dd/i.test(placeholder) ? 'MM/DD/YYYY' : 'YYYY-MM-DD'));
+            if (isDateField || /date/i.test(cleanLabel)) {
+                return this.calculateEarliestStartDate(formatHint);
+            }
+            return this.calculateEarliestStartDate('text');
+        }
+
+        // --- 7. Ex-Employee / Former Employee Reasoning ---
+        if (/ex[- ]employee|former\s*employee|previously\s*(?:been\s*)?(?:worked|employed)|ever\s*(?:been\s*)?(?:worked|employed)|previous\s*employment/i.test(cleanLabel)) {
+            let targetComp = fieldData.context?.company || '';
+            if (!targetComp) {
+                const compMatch = cleanLabel.match(/(?:at|of|for|with)\s+([A-Za-z0-9\s&.,-]+?)(?:\?|$)/i);
+                if (compMatch) targetComp = compMatch[1].trim();
+            }
+            if (!targetComp && typeof window !== 'undefined' && window.location) {
+                targetComp = window.location.hostname;
+            }
+            const worked = this.isCandidateFormerEmployee(targetComp);
+            return worked ? 'Yes' : 'No';
+        }
+
+        // --- 8. Work Authorization & Country Eligibility ---
+        if (/authorized\s*to\s*work|legal.*work|eligib/i.test(cleanLabel)) {
+            if (/in\s+([a-zA-Z]+)/i.test(cleanLabel)) {
+                const match = cleanLabel.match(/in\s+([a-zA-Z]+)/i);
+                if (match && match[1]) {
+                    return this.isEligibleInCountry(match[1]) ? 'Yes' : 'No';
+                }
+            }
+            return p.work_authorization || 'Yes';
+        }
+        if (/require.*sponsorship|sponsor.*visa/i.test(cleanLabel)) {
+            return p.require_sponsorship || 'No';
+        }
+
+        // --- 9. Professional Experience & Notice Period ---
         if (/current\s*(?:job\s*)?title|current\s*role|job\s*title|designation|current\s*position|present\s*role|position\s*applied/i.test(cleanLabel)) {
             return p.current_title || null;
         }
@@ -498,19 +711,19 @@ class PersonalAgentBrain {
         if (/years?\s*of\s*experience|total\s*experience|experience\s*(?:in\s*years)?|how\s*many\s*years|yoe|overall\s*experience/i.test(cleanLabel)) {
             return p.years_of_experience || '3+';
         }
-        if (/notice\s*period|availability|earliest\s*start|how\s*soon|joining\s*time|when\s*can\s*you\s*start/i.test(cleanLabel)) {
+        if (/notice\s*period|availability|how\s*soon|joining\s*time/i.test(cleanLabel)) {
             return p.notice_period || 'Immediately';
         }
         if (/salary|compensation|expected\s*(?:pay|ctc)|desired\s*(?:salary|pay)|remuneration/i.test(cleanLabel)) {
             return p.expected_salary || null;
         }
 
-        // --- 6. Skills ---
+        // --- 10. Skills ---
         if (/skills?|technical\s*skills?|core\s*competenc|technologies|tech\s*stack/i.test(cleanLabel)) {
             return p.skills || null;
         }
 
-        // --- 7. Education ---
+        // --- 11. Education ---
         if (/degree|education|major|qualification|highest\s*degree/i.test(cleanLabel)) {
             return p.degree || null;
         }
@@ -521,15 +734,7 @@ class PersonalAgentBrain {
             return p.graduation_year || null;
         }
 
-        // --- 8. Work Authorization ---
-        if (/authorized\s*to\s*work|legal.*work|eligib/i.test(cleanLabel)) {
-            return p.work_authorization || 'Yes';
-        }
-        if (/require.*sponsorship|sponsor.*visa/i.test(cleanLabel)) {
-            return p.require_sponsorship || 'No';
-        }
-
-        // --- 9. Pre-filled Q&A Answers from Profile ---
+        // --- 12. Pre-filled Q&A Answers from Profile ---
         if (/about\s*(?:your)?self|introduction|tell\s*(?:me|us)\s*about\s*yourself|bio/i.test(cleanLabel)) {
             return p.answer_about_you || null;
         }
@@ -546,26 +751,102 @@ class PersonalAgentBrain {
     /**
      * Select best option from radio / select choices
      */
-    async matchOption(fieldData, context) {
-        const options = fieldData.options;
+    async matchOption(fieldDataOrLabel, optionsOrContext, maybeContext) {
+        let fieldData = {};
+        let options = [];
+        let context = {};
+
+        if (typeof fieldDataOrLabel === 'string') {
+            fieldData = { label: fieldDataOrLabel };
+            options = Array.isArray(optionsOrContext) ? optionsOrContext : [];
+            context = maybeContext || {};
+        } else {
+            fieldData = fieldDataOrLabel || {};
+            options = fieldData.options || (Array.isArray(optionsOrContext) ? optionsOrContext : []);
+            context = (optionsOrContext && !Array.isArray(optionsOrContext)) ? optionsOrContext : (maybeContext || {});
+        }
+
         if (!options || options.length === 0) return null;
         const label = (fieldData.label || fieldData.name || '').toLowerCase();
+        const p = this.profile;
 
         // 1. Check direct profile value match against option labels/values
-        const profileVal = this.getDeterministicValue(label, fieldData.semanticIntent?.intent, fieldData);
+        const profileVal = this.getDeterministicValue(label, fieldData.semanticIntent?.intent, Object.assign({}, fieldData, { context }));
         if (profileVal !== null && profileVal !== undefined && String(profileVal).trim() !== '') {
             const pStr = String(profileVal).toLowerCase().trim();
-            const directOpt = options.find(o => {
+            // Try exact match first
+            let directOpt = options.find(o => {
                 const optText = (typeof o === 'string' ? o : (o.label || o.value || '')).toLowerCase().trim();
-                return optText === pStr || optText.includes(pStr) || pStr.includes(optText);
+                return optText === pStr;
             });
+            // Try word boundary / substring match next (avoiding 'male' inside 'female' or 'man' inside 'woman')
+            if (!directOpt && !/^(male|man|m|fe)$/i.test(pStr)) {
+                directOpt = options.find(o => {
+                    const optText = (typeof o === 'string' ? o : (o.label || o.value || '')).toLowerCase().trim();
+                    const words = optText.split(/[\s,()\/_-]+/);
+                    return words.includes(pStr) || (pStr.length > 4 && optText.includes(pStr));
+                });
+            }
             if (directOpt) return typeof directOpt === 'string' ? directOpt : (directOpt.value || directOpt.label);
         }
 
-        // 2. Check work authorization patterns
+        // 2. Gender Selection (Direct matching Male/Female, NEVER default to Decline if known)
+        if (/\bgender\b|\bsex\b/i.test(label)) {
+            const userGender = (p.gender || 'Male').toLowerCase();
+            if (/male|man/i.test(userGender) && !/fe/i.test(userGender)) {
+                const maleOpt = options.find(o => {
+                    const t = String(o.label || o.value || o).trim().toLowerCase();
+                    return /^(male|man|m)$/i.test(t) || (t.includes('male') && !t.includes('female'));
+                });
+                if (maleOpt) return typeof maleOpt === 'string' ? maleOpt : (maleOpt.value || maleOpt.label);
+            } else if (/female|woman/i.test(userGender)) {
+                const femOpt = options.find(o => {
+                    const t = String(o.label || o.value || o).trim().toLowerCase();
+                    return /^(female|woman|f)$/i.test(t) || t.includes('female');
+                });
+                if (femOpt) return typeof femOpt === 'string' ? femOpt : (femOpt.value || femOpt.label);
+            }
+        }
+
+        // 3. Country Code Dropdown (e.g., India (+91), +91, 91)
+        if (/country\s*code|dial(?:ing)?\s*code|calling\s*code|phone\s*prefix|\bisd\b/i.test(label)) {
+            const dialWithPlus = this.getCountryCode(true); // +91
+            const dialDigits = this.getCountryCode(false);  // 91
+            const opt = options.find(o => {
+                const text = String(o.label || o.value || o).toLowerCase();
+                return text.includes(dialWithPlus) || text.includes(`+${dialDigits}`) || text.includes(`(${dialDigits})`) || text.includes('india');
+            });
+            if (opt) return typeof opt === 'string' ? opt : (opt.value || opt.label);
+        }
+
+        // 4. Ex-Employee / Former Employee Options (Answer 'No' unless candidate worked there)
+        if (/ex[- ]employee|former\s*employee|previously\s*(?:been\s*)?(?:worked|employed)|ever\s*(?:been\s*)?(?:worked|employed)|previous\s*employment/i.test(label)) {
+            let targetComp = context?.company || '';
+            if (!targetComp) {
+                const compMatch = label.match(/(?:at|of|for|with)\s+([A-Za-z0-9\s&.,-]+?)(?:\?|$)/i);
+                if (compMatch) targetComp = compMatch[1].trim();
+            }
+            if (!targetComp && typeof window !== 'undefined' && window.location) {
+                targetComp = window.location.hostname;
+            }
+            const worked = this.isCandidateFormerEmployee(targetComp);
+            const targetChoice = worked ? 'yes' : 'no';
+            const opt = options.find(o => new RegExp(`^${targetChoice}$`, 'i').test(String(o.label || o.value || o).trim()));
+            if (opt) return typeof opt === 'string' ? opt : (opt.value || opt.label);
+        }
+
+        // 5. Work Authorization & Country Eligibility
         if (/authorized|legal.*work|eligib/i.test(label)) {
-            const yesOpt = options.find(o => /^(yes|true|authorized|eligible)$/i.test(String(o.label || o.value || o).trim()));
-            if (yesOpt) return typeof yesOpt === 'string' ? yesOpt : (yesOpt.value || yesOpt.label);
+            let isEligible = true;
+            if (/in\s+([a-zA-Z]+)/i.test(label)) {
+                const match = label.match(/in\s+([a-zA-Z]+)/i);
+                if (match && match[1]) {
+                    isEligible = this.isEligibleInCountry(match[1]);
+                }
+            }
+            const choice = isEligible ? 'yes' : 'no';
+            const opt = options.find(o => new RegExp(`^(${choice}|true|authorized|eligible)$`, 'i').test(String(o.label || o.value || o).trim()));
+            if (opt) return typeof opt === 'string' ? opt : (opt.value || opt.label);
         }
 
         if (/require.*sponsor|sponsorship/i.test(label)) {
@@ -573,19 +854,28 @@ class PersonalAgentBrain {
             if (noOpt) return typeof noOpt === 'string' ? noOpt : (noOpt.value || noOpt.label);
         }
 
-        // 3. Check notice period / availability
-        if (/notice\s*period|availability|start\s*date/i.test(label)) {
-            const immOpt = options.find(o => /immediate|less\s*than|15\s*days|now/i.test(String(o.label || o.value || o).trim()));
-            if (immOpt) return typeof immOpt === 'string' ? immOpt : (immOpt.value || immOpt.label);
+        // 6. Notice Period & Availability Options
+        if (/notice\s*period|availability|start\s*date|earliest\s*date|join(?:ing)?|how\s*soon/i.test(label)) {
+            const userNotice = (p.notice_period || 'Immediately').toLowerCase();
+            const opt = options.find(o => {
+                const text = String(o.label || o.value || o).toLowerCase();
+                if (/immediate|now/i.test(userNotice) && /immediate|now|less\s*than/i.test(text)) return true;
+                if (/30\s*day|1\s*month/i.test(userNotice) && (/30\s*day/i.test(text) || /1\s*month/i.test(text))) return true;
+                if (/15\s*day|2\s*week/i.test(userNotice) && (/15\s*day/i.test(text) || /2\s*week/i.test(text))) return true;
+                if (/60\s*day|2\s*month/i.test(userNotice) && (/60\s*day/i.test(text) || /2\s*month/i.test(text))) return true;
+                if (/90\s*day|3\s*month/i.test(userNotice) && (/90\s*day/i.test(text) || /3\s*month/i.test(text))) return true;
+                return false;
+            });
+            if (opt) return typeof opt === 'string' ? opt : (opt.value || opt.label);
         }
 
-        // 4. Check gender / ethnicity / disability default decline options if found
-        if (/gender|race|ethnic|disability|veteran/i.test(label)) {
+        // 7. Demographics Decline Option (Fallback ONLY if gender not matched)
+        if (/race|ethnic|disability|veteran/i.test(label) || (/\bgender\b/i.test(label) && !p.gender)) {
             const declineOpt = options.find(o => /decline|prefer\s*not|choose\s*not|do\s*not\s*wish/i.test(String(o.label || o.value || o).trim()));
             if (declineOpt) return typeof declineOpt === 'string' ? declineOpt : (declineOpt.value || declineOpt.label);
         }
 
-        // 5. Check memory for this question
+        // 8. Check AI Memory for this question
         const memAnswer = this.findInMemory(label);
         if (memAnswer) {
             const mStr = String(memAnswer).toLowerCase().trim();
@@ -601,7 +891,6 @@ class PersonalAgentBrain {
 
     /**
      * Synthesize a customized, professional answer using LLM
-     * Returns NULL if no LLM is configured - NEVER returns a canned repeating sentence!
      */
     async synthesizeAnswer(fieldData, context) {
         const question = fieldData.label || fieldData.name || '';
@@ -625,6 +914,8 @@ Company: ${company}
 Candidate Information:
 Name: ${this.profile.full_name || 'Candidate'}
 Background: ${this.profile.current_title || 'Software Professional'} with ${this.profile.years_of_experience || 'experience'} in ${this.profile.skills || 'technology'}.
+Notice Period: ${this.profile.notice_period || 'Immediately'}
+Location: ${this.profile.city || ''}, ${this.profile.country || 'India'}
 Resume Highlights: ${this.resumeText ? this.resumeText.slice(0, 1000) : ''}
 
 Application Question:
@@ -658,6 +949,7 @@ Generate the direct answer:`;
         // 1. Semantic Synonym Map (Zero API local fallback)
         const semanticMap = [
             { keys: ['phone'], synonyms: ['phone', 'mobile', 'cell', 'contact', 'tele', 'call', 'whatsapp', 'reach'] },
+            { keys: ['country_code'], synonyms: ['country code', 'dial code', 'calling code', 'phone prefix', 'isd code'] },
             { keys: ['email'], synonyms: ['email', 'mail', 'inbox'] },
             { keys: ['full_name'], synonyms: ['name', 'applicant', 'candidate', 'who are you', 'full legal name'] },
             { keys: ['city', 'street_address'], synonyms: ['city', 'location', 'reside', 'live', 'address', 'town', 'where do you live', 'based in', 'currently based'] },
@@ -667,6 +959,7 @@ Generate the direct answer:`;
             { keys: ['notice_period'], synonyms: ['notice', 'available', 'start date', 'join', 'joining', 'how soon'] },
             { keys: ['expected_salary'], synonyms: ['salary', 'ctc', 'compensation', 'pay', 'remuneration', 'rate', 'budget'] },
             { keys: ['skills'], synonyms: ['skills', 'tools', 'tech', 'technologies', 'stack', 'languages', 'frameworks'] },
+            { keys: ['gender'], synonyms: ['gender', 'sex'] },
             { keys: ['degree'], synonyms: ['degree', 'education', 'qualification', 'major', 'study'] },
             { keys: ['university'], synonyms: ['university', 'college', 'school', 'institution', 'campus'] },
             { keys: ['resume_url'], synonyms: ['resume', 'cv', 'curriculum vitae', 'profile link'] },
@@ -690,31 +983,43 @@ Generate the direct answer:`;
             }
         }
 
-        // 2. LLM Synthesis (if API key or window.ai available)
+        // 2. LLM Reasoning (Google Gemini 1.5 Flash / 2.0 Flash)
         if (this.llmClient && (this.llmClient.geminiApiKey || this.llmClient.groqApiKey || this.llmClient.provider === 'window_ai')) {
             try {
-                const prompt = `Form Question: "${cleanLabel}"
-Candidate Data:
-${JSON.stringify({
-    full_name: p.full_name,
-    email: p.email,
-    phone: p.phone,
-    current_title: p.current_title,
-    current_company: p.current_company,
-    years_of_experience: p.years_of_experience,
-    skills: p.skills,
-    location: `${p.city}, ${p.country}`,
-    salary: p.expected_salary,
-    notice: p.notice_period,
-    linkedin: p.linkedin,
-    portfolio: p.portfolio,
-    resume_url: p.resume_url
-}, null, 2)}
+                let optionsPrompt = '';
+                if (fieldData.options && fieldData.options.length > 0) {
+                    const opts = fieldData.options.map(o => typeof o === 'string' ? o : (o.label || o.value)).filter(Boolean);
+                    optionsPrompt = `\nOptions to choose from (Your response MUST be an exact match to one of these):\n${JSON.stringify(opts)}`;
+                }
 
-Provide the exact string answer to type into this field based ONLY on candidate data. If it's an open-ended question, write a concise 1-2 sentence professional first-person response. If impossible to answer, reply UNKNOWN.`;
+                const prompt = `Form Question: "${cleanLabel}"${optionsPrompt}
+
+Candidate Knowledge Base:
+- Name: ${p.full_name}
+- Email: ${p.email}
+- Phone: ${p.phone}
+- Country Code: ${this.getCountryCode(true)}
+- Location: ${p.city}, ${p.country}
+- Current Company: ${p.current_company || 'None'}
+- Past Employers / Work History: ${Array.from(this.knownCompanies || []).join(', ') || p.current_company || 'None'}
+- Job Title: ${p.current_title}
+- Total Experience: ${p.years_of_experience}
+- Notice Period: ${p.notice_period}
+- Earliest Joining Date: ${this.calculateEarliestStartDate('YYYY-MM-DD')}
+- Gender: ${p.gender || 'Male'}
+- Work Authorization in ${p.country}: Yes
+- Target Company Applying To: ${context?.company || 'Unknown'}
+
+Reasoning Rules:
+1. If the question asks if the candidate is an ex-employee / former employee / previously worked for ${context?.company || 'this company'}, and the company is NOT in Past Employers, answer "No".
+2. If the question asks if the candidate is authorized or eligible to work in ${p.country || 'India'}, answer "Yes".
+3. If the question asks for earliest start date or joining date, provide ${this.calculateEarliestStartDate('YYYY-MM-DD')}.
+4. If options are listed above, pick the single option that matches best and return ONLY that option string.
+5. If open-ended text question, write a concise 1-2 sentence professional first-person response.
+6. If impossible to answer, reply UNKNOWN.`;
 
                 const res = await this.llmClient.complete(
-                    'You are an intelligent form filler. Output ONLY the raw answer string with no quotes or explanations.',
+                    'You are an intelligent form reasoning agent. Output ONLY the raw answer string with no quotes, markdown, or explanations.',
                     prompt
                 );
                 if (res && res.trim() && !res.includes('UNKNOWN') && res.trim().length > 0) {

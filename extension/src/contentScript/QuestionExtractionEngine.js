@@ -41,21 +41,39 @@ class QuestionExtractionEngine {
         console.log(`[QEE] Running extraction for platform: ${this.platform}`);
         
         // Find candidate inputs (we focus on inputs that usually hold open-ended questions)
-        const candidates = [
+        const rawCandidates = [
             ...document.querySelectorAll('textarea'),
-            ...document.querySelectorAll('input[type="text"]'),
+            ...document.querySelectorAll('input[type="text"], input:not([type])'),
             // Including contenteditable for custom inputs
             ...document.querySelectorAll('[contenteditable="true"]'),
             ...document.querySelectorAll('[role="textbox"]')
         ];
 
+        // Deduplicate elements while preserving order
+        const uniqueCandidates = Array.from(new Set(rawCandidates));
+
+        // Sort candidates in strict visual top-to-bottom, left-to-right reading sequence
+        uniqueCandidates.sort((a, b) => {
+            const rectA = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };
+            const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
+            if (Math.abs(rectA.top - rectB.top) > 5) {
+                return rectA.top - rectB.top;
+            }
+            return rectA.left - rectB.left;
+        });
+
         const questions = [];
         
-        candidates.forEach(el => {
+        uniqueCandidates.forEach(el => {
+            // Filter out captcha widgets and response containers
+            if (el.name && /captcha|recaptcha|turnstile/i.test(el.name)) return;
+            if (el.id && /captcha|recaptcha|turnstile/i.test(el.id)) return;
+            if (el.closest && el.closest('.h-captcha, .g-recaptcha, [data-sitekey], .cf-turnstile')) return;
+
             // Filter out hidden or tiny inputs
-            const rect = el.getBoundingClientRect();
+            const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 100, height: 20 };
             if (rect.width < 10 || rect.height < 10) return;
-            if (!el.offsetParent) return;
+            if (el.offsetParent === null && rect.width === 0 && rect.height === 0) return;
 
             // Extract raw data
             const extracted = this.extractFieldData(el);

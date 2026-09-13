@@ -581,24 +581,155 @@ class AutofillOrchestrator {
     }
 
     /**
+     * Check if a field is already filled by the user or pre-populated
+     */
+    isFieldAlreadyFilled(field, element) {
+        const el = element || field?.element;
+        if (!el) return false;
+
+        const type = field?.type || el.type || el.tagName?.toLowerCase();
+
+        // 1. File inputs
+        if (type === 'file' || el.type === 'file') {
+            return !!(el.files && el.files.length > 0);
+        }
+
+        // 2. Radio buttons
+        if (type === 'radio' || el.type === 'radio') {
+            if (el.name && typeof document !== 'undefined') {
+                return !!document.querySelector(`input[type="radio"][name="${el.name}"]:checked`);
+            }
+            return !!el.checked;
+        }
+
+        // 3. Checkboxes
+        if (type === 'checkbox' || el.type === 'checkbox') {
+            return !!el.checked;
+        }
+
+        // 4. HTML <select> Element
+        if (el.tagName === 'SELECT') {
+            if (el.selectedIndex < 0) return false;
+            const opt = el.options[el.selectedIndex];
+            if (!opt) return false;
+            const text = (opt.text || '').trim();
+            const val = (opt.value || '').trim();
+            if (!val && !text) return false;
+            return !/^(?:select|choose|--|\bselect\s*an\s*option\b|\bchoose\s*one\b|\bnone\b)$/i.test(text);
+        }
+
+        // 5. Custom dropdowns & ARIA comboboxes
+        if (type === 'custom-select' || (el.getAttribute && el.getAttribute('role') === 'combobox')) {
+            const ariaSelected = (typeof el.querySelector === 'function')
+                ? el.querySelector('[aria-selected="true"], [class*="singleValue"], .selected-option, [class*="value-container"]')
+                : null;
+            if (ariaSelected) {
+                const text = (ariaSelected.textContent || '').trim();
+                return text.length > 0 && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(text);
+            }
+            const innerText = (el.innerText || el.textContent || '').trim();
+            return innerText.length > 0 && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(innerText);
+        }
+
+        // 6. Contenteditable
+        if ((typeof el.hasAttribute === 'function' && el.hasAttribute('contenteditable')) || (el.getAttribute && el.getAttribute('role') === 'textbox')) {
+            const text = (el.innerText || el.textContent || '').trim();
+            return text.length > 0;
+        }
+
+        // 7. Text, email, tel, number, textarea, date
+        const val = (el.value || '').trim();
+        const placeholder = (el.placeholder || '').trim();
+        if (!val) return false;
+        if (placeholder && val.toLowerCase() === placeholder.toLowerCase()) return false;
+        return true;
+    }
+
+    /**
+     * Sort fields strictly by visual on-screen coordinates (top-to-bottom, left-to-right)
+     */
+    sortFieldsSequentially(fields) {
+        if (!Array.isArray(fields) || fields.length <= 1) return fields;
+        const scrollY = (typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0);
+        const scrollX = (typeof window !== 'undefined' && typeof window.scrollX === 'number' ? window.scrollX : 0);
+
+        return [...fields].sort((a, b) => {
+            const elA = a.element || (a.id && typeof document !== 'undefined' ? document.getElementById(a.id) : null);
+            const elB = b.element || (b.id && typeof document !== 'undefined' ? document.getElementById(b.id) : null);
+            if (!elA || !elB) return 0;
+
+            const rectA = elA.getBoundingClientRect ? elA.getBoundingClientRect() : { top: 0, left: 0 };
+            const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
+            const topA = (rectA.top || 0) + scrollY;
+            const topB = (rectB.top || 0) + scrollY;
+            const leftA = (rectA.left || 0) + scrollX;
+            const leftB = (rectB.left || 0) + scrollX;
+
+            if (Math.abs(topA - topB) > 8) {
+                return topA - topB;
+            }
+            return leftA - leftB;
+        });
+    }
+
+    /**
      * Auto-fill all detected form fields - WORKING VERSION
      */
     async autofillFormFields(fields, profile) {
+        const sortedFields = this.sortFieldsSequentially(fields);
+
         const results = {
             filled: 0,
             skipped: 0,
             failed: 0,
-            total: fields.length,
+            total: sortedFields.length,
             details: [],
             missedFields: []
         };
 
-        console.log(`[Orchestrator] 📋 Starting to fill ${fields.length} fields with profile keys:`, Object.keys(profile));
+        console.log(`[Orchestrator] 📋 Starting to fill ${sortedFields.length} fields sequentially with profile keys:`, Object.keys(profile));
 
-        for (const field of fields) {
+        let brain = null;
+        try {
+            const BrainClass = (typeof window !== 'undefined' && window.PersonalAgentBrain) || (typeof PersonalAgentBrain !== 'undefined' ? PersonalAgentBrain : null);
+            if (BrainClass) {
+                brain = new BrainClass();
+                await brain.init();
+                if (profile) {
+                    brain.profile = Object.assign({}, brain.profile, profile);
+                }
+            }
+        } catch (e) {
+            console.warn('[Orchestrator] Could not initialize PersonalAgentBrain:', e);
+        }
+
+        for (const field of sortedFields) {
             try {
+                const element = field.element;
+
+                // STRICT USER RULE: Never touch already filled data!
+                if (this.isFieldAlreadyFilled(field, element)) {
+                    results.skipped++;
+                    results.details.push({
+                        label: field.label,
+                        field: field.resumeField,
+                        status: 'skipped',
+                        reason: 'Field already filled'
+                    });
+                    console.log(`[Orchestrator] ⏭️  Skipped field "${field.label}" - already filled with user data.`);
+                    continue;
+                }
+
                 // Get value from profile using field name
                 let value = profile[field.resumeField];
+
+                // If not in profile or needs smart reasoning, consult PersonalAgentBrain
+                if ((!value || String(value).trim() === '') && brain) {
+                    const brainRes = await brain.resolveAnswer(field, { profile });
+                    if (brainRes && brainRes.value !== null && brainRes.value !== undefined && String(brainRes.value).trim() !== '') {
+                        value = brainRes.value;
+                    }
+                }
 
                 if (!value) {
                     results.skipped++;
@@ -607,9 +738,9 @@ class AutofillOrchestrator {
                         label: field.label,
                         field: field.resumeField,
                         status: 'skipped',
-                        reason: `No data in profile for: ${field.resumeField}`
+                        reason: `No data in profile or brain for: ${field.resumeField || field.label}`
                     });
-                    console.log(`[Orchestrator] ⏭️  Skipped field "${field.label}" - no value for "${field.resumeField}"`);
+                    console.log(`[Orchestrator] ⏭️  Skipped field "${field.label}" - no value for "${field.resumeField || field.label}"`);
                     continue;
                 }
 

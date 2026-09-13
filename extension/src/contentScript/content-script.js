@@ -627,6 +627,60 @@ function getLabelForField(el) {
 }
 
 /**
+ * Universal check to see if a form element is already filled with valid user data.
+ * Adheres strictly to the rule: NEVER touch or overwrite already-filled fields.
+ */
+function isElementAlreadyFilled(el) {
+    if (!el) return false;
+    
+    // 1. Text inputs, textareas, search, etc.
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+        const type = (el.type || 'text').toLowerCase();
+        if (type === 'checkbox' || type === 'radio') {
+            return !!el.checked;
+        }
+        if (type === 'file') {
+            return !!(el.files && el.files.length > 0);
+        }
+        const val = (el.value || '').trim();
+        return val.length > 0;
+    }
+    
+    // 2. Select dropdowns
+    if (el.tagName === 'SELECT') {
+        if (el.selectedIndex > 0) {
+            const selectedOpt = el.options[el.selectedIndex];
+            if (selectedOpt) {
+                const optText = (selectedOpt.text || '').trim().toLowerCase();
+                const optVal = (selectedOpt.value || '').trim().toLowerCase();
+                const isPlaceholder = !optVal || /^(select|choose|pick|please select|none|\-\-)/i.test(optText);
+                return !isPlaceholder;
+            }
+        }
+        return false;
+    }
+    
+    // 3. Custom comboboxes, listboxes, select2
+    if (el.getAttribute('role') === 'combobox' || el.getAttribute('role') === 'listbox' || el.classList?.contains('select2-selection')) {
+        const text = (el.textContent || '').trim();
+        if (text && !/^(select|choose|pick|please select|none|\-\-)/i.test(text.toLowerCase())) {
+            return true;
+        }
+    }
+
+    // 4. Contenteditable
+    if (el.isContentEditable || el.getAttribute('contenteditable') === 'true') {
+        return (el.innerText || el.textContent || '').trim().length > 0;
+    }
+
+    return false;
+}
+
+if (typeof window !== 'undefined') {
+    window.isElementAlreadyFilled = isElementAlreadyFilled;
+}
+
+/**
  * Detect all open-ended question fields on the current page.
  * Returns array of { question, fieldIndex, tagName, placeholder, ... }
  * and stores field elements in window.__qaDetectedFields for later filling.
@@ -648,8 +702,8 @@ function detectApplicationQuestions() {
     const results = [];
     
     questions.forEach((q, idx) => {
-        // Skip fields that are already filled with substantial content (>20 chars)
-        if ((q.element.value || '').trim().length > 20) return;
+        // Skip fields that are already filled with any valid user data (never overwrite)
+        if (isElementAlreadyFilled(q.element)) return;
         
         const fieldIndex = window.__qaDetectedFields.length;
         window.__qaDetectedFields.push(q.element);
@@ -2480,14 +2534,25 @@ const FIELD_MAP = {
   first_name:  ['\\bfirst\\s*name\\b', '^fname$', 'given\\s*name', 'forename'],
   last_name:   ['\\blast\\s*name\\b', '^lname$', 'surname', 'family\\s*name'],
   email:       ['email', 'e\\.?mail', 'email\\s*address'],
-  phone:       ['phone', 'mobile', 'telephone', 'cell', 'contact\\s*no', 'ph\\.?no'],
-  linkedin:    ['linkedin', 'linked\\.?in', 'profile\\s*url'],
+  country_code: ['country\\s*code', 'dial\\s*code', 'phone\\s*prefix', 'isd\\s*code', '\\bisd\\b', 'calling\\s*code'],
+  phone:       ['phone', 'mobile', 'telephone', 'cell', 'contact\\s*no', 'ph\\.?no', 'contact\\s*number'],
+  gender:      ['\\bgender\\b', '\\bsex\\b'],
+  address_line2: ['address\\s*line\\s*2', 'apartment', 'suite', 'apt', 'unit', 'flat', 'building'],
+  street_address: ['street\\s*address', 'address\\s*line\\s*1', 'address\\s*1', 'residential\\s*address', '\\baddress\\b'],
   city:        ['city', 'town', 'location'],
+  state:       ['\\bstate\\b', 'province', 'region'],
+  zip:         ['zip', 'postal', 'pin\\s*code', 'pincode'],
   country:     ['country', 'nation'],
-  github:      ['github', 'git-hub'],
+  linkedin:    ['linkedin', 'linked\\.?in', 'profile\\s*url'],
+  github:      ['github', 'git-hub', 'git\\s*repo'],
   portfolio:   ['portfolio', 'website', 'homepage', 'personal\\s*(?:site|page|web)'],
   years_of_experience: ['years?\\s*of?\\s*(?:work\\s*)?experience', 'yoe', 'experience\\s*years'],
-  current_title: ['current\\s*(?:job\\s*)?title', 'current\\s*role', 'designation', 'job\\s*title']
+  current_title: ['current\\s*(?:job\\s*)?title', 'current\\s*role', 'designation', 'job\\s*title'],
+  current_company: ['current\\s*company', 'current\\s*employer', 'company\\s*name', 'organization'],
+  notice_period: ['notice\\s*period', 'availability', 'how\\s*soon\\s*can\\s*you\\s*join'],
+  earliest_date: ['earliest\\s*(?:start\\s*)?date', 'joining\\s*date', 'start\\s*date', 'when\\s*can\\s*you\\s*start'],
+  ex_employee: ['ex[- ]employee', 'former\\s*employee', 'previously\\s*worked', 'ever\\s*worked'],
+  work_authorization: ['authorized\\s*to\\s*work', 'legal.*work', 'eligib', 'eligible\\s*to\\s*work']
 };
 
 function detectFieldType(input) {
@@ -2511,6 +2576,9 @@ function detectFieldType(input) {
 
 function fillField(input, value) {
   if (!value) return false;
+  // CRITICAL: Under no circumstances should an already filled field be modified, cleared, or overwritten.
+  if (isElementAlreadyFilled(input)) return false;
+  
   input.focus();
 
   // For React/Vue/Angular-controlled inputs, use the prototype property descriptor
@@ -2519,6 +2587,77 @@ function fillField(input, value) {
     prototype = HTMLTextAreaElement.prototype;
   } else if (input.tagName === 'SELECT') {
     prototype = HTMLSelectElement.prototype;
+    if (input.options && input.options.length > 0) {
+      let matchedIndex = -1;
+      const target = String(value).trim().toLowerCase();
+      // 1. Exact match on value or text
+      for (let i = 0; i < input.options.length; i++) {
+        const opt = input.options[i];
+        if (opt.value.trim().toLowerCase() === target || opt.text.trim().toLowerCase() === target) {
+          matchedIndex = i;
+          break;
+        }
+      }
+      // 2. Gender specific: prevent 'male' matching 'female'
+      if (matchedIndex === -1 && (target === 'male' || target === 'm')) {
+        for (let i = 0; i < input.options.length; i++) {
+          const t = input.options[i].text.trim().toLowerCase();
+          if (t === 'male' || (t.startsWith('male') && !t.includes('female'))) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      } else if (matchedIndex === -1 && (target === 'female' || target === 'f')) {
+        for (let i = 0; i < input.options.length; i++) {
+          const t = input.options[i].text.trim().toLowerCase();
+          if (t === 'female' || t.startsWith('female')) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+      // 3. Country code matching (e.g. "+91" or "91")
+      if (matchedIndex === -1 && /^\+?\d{1,4}$/.test(target)) {
+        const numOnly = target.replace(/\D/g, '');
+        for (let i = 0; i < input.options.length; i++) {
+          const opt = input.options[i];
+          if (opt.value.includes(numOnly) || opt.text.includes(numOnly) || opt.text.includes(`+${numOnly}`)) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+      // 4. Substring fallback (ignoring placeholder options)
+      if (matchedIndex === -1) {
+        for (let i = 0; i < input.options.length; i++) {
+          const opt = input.options[i];
+          const t = opt.text.trim().toLowerCase();
+          const v = opt.value.trim().toLowerCase();
+          if (!v && /^(select|choose|pick|none|\-\-)/i.test(t)) continue;
+          if (t.includes(target) || v.includes(target)) {
+            matchedIndex = i;
+            break;
+          }
+        }
+      }
+      if (matchedIndex !== -1) {
+        input.selectedIndex = matchedIndex;
+        value = input.options[matchedIndex].value;
+      }
+    }
+  } else if (input.type === 'radio') {
+    input.checked = true;
+    input.dispatchEvent(new Event('click', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    animateFilledField(input);
+    return true;
+  } else if (input.type === 'checkbox') {
+    const shouldCheck = typeof value === 'boolean' ? value : ['yes', 'true', '1', 'agree'].includes(String(value).trim().toLowerCase());
+    input.checked = shouldCheck;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new Event('click', { bubbles: true }));
+    animateFilledField(input);
+    return true;
   }
 
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
@@ -2551,19 +2690,42 @@ function performAutofill(profile) {
         hasCustomFields: Array.isArray(profile.custom_fields) && profile.custom_fields.length > 0
     });
     
-    // Try both traditional forms and Google Forms
     let filledCount = 0;
     const missedFields = [];
     
     // Strategy 1: Traditional HTML inputs
     console.log('[Content] 📝 Filling traditional HTML form fields...');
-    const inputs = document.querySelectorAll('input, textarea, select');
+    const rawInputs = Array.from(document.querySelectorAll('input, textarea, select'));
+    
+    // Filter out buttons, submits, image, hidden, search, disabled, and captcha fields
+    const inputs = rawInputs.filter(input => {
+        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button' || 
+            input.type === 'image' || input.type === 'search' || input.disabled) {
+            return false;
+        }
+        // Exclude captcha fields completely
+        if (input.name && /captcha|recaptcha|turnstile/i.test(input.name)) return false;
+        if (input.id && /captcha|recaptcha|turnstile/i.test(input.id)) return false;
+        if (input.closest && input.closest('.h-captcha, .g-recaptcha, [data-sitekey], .cf-turnstile')) return false;
+        return true;
+    });
+
+    // Sort sequentially in strict visual top-to-bottom, left-to-right reading order
+    inputs.sort((a, b) => {
+        const rectA = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };
+        const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
+        if (Math.abs(rectA.top - rectB.top) > 5) {
+            return rectA.top - rectB.top;
+        }
+        return rectA.left - rectB.left;
+    });
+
     let traditionalCount = 0;
     
     inputs.forEach((input, index) => {
-        // Skip hidden inputs, buttons, submits, search, etc.
-        if (input.type === 'hidden' || input.type === 'submit' || input.type === 'button' || 
-            input.type === 'image' || input.type === 'search' || input.disabled) {
+        // CRITICAL: If the field is already filled, NEVER touch, modify, or overwrite it!
+        if (isElementAlreadyFilled(input)) {
+            console.log(`[Content] ⏭️ Skipping already-filled field '${input.name || input.id || input.tagName}'`);
             return;
         }
         
@@ -2574,7 +2736,7 @@ function performAutofill(profile) {
         if (fieldType && profile[fieldType]) {
             valueToFill = profile[fieldType];
         }
-        
+
         // 2. Check custom fields if not filled
         if (!valueToFill && profile.custom_fields && Array.isArray(profile.custom_fields)) {
             const contextText = getFieldContext(input);
@@ -2586,9 +2748,59 @@ function performAutofill(profile) {
                 valueToFill = matchedCustom.value;
             }
         }
-        
-        // Fill field if match found and it's empty
-        if (valueToFill && !input.value) {
+
+        // 3. Consult PersonalAgentBrain for intelligent reasoning (dates, ex-employee, country code, gender)
+        const BrainClass = (typeof window !== 'undefined' && window.PersonalAgentBrain) || (typeof PersonalAgentBrain !== 'undefined' ? PersonalAgentBrain : null);
+        if (BrainClass) {
+            try {
+                if (!window.__personalAgentBrain) {
+                    window.__personalAgentBrain = new BrainClass();
+                    window.__personalAgentBrain.init();
+                }
+                if (profile) Object.assign(window.__personalAgentBrain.profile, profile);
+
+                const label = getCleanLabel(input) || input.name || input.id;
+                if (!valueToFill) {
+                    valueToFill = window.__personalAgentBrain.getDeterministicValue(label, fieldType, {
+                        type: input.type || input.tagName.toLowerCase(),
+                        placeholder: input.placeholder || '',
+                        name: input.name || '',
+                        id: input.id || ''
+                    });
+                }
+
+                // If select dropdown, use matchOption
+                if (input.tagName === 'SELECT' && input.options && input.options.length > 0) {
+                    const optList = Array.from(input.options).map(o => ({ label: o.text.trim(), value: o.value }));
+                    const matchedOpt = window.__personalAgentBrain.matchOption(
+                        { label, options: optList, semanticIntent: { intent: fieldType } },
+                        { company: (typeof detectedJob !== 'undefined' && detectedJob?.company) || '' }
+                    );
+                    if (matchedOpt) valueToFill = matchedOpt;
+                }
+            } catch (e) {
+                console.warn('[Content] Brain resolution fallback in performAutofill:', e);
+            }
+        }
+
+        // 4. Country Code Validation (NEVER fill 10-digit phone into country code field)
+        if (fieldType === 'country_code' && valueToFill) {
+            const strVal = String(valueToFill).trim();
+            if (strVal.length > 4) {
+                valueToFill = strVal.startsWith('+91') || strVal.startsWith('91') ? '+91' : '+91';
+            }
+        }
+
+        // 5. Clean phone number if separate country code field is present
+        if (fieldType === 'phone' && valueToFill) {
+            const hasSeparateCountryCode = Array.from(inputs).some(i => detectFieldType(i) === 'country_code');
+            if (hasSeparateCountryCode) {
+                valueToFill = String(valueToFill).replace(/^\+91[\s-]?|^91[\s-]?|^\+1[\s-]?/, '').replace(/\D/g, '');
+            }
+        }
+
+        // Fill field if match found and it is not already filled
+        if (valueToFill && !isElementAlreadyFilled(input)) {
             const filled = fillField(input, valueToFill);
             if (filled) {
                 filledCount++;
@@ -2596,7 +2808,7 @@ function performAutofill(profile) {
             }
         } else if (!valueToFill) {
             // Track unfilled/missed fields
-            if (!input.value && (input.tagName === 'TEXTAREA' || input.tagName === 'SELECT' || 
+            if (!isElementAlreadyFilled(input) && (input.tagName === 'TEXTAREA' || input.tagName === 'SELECT' || 
                 ['text', 'email', 'tel', 'url', 'number'].includes(input.type))) {
                 const label = getCleanLabel(input);
                 if (label && !missedFields.includes(label)) {
@@ -2859,6 +3071,17 @@ function detectAllGoogleFormFields() {
     console.log(`[Content] Found ${questionContainers.length} question containers`);
     
     console.log(`[Content] Total unique fields detected: ${fields.length}`);
+    
+    // Sort in strict visual top-to-bottom, left-to-right reading sequence
+    fields.sort((a, b) => {
+        const rectA = a.element && a.element.getBoundingClientRect ? a.element.getBoundingClientRect() : { top: 0, left: 0 };
+        const rectB = b.element && b.element.getBoundingClientRect ? b.element.getBoundingClientRect() : { top: 0, left: 0 };
+        if (Math.abs(rectA.top - rectB.top) > 5) {
+            return rectA.top - rectB.top;
+        }
+        return rectA.left - rectB.left;
+    });
+
     return fields;
 }
 
@@ -2868,6 +3091,13 @@ function detectAllGoogleFormFields() {
 function fillGoogleFormField(fieldInfo, profile, missedFields) {
     try {
         const { element, type, label, ariaLabel } = fieldInfo;
+        
+        // CRITICAL: Skip already filled elements - NEVER overwrite user data
+        if (isElementAlreadyFilled(element)) {
+            console.log(`[Content] ⏭️ Skipping already filled field: "${label || ariaLabel || ''}"`);
+            return { filled: false, skipped: true };
+        }
+
         const visibleLabel = label || ariaLabel || element.innerText || element.textContent;
         
         console.log(`[Content] 📌 Processing field: "${visibleLabel}"`);
@@ -3042,21 +3272,62 @@ function fillTextarea(element, value) {
  */
 function fillSelect(element, value) {
     try {
-        // Find matching option
-        let option = Array.from(element.options).find(opt => 
-            opt.text.toLowerCase().includes(value.toLowerCase()) ||
-            opt.value.toLowerCase().includes(value.toLowerCase())
+        if (!value) return { filled: false };
+        if (isElementAlreadyFilled(element)) return { filled: false, skipped: true };
+
+        const target = String(value).trim().toLowerCase();
+        let matchedOption = null;
+
+        // 1. Exact match on value or text
+        matchedOption = Array.from(element.options).find(opt => 
+            opt.value.trim().toLowerCase() === target || opt.text.trim().toLowerCase() === target
         );
+
+        // 2. Gender specific: prevent 'male' matching 'female'
+        if (!matchedOption && (target === 'male' || target === 'm')) {
+            matchedOption = Array.from(element.options).find(opt => {
+                const t = opt.text.trim().toLowerCase();
+                return t === 'male' || (t.startsWith('male') && !t.includes('female'));
+            });
+        } else if (!matchedOption && (target === 'female' || target === 'f')) {
+            matchedOption = Array.from(element.options).find(opt => {
+                const t = opt.text.trim().toLowerCase();
+                return t === 'female' || t.startsWith('female');
+            });
+        }
+
+        // 3. Country code matching (e.g. "+91" or "91")
+        if (!matchedOption && /^\+?\d{1,4}$/.test(target)) {
+            const numOnly = target.replace(/\D/g, '');
+            matchedOption = Array.from(element.options).find(opt => 
+                opt.value.includes(numOnly) || opt.text.includes(numOnly) || opt.text.includes(`+${numOnly}`)
+            );
+        }
+
+        // 4. Substring fallback (ignoring placeholder options)
+        if (!matchedOption) {
+            matchedOption = Array.from(element.options).find(opt => {
+                const t = opt.text.trim().toLowerCase();
+                const v = opt.value.trim().toLowerCase();
+                if (!v && /^(select|choose|pick|none|\-\-)/i.test(t)) return false;
+                return t.includes(target) || v.includes(target);
+            });
+        }
         
-        if (!option) {
+        if (!matchedOption) {
             console.log(`[Content]   ⚠️ No matching option found for: ${value}`);
             return { filled: false };
         }
         
-        element.value = option.value;
+        element.value = matchedOption.value;
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+        if (descriptor?.set) {
+            descriptor.set.call(element, matchedOption.value);
+        }
         element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new Event('input', { bubbles: true }));
         
-        console.log(`[Content]   ✅ Filled select with: ${option.text}`);
+        console.log(`[Content]   ✅ Filled select with: ${matchedOption.text}`);
         return { filled: true };
     } catch (error) {
         console.error('[Content] Error filling select:', error);
@@ -3069,22 +3340,58 @@ function fillSelect(element, value) {
  */
 function fillCheckboxOrRadio(element, value) {
     try {
-        // Check if label matches the value
-        const label = element.getAttribute('aria-label') || element.nextElementSibling?.textContent || '';
-        const shouldCheck = label.toLowerCase().includes(value.toLowerCase()) ||
-                           value.toLowerCase() === 'true' ||
-                           value.toLowerCase() === 'yes';
+        if (isElementAlreadyFilled(element)) return { filled: false, skipped: true };
+
+        const valStr = String(value).trim().toLowerCase();
+        const label = (
+            element.getAttribute('aria-label') || 
+            element.closest('label')?.textContent ||
+            element.nextElementSibling?.textContent || 
+            element.previousElementSibling?.textContent ||
+            element.value || 
+            ''
+        ).trim().toLowerCase();
         
         if (element.type === 'checkbox') {
+            let shouldCheck = false;
+            if (typeof value === 'boolean') {
+                shouldCheck = value;
+            } else if (['true', 'yes', '1', 'agree'].includes(valStr)) {
+                shouldCheck = true;
+            } else if (['false', 'no', '0', 'disagree'].includes(valStr)) {
+                shouldCheck = false;
+            } else {
+                shouldCheck = label.includes(valStr) || valStr.includes(label);
+            }
             element.checked = shouldCheck;
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new Event('click', { bubbles: true }));
+            return { filled: shouldCheck };
         } else if (element.type === 'radio') {
-            element.checked = shouldCheck;
+            // For radio button: ONLY check if this specific radio represents the desired answer!
+            let matches = false;
+            if (valStr === 'male' || valStr === 'm') {
+                matches = (label === 'male' || (label.startsWith('male') && !label.includes('female')));
+            } else if (valStr === 'female' || valStr === 'f') {
+                matches = (label === 'female' || label.startsWith('female'));
+            } else if (['yes', 'true', '1'].includes(valStr)) {
+                matches = (/^yes\b/i.test(label) || label === 'yes' || element.value.toLowerCase() === 'yes');
+            } else if (['no', 'false', '0'].includes(valStr)) {
+                matches = (/^no\b/i.test(label) || label === 'no' || element.value.toLowerCase() === 'no');
+            } else {
+                matches = (label === valStr || element.value.toLowerCase() === valStr || label.includes(valStr));
+            }
+            
+            if (matches) {
+                element.checked = true;
+                element.dispatchEvent(new Event('click', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                console.log(`[Content]   ✅ Selected radio: ${label || element.value}`);
+                return { filled: true };
+            }
+            return { filled: false };
         }
-        
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        console.log(`[Content]   ✅ Filled ${element.type}: ${shouldCheck ? 'checked' : 'unchecked'}`);
-        return { filled: shouldCheck };
+        return { filled: false };
     } catch (error) {
         console.error('[Content] Error filling checkbox/radio:', error);
         return { filled: false };

@@ -955,6 +955,15 @@ class FieldClassifier {
                 confidence: 0.95
             },
             
+            country_code: {
+                patterns: [
+                    'country code', 'dial code', 'dialing code', 'phone prefix',
+                    'calling code', 'isd', 'isd code', 'phone country code',
+                    'country dial code', 'telecom prefix'
+                ],
+                confidence: 0.95
+            },
+            
             phone: {
                 patterns: [
                     'phone', 'phone number', 'mobile', 'mobile number', 'telephone',
@@ -1054,6 +1063,15 @@ class FieldClassifier {
                     'former employer', 'last employer', 'past company', 'past employer'
                 ],
                 confidence: 0.85
+            },
+
+            ex_employee: {
+                patterns: [
+                    'ex-employee', 'ex employee', 'former employee', 'previously employed',
+                    'previously been employed', 'worked here before', 'previous employment with us',
+                    'have you ever worked for', 'have you previously worked', 'have you ever worked'
+                ],
+                confidence: 0.95
             },
             
             current_title: {
@@ -1211,6 +1229,15 @@ class FieldClassifier {
                     'months notice', 'serving notice', 'immediate joiner'
                 ],
                 confidence: 0.85
+            },
+
+            earliest_date: {
+                patterns: [
+                    'earliest start date', 'earliest date', 'when can you start',
+                    'start date', 'joining date', 'available from', 'earliest joining date',
+                    'availability date', 'date available', 'expected joining date'
+                ],
+                confidence: 0.95
             },
             
             // ==================== WORK PREFERENCES ====================
@@ -1549,13 +1576,21 @@ class FieldClassifier {
 
         for (const [intent, config] of Object.entries(this.intentPatterns)) {
             for (const pattern of config.patterns) {
-                const confidence = this.calculateSimilarity(label, pattern);
+                const rawConfidence = this.calculateSimilarity(label, pattern);
+                const score = rawConfidence * config.confidence;
                 
-                if (confidence > bestConfidence) {
-                    bestConfidence = confidence;
+                // Favor higher score or more specific (longer) pattern on ties
+                const isBetter = score > bestConfidence || (
+                    Math.abs(score - bestConfidence) < 0.001 &&
+                    bestMatch &&
+                    pattern.length > (bestMatch.matchedPattern?.length || 0)
+                );
+
+                if (isBetter) {
+                    bestConfidence = score;
                     bestMatch = {
                         intent,
-                        confidence: confidence * config.confidence,
+                        confidence: score,
                         matchedPattern: pattern
                     };
                 }
@@ -1621,7 +1656,59 @@ class IntelligentOptionMatcher {
 
         // Get user value from profile
         const userValue = this.getUserValue(semanticIntent.intent, profile);
-        
+        const intent = semanticIntent?.intent || '';
+        const label = (field.label || '').toLowerCase();
+
+        // 1. Gender Option Selection
+        if (intent === 'gender' || /\bgender\b|\bsex\b/i.test(label)) {
+            const userGen = String(userValue || profile.gender || 'Male').toLowerCase();
+            if (/male|man/i.test(userGen) && !/fe/i.test(userGen)) {
+                const opt = options.find(o => {
+                    const t = String(o.label || o.value || o || '').toLowerCase().trim();
+                    return /^(male|man|m)$/i.test(t) || (t.includes('male') && !t.includes('female'));
+                });
+                if (opt) return opt;
+            } else if (/female|woman/i.test(userGen)) {
+                const opt = options.find(o => {
+                    const t = String(o.label || o.value || o || '').toLowerCase().trim();
+                    return /^(female|woman|f)$/i.test(t) || t.includes('female');
+                });
+                if (opt) return opt;
+            }
+        }
+
+        // 2. Country Code Dropdown Selection
+        if (intent === 'country_code' || /country\s*code|dial\s*code|\bisd\b/i.test(label)) {
+            const code = String(userValue || profile.country_code || '+91');
+            const rawCode = code.replace(/^\+/, '');
+            const opt = options.find(o => {
+                const t = String(o.label || o.value || o || '').toLowerCase();
+                return t.includes(`+${rawCode}`) || t.includes(`(${rawCode})`) || t.includes(code) || t.includes('india');
+            });
+            if (opt) return opt;
+        }
+
+        // 3. Ex-Employee Option Selection (Default 'No' for ex-employee)
+        if (intent === 'ex_employee' || /ex[- ]employee|former\s*employee|previously\s*(?:been\s*)?(?:worked|employed)|ever\s*worked/i.test(label)) {
+            const opt = options.find(o => /^(no|false|never)$/i.test(String(o.label || o.value || o || '').trim()));
+            if (opt) return opt;
+        }
+
+        // 4. Notice Period & Earliest Date Options
+        if (intent === 'notice_period' || intent === 'earliest_date' || /notice|availability|start\s*date/i.test(label)) {
+            const userNotice = String(userValue || profile.notice_period || 'Immediately').toLowerCase();
+            const opt = options.find(o => {
+                const t = String(o.label || o.value || o || '').toLowerCase();
+                if (/immediate|now/i.test(userNotice) && /immediate|now|less\s*than/i.test(t)) return true;
+                if (/30\s*day|1\s*month/i.test(userNotice) && (/30\s*day/i.test(t) || /1\s*month/i.test(t))) return true;
+                if (/15\s*day|2\s*week/i.test(userNotice) && (/15\s*day/i.test(t) || /2\s*week/i.test(t))) return true;
+                if (/60\s*day|2\s*month/i.test(userNotice) && (/60\s*day/i.test(t) || /2\s*month/i.test(t))) return true;
+                if (/90\s*day|3\s*month/i.test(userNotice) && (/90\s*day/i.test(t) || /3\s*month/i.test(t))) return true;
+                return false;
+            });
+            if (opt) return opt;
+        }
+
         if (!userValue) {
             return null;
         }
@@ -1687,9 +1774,14 @@ class IntelligentOptionMatcher {
             skills: profile.skills,
             expected_salary: profile.expected_salary,
             notice_period: profile.notice_period,
+            earliest_date: profile.earliest_date || profile.notice_period,
             work_authorization: profile.work_authorization,
             work_environment: profile.work_environment,
-            preferred_location: profile.preferred_location
+            preferred_location: profile.preferred_location,
+            gender: profile.gender || 'Male',
+            country_code: profile.country_code || '+91',
+            street_address: profile.street_address || profile.address,
+            address_line_2: profile.address_line2 || profile.address_line_2 || ''
         };
 
         return mapping[intent] || null;

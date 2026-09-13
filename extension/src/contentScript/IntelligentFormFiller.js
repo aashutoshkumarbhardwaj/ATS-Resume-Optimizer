@@ -5,7 +5,10 @@
 
 class IntelligentFormFiller {
     constructor() {
-        this.engine = new ApplicationUnderstandingEngine();
+        const EngineClass = (typeof window !== 'undefined' && window.ApplicationUnderstandingEngine) || (typeof ApplicationUnderstandingEngine !== 'undefined' ? ApplicationUnderstandingEngine : null);
+        this.engine = EngineClass ? new EngineClass() : null;
+        const BrainClass = (typeof window !== 'undefined' && window.PersonalAgentBrain) || (typeof PersonalAgentBrain !== 'undefined' ? PersonalAgentBrain : null);
+        this.brain = BrainClass ? new BrainClass() : null;
         this.verificationEnabled = true;
         this.delayBetweenFields = 150; // ms
     }
@@ -17,8 +20,15 @@ class IntelligentFormFiller {
         console.log('[IFF] 🚀 Starting intelligent form fill...');
 
         try {
+            if (this.brain) {
+                await this.brain.init();
+                if (profile) {
+                    this.brain.profile = Object.assign({}, this.brain.profile, profile);
+                }
+            }
+
             // Step 1: Analyze application
-            const formStructure = await this.engine.analyzeApplication();
+            const formStructure = this.engine ? await this.engine.analyzeApplication() : { fields: [] };
             console.log('[IFF] 📋 Form analyzed:', formStructure);
 
             // Step 2: Save form structure to backend
@@ -39,7 +49,99 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Fill all fields in the form
+     * Check if a field is already filled by the user or pre-populated
+     */
+    isFieldAlreadyFilled(fieldData, element) {
+        if (!element) return false;
+
+        const type = fieldData?.type || element.type || element.tagName?.toLowerCase();
+
+        // 1. File inputs
+        if (type === 'file' || element.type === 'file') {
+            return !!(element.files && element.files.length > 0);
+        }
+
+        // 2. Radio buttons
+        if (type === 'radio' || element.type === 'radio') {
+            if (element.name) {
+                return !!document.querySelector(`input[type="radio"][name="${element.name}"]:checked`);
+            }
+            return !!element.checked;
+        }
+
+        // 3. Checkboxes
+        if (type === 'checkbox' || element.type === 'checkbox') {
+            return !!element.checked;
+        }
+
+        // 4. HTML <select> Element
+        if (element.tagName === 'SELECT') {
+            if (element.selectedIndex < 0) return false;
+            const opt = element.options[element.selectedIndex];
+            if (!opt) return false;
+            const text = (opt.text || opt.textContent || '').trim();
+            const val = (opt.value || '').trim();
+            if (!val && !text) return false;
+            const isPlaceholder = !val || /^(?:select|choose|pick|please\s*select|none|\-\-)/i.test(text);
+            return !isPlaceholder;
+        }
+
+        // 5. Custom dropdowns & ARIA comboboxes
+        if (type === 'custom-select' || (element.getAttribute && element.getAttribute('role') === 'combobox')) {
+            const ariaSelected = (typeof element.querySelector === 'function')
+                ? element.querySelector('[aria-selected="true"], [class*="singleValue"], .selected-option, [class*="value-container"]')
+                : null;
+            if (ariaSelected) {
+                const text = (ariaSelected.textContent || '').trim();
+                return text.length > 0 && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(text);
+            }
+            const innerText = (element.innerText || element.textContent || '').trim();
+            return innerText.length > 0 && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(innerText);
+        }
+
+        // 6. Contenteditable
+        if ((typeof element.hasAttribute === 'function' && element.hasAttribute('contenteditable')) || (element.getAttribute && element.getAttribute('role') === 'textbox')) {
+            const text = (element.innerText || element.textContent || '').trim();
+            return text.length > 0;
+        }
+
+        // 7. Text, email, tel, number, textarea, date
+        const val = (element.value || '').trim();
+        const placeholder = (element.placeholder || '').trim();
+        if (!val) return false;
+        if (placeholder && val.toLowerCase() === placeholder.toLowerCase()) return false;
+        return true;
+    }
+
+    /**
+     * Sort fields strictly by visual on-screen coordinates (top-to-bottom, then left-to-right)
+     */
+    sortFieldsSequentially(fields) {
+        if (!Array.isArray(fields) || fields.length <= 1) return fields;
+        const scrollY = (typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0);
+        const scrollX = (typeof window !== 'undefined' && typeof window.scrollX === 'number' ? window.scrollX : 0);
+
+        return [...fields].sort((a, b) => {
+            const elA = a.element || (a.id && typeof document !== 'undefined' ? document.getElementById(a.id) : null);
+            const elB = b.element || (b.id && typeof document !== 'undefined' ? document.getElementById(b.id) : null);
+            if (!elA || !elB) return 0;
+
+            const rectA = elA.getBoundingClientRect ? elA.getBoundingClientRect() : { top: 0, left: 0 };
+            const rectB = elB.getBoundingClientRect ? elB.getBoundingClientRect() : { top: 0, left: 0 };
+            const topA = (rectA.top || 0) + scrollY;
+            const topB = (rectB.top || 0) + scrollY;
+            const leftA = (rectA.left || 0) + scrollX;
+            const leftB = (rectB.left || 0) + scrollX;
+
+            if (Math.abs(topA - topB) > 8) {
+                return topA - topB;
+            }
+            return leftA - leftB;
+        });
+    }
+
+    /**
+     * Fill all fields in the form sequentially, skipping already filled fields
      */
     async fillAllFields(formStructure, profile, context) {
         const results = {
@@ -51,25 +153,30 @@ class IntelligentFormFiller {
             details: []
         };
 
-        for (const fieldData of formStructure.fields) {
-            try {
-                await this.wait(this.delayBetweenFields);
+        const sortedFields = this.sortFieldsSequentially(formStructure.fields);
 
-                // Skip if no semantic intent recognized
-                if (fieldData.semanticIntent.intent === 'unknown') {
+        for (const fieldData of sortedFields) {
+            try {
+                const element = fieldData.element;
+
+                // STRICT USER RULE: Never touch already filled data!
+                if (this.isFieldAlreadyFilled(fieldData, element)) {
                     results.skipped++;
                     results.details.push({
                         field: fieldData.label,
                         status: 'skipped',
-                        reason: 'Unknown intent'
+                        reason: 'Field already filled'
                     });
+                    console.log(`[IFF] ⏭️ Field already filled: "${fieldData.label}". Leaving as is.`);
                     continue;
                 }
 
-                // Get value to fill
+                await this.wait(this.delayBetweenFields);
+
+                // Get value to fill via PersonalAgentBrain or semantic mappings
                 const value = await this.getValueForField(fieldData, profile, context);
 
-                if (!value && value !== false && value !== 0) {
+                if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
                     results.skipped++;
                     results.details.push({
                         field: fieldData.label,
@@ -79,39 +186,35 @@ class IntelligentFormFiller {
                     continue;
                 }
 
-                // Fill the field
+                // Fill the field based on its type
                 const filled = await this.fillField(fieldData, value);
 
                 if (filled) {
-                    // Verify if enabled
-                    if (this.verificationEnabled) {
-                        const verified = await this.verifyField(fieldData, value);
-                        if (verified) {
-                            results.verified++;
-                        } else {
-                            console.warn('[IFF] ⚠️ Verification failed for:', fieldData.label);
-                            // Try filling again
-                            await this.fillField(fieldData, value);
-                        }
-                    }
-
                     results.filled++;
                     results.details.push({
                         field: fieldData.label,
-                        intent: fieldData.semanticIntent.intent,
-                        status: 'filled',
-                        value: this.truncateValue(value)
+                        status: 'success',
+                        value: typeof value === 'string' && value.length > 20 ? value.substring(0, 20) + '...' : value
                     });
+
+                    // Highlight filled field if helper exists
+                    if (typeof this.highlightField === 'function') {
+                        this.highlightField(element, 'success');
+                    }
                 } else {
                     results.failed++;
                     results.details.push({
                         field: fieldData.label,
                         status: 'failed',
-                        reason: 'Fill operation failed'
+                        reason: 'Fill operation returned false'
                     });
+                    if (typeof this.highlightField === 'function') {
+                        this.highlightField(element, 'error');
+                    }
                 }
+
             } catch (error) {
-                console.error('[IFF] ❌ Error filling field:', fieldData.label, error);
+                console.error(`[IFF] Error filling field "${fieldData.label}":`, error);
                 results.failed++;
                 results.details.push({
                     field: fieldData.label,
@@ -125,37 +228,66 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Get value for a field based on its semantic intent
+     * Get value for a field based on its semantic intent and Personal Agent Brain
      */
     async getValueForField(fieldData, profile, context) {
-        const { semanticIntent, options, type } = fieldData;
-        const intent = semanticIntent.intent;
+        // 1. First priority: Consult Personal Agent Brain (handles notice period, ex-employee, country code, Gemini)
+        if (this.brain) {
+            try {
+                const resolution = await this.brain.resolveAnswer(fieldData, context);
+                if (resolution && resolution.value !== null && resolution.value !== undefined && String(resolution.value).trim() !== '') {
+                    return resolution.value;
+                }
+            } catch (err) {
+                console.warn('[IFF] Brain resolution fallback:', err);
+            }
+        }
 
-        // For select/radio/checkbox with options, use intelligent matching
-        if (options && options.length > 0 && ['select', 'radio', 'custom-select'].includes(type)) {
+        const { semanticIntent, options, type } = fieldData;
+        const intent = semanticIntent?.intent;
+
+        // 2. For select/radio/checkbox with options, use intelligent matching
+        if (options && options.length > 0 && ['select', 'radio', 'custom-select'].includes(type) && this.engine?.optionMatcher) {
             const matchedOption = await this.engine.optionMatcher.findBestMatch(
                 fieldData,
                 profile,
                 context
             );
-            return matchedOption ? matchedOption.value : null;
+            if (matchedOption) return matchedOption.value || matchedOption.label;
         }
 
-        // For regular fields, get value from profile
-        return this.getProfileValue(intent, profile);
+        // 3. For regular fields, get value from profile mapping
+        const val = this.getProfileValue(intent, profile);
+        if (val !== null && val !== undefined) return val;
+
+        // 4. Fallback matching by field name / label
+        if (profile) {
+            const key = (fieldData.name || fieldData.label || '').toLowerCase();
+            if (key.includes('first') && profile.first_name) return profile.first_name;
+            if (key.includes('last') && profile.last_name) return profile.last_name;
+            if (key.includes('email') && profile.email) return profile.email;
+            if (key.includes('phone') && profile.phone) return profile.phone;
+        }
+
+        return null;
     }
 
     /**
      * Get value from profile based on intent
      */
     getProfileValue(intent, profile) {
+        if (!profile) return null;
         const mapping = {
             email: profile.email,
             full_name: profile.full_name || profile.name,
             first_name: profile.first_name,
             last_name: profile.last_name,
             phone: profile.phone,
-            address: profile.address,
+            country_code: profile.country_code || '+91',
+            gender: profile.gender || 'Male',
+            address: profile.address || profile.street_address,
+            street_address: profile.street_address || profile.address,
+            address_line_2: profile.address_line2 || profile.address_line_2 || '',
             city: profile.city,
             state: profile.state,
             zip: profile.zip,
@@ -169,6 +301,7 @@ class IntelligentFormFiller {
             skills: Array.isArray(profile.skills) ? profile.skills.join(', ') : profile.skills,
             expected_salary: profile.expected_salary,
             notice_period: profile.notice_period,
+            earliest_date: profile.earliest_date || profile.notice_period,
             work_authorization: profile.work_authorization,
             work_environment: profile.work_environment,
             preferred_location: profile.preferred_location,
@@ -255,7 +388,9 @@ class IntelligentFormFiller {
         }
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
-        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        if (typeof KeyboardEvent !== 'undefined') {
+            element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        }
         return true;
     }
 
@@ -284,23 +419,72 @@ class IntelligentFormFiller {
      */
     async fillSelect(element, value) {
         const valueStr = String(value).toLowerCase().trim();
+        let targetIndex = -1;
 
-        // Try exact value match
+        // Priority 1: Exact value or text match
         for (let i = 0; i < element.options.length; i++) {
-            if (element.options[i].value.toLowerCase() === valueStr) {
-                element.selectedIndex = i;
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
+            const optVal = element.options[i].value.toLowerCase().trim();
+            const optText = element.options[i].textContent.toLowerCase().trim();
+            if (optVal === valueStr || optText === valueStr) {
+                targetIndex = i;
+                break;
             }
         }
 
-        // Try label match
-        for (let i = 0; i < element.options.length; i++) {
-            if (element.options[i].textContent.toLowerCase().trim() === valueStr) {
-                element.selectedIndex = i;
-                element.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
+        // Priority 2: Gender specific match (never match female for male)
+        if (targetIndex === -1 && /male|man/i.test(valueStr) && !/fe/i.test(valueStr)) {
+            for (let i = 0; i < element.options.length; i++) {
+                const optText = element.options[i].textContent.toLowerCase().trim();
+                const optVal = element.options[i].value.toLowerCase().trim();
+                if (/^(male|man|m)$/i.test(optVal) || (/male/i.test(optText) && !/female/i.test(optText))) {
+                    targetIndex = i;
+                    break;
+                }
             }
+        } else if (targetIndex === -1 && /female|woman/i.test(valueStr)) {
+            for (let i = 0; i < element.options.length; i++) {
+                const optText = element.options[i].textContent.toLowerCase().trim();
+                const optVal = element.options[i].value.toLowerCase().trim();
+                if (/^(female|woman|f)$/i.test(optVal) || /female/i.test(optText)) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        }
+
+        // Priority 3: Country code match
+        if (targetIndex === -1 && (valueStr.includes('+91') || valueStr === '91' || valueStr.includes('india'))) {
+            for (let i = 0; i < element.options.length; i++) {
+                const fullText = (element.options[i].textContent + ' ' + element.options[i].value).toLowerCase();
+                if (fullText.includes('+91') || fullText.includes('india') || fullText.includes('(91)')) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        }
+
+        // Priority 4: Safe substring match
+        if (targetIndex === -1 && !/^(male|man|m|fe)$/i.test(valueStr)) {
+            for (let i = 0; i < element.options.length; i++) {
+                const optText = element.options[i].textContent.toLowerCase().trim();
+                if (optText.includes(valueStr) || (valueStr.length > 4 && valueStr.includes(optText))) {
+                    targetIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (targetIndex >= 0) {
+            element.selectedIndex = targetIndex;
+            try {
+                const selectSetter = (typeof window !== 'undefined' && window.HTMLSelectElement)
+                    ? Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+                    : null;
+                if (selectSetter) selectSetter.call(element, element.options[targetIndex].value);
+            } catch (e) {}
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
         }
 
         return false;
@@ -338,13 +522,30 @@ class IntelligentFormFiller {
             }
 
             // Fallback: find by text content
-            const options = document.querySelectorAll('[role="option"]');
-            for (const option of options) {
-                if (option.textContent.trim() === String(value).trim()) {
-                    option.click();
-                    await this.wait(100);
-                    return true;
-                }
+            const options = Array.from(document.querySelectorAll('[role="option"], .MuiMenuItem-root, .ant-select-item-option'));
+            const valueStr = String(value).toLowerCase().trim();
+
+            let matched = options.find(o => (o.textContent || '').trim().toLowerCase() === valueStr);
+            if (!matched && /male|man/i.test(valueStr) && !/fe/i.test(valueStr)) {
+                matched = options.find(o => {
+                    const t = (o.textContent || '').trim().toLowerCase();
+                    return (/^(male|man|m)$/i.test(t) || (/male/i.test(t) && !/female/i.test(t)));
+                });
+            } else if (!matched && /female|woman/i.test(valueStr)) {
+                matched = options.find(o => {
+                    const t = (o.textContent || '').trim().toLowerCase();
+                    return (/^(female|woman|f)$/i.test(t) || /female/i.test(t));
+                });
+            }
+
+            if (!matched && !/^(male|man|m|fe)$/i.test(valueStr)) {
+                matched = options.find(o => (o.textContent || '').toLowerCase().includes(valueStr));
+            }
+
+            if (matched) {
+                matched.click();
+                await this.wait(100);
+                return true;
             }
 
             // Close dropdown if no match
@@ -357,20 +558,60 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Fill radio button
+     * Fill radio button with accurate option matching
      */
     async fillRadio(element, value) {
         const name = element.name;
-        const radios = document.querySelectorAll(`input[type="radio"][name="${name}"]`);
-        
-        for (const radio of radios) {
-            if (radio.value === String(value) || this.extractLabel(radio).toLowerCase() === String(value).toLowerCase()) {
-                radio.checked = true;
-                radio.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }
+        let radios = [];
+        if (name) {
+            radios = Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`));
         }
-        
+        if (radios.length === 0) {
+            const container = (typeof element.closest === 'function' ? element.closest('fieldset, [role="radiogroup"], .form-group, .question') : null) || element.parentElement;
+            radios = container ? Array.from(container.querySelectorAll('input[type="radio"]')) : [element];
+        }
+
+        const valueStr = String(value).toLowerCase().trim();
+        const getLabel = (r) => {
+            let t = '';
+            if (r.id) {
+                const l = document.querySelector(`label[for="${r.id}"]`);
+                if (l) t = l.textContent;
+            }
+            if (!t && r.parentElement) t = r.parentElement.textContent;
+            return (t || r.value || '').toLowerCase().trim();
+        };
+
+        // 1. Exact match
+        let target = radios.find(r => (r.value || '').toLowerCase().trim() === valueStr || getLabel(r) === valueStr);
+
+        // 2. Gender match
+        if (!target && /male|man/i.test(valueStr) && !/fe/i.test(valueStr)) {
+            target = radios.find(r => /^(male|man|m)$/i.test(r.value) || (/male/i.test(getLabel(r)) && !/female/i.test(getLabel(r))));
+        } else if (!target && /female|woman/i.test(valueStr)) {
+            target = radios.find(r => /^(female|woman|f)$/i.test(r.value) || /female/i.test(getLabel(r)));
+        }
+
+        // 3. Yes/No match
+        if (!target && /^(yes|true|y)$/i.test(valueStr)) {
+            target = radios.find(r => /^(yes|true|y)$/i.test(r.value) || /^(yes|true|y)$/i.test(getLabel(r)));
+        } else if (!target && /^(no|false|n)$/i.test(valueStr)) {
+            target = radios.find(r => /^(no|false|n)$/i.test(r.value) || /^(no|false|n)$/i.test(getLabel(r)));
+        }
+
+        // 4. Substring
+        if (!target && valueStr.length > 2) {
+            target = radios.find(r => getLabel(r).includes(valueStr) || valueStr.includes(getLabel(r)));
+        }
+
+        if (target) {
+            target.checked = true;
+            target.click();
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+
         return false;
     }
 
