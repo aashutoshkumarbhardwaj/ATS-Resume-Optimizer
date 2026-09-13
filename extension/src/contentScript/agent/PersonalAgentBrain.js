@@ -33,34 +33,38 @@ class PersonalAgentBrain {
         this.resumeData = {};
         this.resumeText = '';
         this.aiMemory = [];
+        this.activePersona = null;
+        this.answerCache = new Map();
         this.isInitialized = false;
     }
 
     /**
      * Initialize profile data, memory, and LLM configuration
-     * Aggregates data from ALL database, session, and local storage sources:
-     * - jobOrbitSession (authoritative session from Job Orbit login)
-     * - jobOrbitSyncData (synced profile, resumes, answers from backend DB)
-     * - autofillProfile (extension popup profile)
-     * - currentProfile, user_profile, candidate_profile
-     * - parsedResume, uploadedResume, resume
-     * - aiAnswers, ai_memory
+     * Uses targeted storage reads to minimize memory footprint and latency.
      */
     async init() {
         try {
-            // Step 1: Read all keys from local storage
+            const targetKeys = [
+                'jobOrbitSession', 'jobOrbitSyncData', 'autofillProfile',
+                'userProfile', 'currentProfile', 'profile', 'user_profile', 'candidate_profile',
+                'parsedResume', 'uploadedResume', 'resume', 'default_resume',
+                'ai_memory', 'aiAnswers', 'activePersona', 'personas',
+                'geminiApiKey', 'groqApiKey', 'llmProvider'
+            ];
+
+            // Step 1: Read targeted keys from local storage
             const localData = await new Promise(resolve => {
                 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                    chrome.storage.local.get(null, resolve);
+                    chrome.storage.local.get(targetKeys, resolve);
                 } else {
                     resolve({});
                 }
             });
 
-            // Step 2: Read sync storage (Job Orbit session or synced profiles)
+            // Step 2: Read targeted sync storage
             const syncData = await new Promise(resolve => {
                 if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-                    chrome.storage.sync.get(null, resolve);
+                    chrome.storage.sync.get(['jobOrbitSession', 'autofillProfile', 'activePersona'], resolve);
                 } else {
                     resolve({});
                 }
@@ -318,10 +322,20 @@ class PersonalAgentBrain {
         const rawLabel = fieldData.label || fieldData.name || '';
         const cleanLabel = this.cleanQuestionLabel(rawLabel);
         const intent = fieldData.semanticIntent?.intent || 'unknown';
+        const cacheKey = (cleanLabel || rawLabel).toLowerCase().trim();
+
+        // 0. Level 0: Instant Local Answer Cache (<5ms response time, zero network calls)
+        if (cacheKey && this.answerCache.has(cacheKey)) {
+            const cached = this.answerCache.get(cacheKey);
+            if (cached && String(cached).trim() !== '') {
+                return { value: cached, source: 'local_qa_cache' };
+            }
+        }
 
         // 1. Level 1: Deterministic Exact Match (from unified database/profile)
         const deterministicVal = this.getDeterministicValue(rawLabel, intent, fieldData);
         if (deterministicVal !== null && deterministicVal !== undefined && String(deterministicVal).trim() !== '') {
+            if (cacheKey) this.answerCache.set(cacheKey, deterministicVal);
             return { value: deterministicVal, source: 'deterministic_profile' };
         }
 
@@ -329,6 +343,7 @@ class PersonalAgentBrain {
         if (this.contextGraphEngine) {
             const graphMatch = this.contextGraphEngine.findBestAnswer(cleanLabel || rawLabel, intent);
             if (graphMatch && graphMatch.answer) {
+                if (cacheKey) this.answerCache.set(cacheKey, graphMatch.answer);
                 return { value: graphMatch.answer, source: 'user_context_graph' };
             }
         }
@@ -344,6 +359,7 @@ class PersonalAgentBrain {
         // 3. Level 3: Check AI Memory / Previously Answered Questions from DB (protected against boilerplate false positives)
         const memoryAnswer = this.findInMemory(cleanLabel || rawLabel);
         if (memoryAnswer) {
+            if (cacheKey) this.answerCache.set(cacheKey, memoryAnswer);
             return { value: memoryAnswer, source: 'ai_memory' };
         }
 
@@ -354,6 +370,7 @@ class PersonalAgentBrain {
             try {
                 const smartRes = SmartEngine.generate(cleanLabel, this.resumeData, this.profile);
                 if (smartRes && smartRes.answer && smartRes.confidence >= 75) {
+                    if (cacheKey) this.answerCache.set(cacheKey, smartRes.answer);
                     return { value: smartRes.answer, source: 'smart_answer_rag' };
                 }
             } catch (err) {
@@ -364,6 +381,7 @@ class PersonalAgentBrain {
         // 5. Level 5: Semantic Understanding & LLM Reasoning (User-requested LLM fallback)
         const semanticOrLLMAnswer = await this.matchWithSemanticOrLLM(fieldData, cleanLabel || rawLabel, context);
         if (semanticOrLLMAnswer && semanticOrLLMAnswer.value) {
+            if (cacheKey) this.answerCache.set(cacheKey, semanticOrLLMAnswer.value);
             return semanticOrLLMAnswer;
         }
 

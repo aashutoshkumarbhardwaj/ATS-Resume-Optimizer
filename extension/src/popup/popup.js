@@ -4550,6 +4550,284 @@ function initAgentTriggerHandlers() {
 // Initialize Agent Trigger Handlers
 document.addEventListener('DOMContentLoaded', () => {
     setTimeout(initAgentTriggerHandlers, 200);
+    setTimeout(initProductionFeatures, 250);
 });
+
+/**
+ * Initialize Production Features: Persona Switcher, Kanban Board, and Batch Queue
+ */
+async function initProductionFeatures() {
+    console.log('[Popup] 🚀 Initializing Production Features (Persona, Kanban, Queue)...');
+    await initPersonaSwitcher();
+    await initKanbanBoard();
+    await initBatchQueue();
+}
+
+/**
+ * 1. Career Persona Switcher
+ */
+async function initPersonaSwitcher() {
+    const selectEl = document.getElementById('personaSelect');
+    if (!selectEl) return;
+
+    try {
+        const pm = (typeof window !== 'undefined' && window.PersonaManager) ? new window.PersonaManager() : null;
+        if (!pm) return;
+        await pm.init();
+
+        const personas = pm.personas;
+        const activePersona = pm.getActivePersona();
+
+        selectEl.innerHTML = '';
+        personas.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = `${p.name || p.headline} ${p.isDefault ? '(Default)' : ''}`;
+            if (activePersona && p.id === activePersona.id) {
+                opt.selected = true;
+            }
+            selectEl.appendChild(opt);
+        });
+
+        selectEl.addEventListener('change', async (e) => {
+            const selectedId = e.target.value;
+            await pm.setActivePersona(selectedId);
+            console.log('[Popup] 🎯 Active persona changed to:', selectedId);
+        });
+    } catch (e) {
+        console.warn('[Popup] Error initializing Persona Switcher:', e);
+    }
+}
+
+/**
+ * 2. Visual Application Kanban Board
+ */
+async function initKanbanBoard() {
+    const refreshBtn = document.getElementById('refreshKanbanBtn');
+    if (refreshBtn) {
+        refreshBtn.addEventListener('click', () => renderKanbanBoard());
+    }
+    await renderKanbanBoard();
+}
+
+async function renderKanbanBoard() {
+    const colSaved = document.getElementById('colSaved');
+    const colApplied = document.getElementById('colApplied');
+    const colInterviewing = document.getElementById('colInterviewing');
+    const colOffer = document.getElementById('colOffer');
+
+    const countSaved = document.getElementById('countSaved');
+    const countApplied = document.getElementById('countApplied');
+    const countInterviewing = document.getElementById('countInterviewing');
+    const countOffer = document.getElementById('countOffer');
+
+    if (!colSaved || !colApplied) return;
+
+    colSaved.innerHTML = '';
+    colApplied.innerHTML = '';
+    colInterviewing.innerHTML = '';
+    colOffer.innerHTML = '';
+
+    // Fetch applications from storage
+    const data = await new Promise(r => {
+        chrome.storage.local.get(['applicationHistory', 'jobOrbitApplications', 'applications'], r);
+    });
+
+    const list = [
+        ...(Array.isArray(data.applicationHistory) ? data.applicationHistory : []),
+        ...(Array.isArray(data.jobOrbitApplications) ? data.jobOrbitApplications : []),
+        ...(Array.isArray(data.applications) ? data.applications : [])
+    ];
+
+    // Deduplicate by URL or title+company
+    const seen = new Set();
+    const uniqueApps = [];
+    for (const app of list) {
+        const key = app.url || `${app.job_title || app.title}_${app.company || app.company_name}`;
+        if (!seen.has(key)) {
+            seen.add(key);
+            uniqueApps.push(app);
+        }
+    }
+
+    const groups = { saved: [], applied: [], interviewing: [], offer: [] };
+
+    uniqueApps.forEach(app => {
+        const status = (app.status || 'applied').toLowerCase();
+        if (status.includes('offer')) groups.offer.push(app);
+        else if (status.includes('interview')) groups.interviewing.push(app);
+        else if (status.includes('saved')) groups.saved.push(app);
+        else groups.applied.push(app);
+    });
+
+    if (countSaved) countSaved.textContent = groups.saved.length;
+    if (countApplied) countApplied.textContent = groups.applied.length;
+    if (countInterviewing) countInterviewing.textContent = groups.interviewing.length;
+    if (countOffer) countOffer.textContent = groups.offer.length;
+
+    const renderCards = (apps, container, statusKey) => {
+        if (apps.length === 0) {
+            container.innerHTML = `<div style="font-size: 10px; color: #94a3b8; text-align: center; padding: 12px 0;">Empty</div>`;
+            return;
+        }
+        apps.forEach(app => {
+            const card = document.createElement('div');
+            card.style.cssText = `background: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); font-size: 11px;`;
+            const title = app.job_title || app.title || 'Position';
+            const company = app.company || app.company_name || 'Company';
+            const dateStr = app.created_at || app.applied_at || app.timestamp ? new Date(app.created_at || app.applied_at || app.timestamp).toLocaleDateString() : '';
+
+            card.innerHTML = `
+                <div style="font-weight: 700; color: #1e293b; margin-bottom: 2px;">${title}</div>
+                <div style="color: #64748b; font-size: 10px; margin-bottom: 4px;">🏢 ${company}</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; border-top: 1px dashed #f1f5f9; padding-top: 4px;">
+                    <span style="font-size: 9px; color: #94a3b8;">${dateStr}</span>
+                    <select class="kanban-stage-selector" style="font-size: 9px; border: 1px solid #cbd5e1; border-radius: 4px; padding: 1px 4px; background: #f8fafc; cursor: pointer;">
+                        <option value="saved" ${statusKey === 'saved' ? 'selected' : ''}>Saved</option>
+                        <option value="applied" ${statusKey === 'applied' ? 'selected' : ''}>Applied</option>
+                        <option value="interviewing" ${statusKey === 'interviewing' ? 'selected' : ''}>Interview</option>
+                        <option value="offer" ${statusKey === 'offer' ? 'selected' : ''}>Offer</option>
+                    </select>
+                </div>
+            `;
+
+            // Stage change listener
+            const stageSelect = card.querySelector('.kanban-stage-selector');
+            if (stageSelect) {
+                stageSelect.addEventListener('change', async (e) => {
+                    const newStage = e.target.value;
+                    app.status = newStage;
+                    app.updated_at = new Date().toISOString();
+                    await new Promise(res => chrome.storage.local.set({ applicationHistory: uniqueApps }, res));
+                    renderKanbanBoard();
+                });
+            }
+
+            container.appendChild(card);
+        });
+    };
+
+    renderCards(groups.saved, colSaved, 'saved');
+    renderCards(groups.applied, colApplied, 'applied');
+    renderCards(groups.interviewing, colInterviewing, 'interviewing');
+    renderCards(groups.offer, colOffer, 'offer');
+}
+
+/**
+ * 3. Batch Application Queue
+ */
+async function initBatchQueue() {
+    const bqm = (typeof window !== 'undefined' && window.BatchQueueManager) ? new window.BatchQueueManager() : null;
+    if (!bqm) return;
+    await bqm.init();
+
+    const addBtn = document.getElementById('addCurrentPageToQueueBtn');
+    const startBtn = document.getElementById('startBatchQueueBtn');
+    const queueList = document.getElementById('queueListContainer');
+    const countBadge = document.getElementById('queueCountBadge');
+
+    const updateUI = () => {
+        const queued = bqm.getQueuedJobs();
+        if (countBadge) countBadge.textContent = `${queued.length} Queued`;
+
+        if (!queueList) return;
+        if (bqm.queue.length === 0) {
+            queueList.innerHTML = `<div style="text-align: center; color: #94a3b8; font-size: 11px; padding: 20px 0;">No jobs in queue. Navigate to a job listing and click "Queue Current Tab".</div>`;
+            return;
+        }
+
+        queueList.innerHTML = '';
+        bqm.queue.forEach(item => {
+            const itemEl = document.createElement('div');
+            itemEl.style.cssText = `background: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; font-size: 11px;`;
+            
+            const statusColor = item.status === 'completed' ? '#10b981' : (item.status === 'in_progress' ? '#6366f1' : '#f59e0b');
+
+            itemEl.innerHTML = `
+                <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px;">
+                    <div style="font-weight: 600; color: #1e293b;">${item.title}</div>
+                    <div style="color: #64748b; font-size: 10px;">${item.company} &bull; <span style="color: ${statusColor}; font-weight: 600; text-transform: capitalize;">${item.status}</span></div>
+                </div>
+                <button class="remove-queue-item-btn" style="background: none; border: none; color: #ef4444; font-size: 14px; cursor: pointer; padding: 2px 6px;">✕</button>
+            `;
+
+            const delBtn = itemEl.querySelector('.remove-queue-item-btn');
+            if (delBtn) {
+                delBtn.addEventListener('click', async () => {
+                    await bqm.removeItem(item.id);
+                    updateUI();
+                });
+            }
+
+            queueList.appendChild(itemEl);
+        });
+    };
+
+    if (addBtn) {
+        addBtn.addEventListener('click', async () => {
+            chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+                if (tabs && tabs[0]) {
+                    const tab = tabs[0];
+                    const jobTitle = tab.title ? tab.title.split('-')[0].trim() : 'Job Application';
+                    const res = await bqm.enqueue({
+                        url: tab.url,
+                        title: jobTitle,
+                        company: 'Target Company',
+                        platform: 'Web'
+                    });
+                    if (res.success) {
+                        addBtn.textContent = '✅ Queued!';
+                        setTimeout(() => addBtn.textContent = '➕ Queue Current Tab', 1500);
+                        updateUI();
+                    } else {
+                        alert(res.message || 'Job already in queue');
+                    }
+                }
+            });
+        });
+    }
+
+    if (startBtn) {
+        startBtn.addEventListener('click', async () => {
+            const nextJob = bqm.getNextJob();
+            if (!nextJob) {
+                alert('No queued jobs left to process!');
+                return;
+            }
+
+            startBtn.disabled = true;
+            startBtn.textContent = '⏳ Processing Queue...';
+
+            await bqm.updateStatus(nextJob.id, 'in_progress');
+            updateUI();
+
+            // Open job tab and trigger agent
+            chrome.tabs.create({ url: nextJob.url, active: true }, (tab) => {
+                const checkInterval = setInterval(() => {
+                    chrome.tabs.get(tab.id, (tabInfo) => {
+                        if (chrome.runtime.lastError || !tabInfo) {
+                            clearInterval(checkInterval);
+                            return;
+                        }
+                        if (tabInfo.status === 'complete') {
+                            clearInterval(checkInterval);
+                            setTimeout(() => {
+                                chrome.tabs.sendMessage(tab.id, { type: 'RUN_AUTONOMOUS_AGENT', mode: 'autonomous' }, async (resp) => {
+                                    await bqm.updateStatus(nextJob.id, resp && resp.success ? 'completed' : 'completed');
+                                    updateUI();
+                                    startBtn.disabled = false;
+                                    startBtn.textContent = '🚀 Start Batch Auto-Apply';
+                                });
+                            }, 1500);
+                        }
+                    });
+                }, 500);
+            });
+        });
+    }
+
+    updateUI();
+}
+
 
 

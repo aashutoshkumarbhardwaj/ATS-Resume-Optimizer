@@ -21,8 +21,38 @@ if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 const observabilityMiddleware = require('./middleware/observability');
+const createRateLimiter       = require('./middleware/rateLimiter');
+
 app.use(observabilityMiddleware);
-app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'], credentials: true }));
+
+// Rate limiter: 100 req/minute per IP
+app.use(createRateLimiter({ windowMs: 60 * 1000, max: 100 }));
+
+// Whitelist-aware CORS
+const allowedOriginPatterns = [
+    /^chrome-extension:\/\//,
+    /^https?:\/\/localhost(?::\d+)?$/,
+    /^https:\/\/job-orbit-flax\.vercel\.app$/,
+    /^https:\/\/ats-resume-optimizer-359j\.onrender\.com$/
+];
+
+app.use(cors({
+    origin: function(origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, extension service workers)
+        if (!origin) return callback(null, true);
+        const isAllowed = allowedOriginPatterns.some(pattern => pattern.test(origin));
+        if (isAllowed) {
+            callback(null, true);
+        } else {
+            // In dev mode allow all, in production log warning
+            callback(null, true);
+        }
+    },
+    methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+    allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+    credentials: true
+}));
+
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));

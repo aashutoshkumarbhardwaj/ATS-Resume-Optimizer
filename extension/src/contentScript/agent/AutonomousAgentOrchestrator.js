@@ -18,7 +18,19 @@ class AutonomousAgentOrchestrator {
         this.aue = AUEClass ? new AUEClass() : null;
         this.isRunning = false;
         this.isPaused = false;
+        this.state = 'IDLE'; // 'IDLE' | 'PERCEIVING' | 'INSPECTING' | 'FILLING' | 'AWAITING_INPUT' | 'SUBMITTING' | 'COMPLETED' | 'STOPPED'
         this.stats = { filled: 0, skipped: 0, failed: 0, total: 0 };
+    }
+
+    /**
+     * Formal Finite State Machine (FSM) state transition
+     */
+    setState(newState, statusText = null, icon = '🤖') {
+        this.state = newState;
+        console.log(`[AgentOrchestrator] 🔄 State -> ${newState}${statusText ? ` (${statusText})` : ''}`);
+        if (statusText && this.cursor && typeof this.cursor.setStatus === 'function') {
+            this.cursor.setStatus(statusText, icon, newState === 'AWAITING_INPUT' ? 'asking' : (newState === 'COMPLETED' ? 'idle' : 'moving'));
+        }
     }
 
     /**
@@ -1481,6 +1493,7 @@ class AutonomousAgentOrchestrator {
 
     async stop(clearSession = true) {
         this.isRunning = false;
+        this.setState('STOPPED');
         if (this.beforeUnloadHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
             window.removeEventListener('beforeunload', this.beforeUnloadHandler);
             this.beforeUnloadHandler = null;

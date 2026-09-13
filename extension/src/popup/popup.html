@@ -16,11 +16,24 @@
             <h1>Resume Optimizer</h1>
         </div>
 
+        <!-- Career Persona Quick Switcher -->
+        <div id="personaBar" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; background: #1e1b2e; border-bottom: 1px solid rgba(139, 92, 246, 0.2); font-size: 11px; color: #e2e8f0;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span>🎯</span>
+                <strong style="color: #c4b5fd;">Active Persona:</strong>
+            </div>
+            <select id="personaSelect" style="background: #2d264f; color: #ffffff; border: 1px solid #6d28d9; border-radius: 4px; padding: 2px 8px; font-size: 11px; outline: none; cursor: pointer;">
+                <option value="persona_default">Software Engineer</option>
+            </select>
+        </div>
+
         <!-- Tab Navigation -->
         <div class="tabs">
             <button class="tab-btn active" data-tab="home">🏠 Home</button>
             <button class="tab-btn" data-tab="resume">📝 Resume</button>
             <button class="tab-btn" data-tab="autofill">⚡ Autofill</button>
+            <button class="tab-btn" data-tab="kanban">📊 Kanban</button>
+            <button class="tab-btn" data-tab="queue">📑 Queue</button>
             <button class="tab-btn" data-tab="ai">💡 Answers</button>
             <button class="tab-btn" data-tab="account">⚙️ Settings</button>
         </div>
@@ -766,6 +779,83 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Kanban Board Tab -->
+            <div id="kanbanTab" class="tab-content">
+                <div class="panel">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="margin: 0;">📊 Application Kanban</h3>
+                        <button id="refreshKanbanBtn" class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;">🔄 Refresh</button>
+                    </div>
+                    <p style="font-size: 11px; color: #64748b; margin-bottom: 12px;">Track your job applications across each interview stage.</p>
+
+                    <!-- Kanban Grid (4 columns) -->
+                    <div class="kanban-board-container" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <!-- Saved Column -->
+                        <div class="kanban-col" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #475569; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span>📌 Saved</span>
+                                <span id="countSaved" style="background: #cbd5e1; border-radius: 10px; padding: 1px 6px; font-size: 10px;">0</span>
+                            </div>
+                            <div id="colSaved" class="kanban-cards-list" style="min-height: 80px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+
+                        <!-- Applied Column -->
+                        <div class="kanban-col" style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 10px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #166534; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span>🚀 Applied</span>
+                                <span id="countApplied" style="background: #86efac; border-radius: 10px; padding: 1px 6px; font-size: 10px;">0</span>
+                            </div>
+                            <div id="colApplied" class="kanban-cards-list" style="min-height: 80px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+
+                        <!-- Interviewing Column -->
+                        <div class="kanban-col" style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #1e40af; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span>💬 Interviewing</span>
+                                <span id="countInterviewing" style="background: #93c5fd; border-radius: 10px; padding: 1px 6px; font-size: 10px;">0</span>
+                            </div>
+                            <div id="colInterviewing" class="kanban-cards-list" style="min-height: 80px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+
+                        <!-- Offer Column -->
+                        <div class="kanban-col" style="background: #faf5ff; border: 1px solid #e9d5ff; border-radius: 8px; padding: 10px;">
+                            <div style="font-size: 11px; font-weight: 700; color: #6b21a8; margin-bottom: 8px; display: flex; justify-content: space-between;">
+                                <span>🎉 Offer</span>
+                                <span id="countOffer" style="background: #d8b4fe; border-radius: 10px; padding: 1px 6px; font-size: 10px;">0</span>
+                            </div>
+                            <div id="colOffer" class="kanban-cards-list" style="min-height: 80px; display: flex; flex-direction: column; gap: 6px;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Apply Queue Tab -->
+            <div id="queueTab" class="tab-content">
+                <div class="panel">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="margin: 0;">📑 Batch Apply Queue</h3>
+                        <button id="addCurrentPageToQueueBtn" class="btn btn-primary" style="padding: 4px 8px; font-size: 11px;">➕ Queue Current Tab</button>
+                    </div>
+                    <p style="font-size: 11px; color: #64748b; margin-bottom: 12px;">
+                        Queue multiple job listings from LinkedIn, Indeed, or company sites. The agent will apply with randomized human delays (15–30s) to avoid bot detection.
+                    </p>
+
+                    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <span style="font-size: 12px; font-weight: 600;">Queue Status:</span>
+                            <span id="queueCountBadge" style="font-size: 11px; background: #6366f1; color: white; padding: 2px 8px; border-radius: 10px;">0 Queued</span>
+                        </div>
+                        <button id="startBatchQueueBtn" class="btn btn-primary" style="width: 100%; padding: 8px 12px; font-size: 12px; font-weight: 600;">
+                            🚀 Start Batch Auto-Apply
+                        </button>
+                    </div>
+
+                    <div id="queueListContainer" style="max-height: 250px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                        <div style="text-align: center; color: #94a3b8; font-size: 11px; padding: 20px 0;">No jobs in queue. Navigate to a job listing and click "Queue Current Tab".</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="footer">
@@ -779,7 +869,10 @@
     <script src="../utils/SessionManager.js"></script>
     <script src="../utils/ProfileSyncManager.js"></script>
     <script src="../utils/DataSyncManager.js"></script>
+    <script src="../utils/cryptoSecurity.js"></script>
     <script src="../utils/smartAnswerEngine.js"></script>
+    <script src="../contentScript/agent/PersonaManager.js"></script>
+    <script src="../contentScript/agent/BatchQueueManager.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>
