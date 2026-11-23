@@ -38,8 +38,8 @@ router.get('/suggestions', ResumeController.getSuggestions);
 // Optimize resume
 router.post('/optimize', ResumeController.optimizeResume);
 
-// Parse resume
-router.post('/parse', ResumeController.parseResume);
+// Parse resume (supports file upload or raw text)
+router.post('/parse', upload.single('file'), ResumeController.parseResume);
 
 /**
  * POST /api/resume/improve

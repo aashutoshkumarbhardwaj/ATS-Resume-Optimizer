@@ -190,16 +190,47 @@ class IntelligentFormFiller {
                 const filled = await this.fillField(fieldData, value);
 
                 if (filled) {
-                    results.filled++;
-                    results.details.push({
-                        field: fieldData.label,
-                        status: 'success',
-                        value: typeof value === 'string' && value.length > 20 ? value.substring(0, 20) + '...' : value
-                    });
+                    // Closed-loop Verification & Self-Correction (Claude in Chrome pattern)
+                    let isVerified = true;
+                    let verificationDetails = null;
 
-                    // Highlight filled field if helper exists
-                    if (typeof this.highlightField === 'function') {
-                        this.highlightField(element, 'success');
+                    if (this.verificationEnabled) {
+                        verificationDetails = await this.verifyField(fieldData, element, value);
+                        if (!verificationDetails.verified) {
+                            console.warn(`[IFF] ⚠️ Initial verification failed for "${fieldData.label}". Initiating self-correction...`);
+                            const correction = await this.selfCorrectField(fieldData, element, value, verificationDetails);
+                            isVerified = correction.verified;
+                            if (isVerified) {
+                                console.log(`[IFF] 🎯 Self-correction succeeded for "${fieldData.label}"!`);
+                            }
+                        }
+                    }
+
+                    if (isVerified) {
+                        results.filled++;
+                        results.verified = (results.verified || 0) + 1;
+                        results.details.push({
+                            field: fieldData.label,
+                            status: 'success',
+                            verified: true,
+                            value: typeof value === 'string' && value.length > 20 ? value.substring(0, 20) + '...' : value
+                        });
+
+                        // Highlight filled field if helper exists
+                        if (typeof this.highlightField === 'function') {
+                            this.highlightField(element, 'success');
+                        }
+                    } else {
+                        results.failed++;
+                        results.details.push({
+                            field: fieldData.label,
+                            status: 'failed',
+                            verified: false,
+                            reason: verificationDetails?.errorReason || 'Value rejected by form validation'
+                        });
+                        if (typeof this.highlightField === 'function') {
+                            this.highlightField(element, 'error');
+                        }
                     }
                 } else {
                     results.failed++;
@@ -372,12 +403,27 @@ class IntelligentFormFiller {
     }
 
     /**
-     * Fill text input (supporting React, Vue, Angular synthetic event dispatching)
+     * Fill text input with React/Vue/Angular fiber-aware prototype setter and full trusted event lifecycle.
      */
     async fillTextInput(element, value) {
         const strVal = String(value);
+
+        // 1. Pre-interaction: Focus and pointer sequence
         try {
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+            if (typeof element.focus === 'function') element.focus();
+            if (typeof PointerEvent !== 'undefined') {
+                element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+            }
+            if (typeof MouseEvent !== 'undefined') {
+                element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            }
+        } catch (e) {}
+
+        // 2. Set value using native prototype descriptor to bypass framework wrappers
+        try {
+            const proto = Object.getPrototypeOf(element);
+            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+                || (typeof window !== 'undefined' && window.HTMLInputElement && Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set);
             if (nativeSetter) {
                 nativeSetter.call(element, strVal);
             } else {
@@ -386,21 +432,46 @@ class IntelligentFormFiller {
         } catch (e) {
             element.value = strVal;
         }
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        if (typeof KeyboardEvent !== 'undefined') {
-            element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-        }
+
+        // 3. Dispatch full event cycle (React, Vue, Angular, Workday validators)
+        try {
+            if (typeof KeyboardEvent !== 'undefined') {
+                element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Process' }));
+                element.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: 'Process' }));
+            }
+            if (typeof InputEvent !== 'undefined') {
+                element.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: strVal }));
+            } else {
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            if (typeof KeyboardEvent !== 'undefined') {
+                element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Process' }));
+            }
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            // Trigger blur so framework validation cleans up or formats
+            element.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (e) {}
+
         return true;
     }
 
     /**
-     * Fill textarea (supporting React, Vue synthetic events)
+     * Fill textarea (supporting React, Vue synthetic events and full event cycle)
      */
     async fillTextarea(element, value) {
         const strVal = String(value);
+
         try {
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (typeof element.focus === 'function') element.focus();
+            if (typeof PointerEvent !== 'undefined') {
+                element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+            }
+        } catch (e) {}
+
+        try {
+            const proto = Object.getPrototypeOf(element);
+            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+                || (typeof window !== 'undefined' && window.HTMLTextAreaElement && Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set);
             if (nativeSetter) {
                 nativeSetter.call(element, strVal);
             } else {
@@ -409,9 +480,151 @@ class IntelligentFormFiller {
         } catch (e) {
             element.value = strVal;
         }
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
+
+        try {
+            if (typeof InputEvent !== 'undefined') {
+                element.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText', data: strVal }));
+            } else {
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (e) {}
+
         return true;
+    }
+
+    /**
+     * Closed-loop verification of field state after fill operation (Claude in Chrome verify step).
+     * Supports both (fieldData, element, expectedValue) and (fieldData, expectedValue) signatures.
+     */
+    async verifyField(fieldData, elementOrExpectedValue, maybeExpectedValue) {
+        let element = fieldData?.element;
+        let expectedValue = elementOrExpectedValue;
+
+        if (maybeExpectedValue !== undefined) {
+            element = elementOrExpectedValue;
+            expectedValue = maybeExpectedValue;
+        } else if (!element && fieldData?.id && typeof document !== 'undefined') {
+            element = document.getElementById(fieldData.id);
+        }
+
+        if (!element) return { verified: true, actualValue: null };
+
+        // Wait a brief tick for async validations & mutation observers to settle
+        await this.wait(60);
+
+        const type = fieldData.type || element.type || element.tagName.toLowerCase();
+        let actualValue = '';
+        let isMatching = false;
+        const expectedStr = String(expectedValue).trim().toLowerCase();
+
+        // 1. Read actual value based on field type
+        if (type === 'checkbox') {
+            actualValue = !!element.checked;
+            isMatching = actualValue === !!expectedValue;
+        } else if (type === 'radio') {
+            const name = element.name;
+            const checkedRadio = name ? document.querySelector(`input[type="radio"][name="${name}"]:checked`) : (element.checked ? element : null);
+            actualValue = checkedRadio ? (checkedRadio.value || '').trim().toLowerCase() : '';
+            isMatching = actualValue.length > 0;
+        } else if (type === 'select') {
+            const opt = element.options ? element.options[element.selectedIndex] : null;
+            actualValue = opt ? (opt.value || opt.textContent || '').trim().toLowerCase() : '';
+            isMatching = actualValue === expectedStr || (opt && opt.textContent.toLowerCase().includes(expectedStr));
+        } else if (type === 'contenteditable') {
+            actualValue = (element.innerText || element.textContent || '').trim().toLowerCase();
+            isMatching = actualValue.length > 0;
+        } else {
+            actualValue = (element.value || '').trim().toLowerCase();
+            isMatching = actualValue === expectedStr || actualValue.includes(expectedStr) || expectedStr.includes(actualValue);
+        }
+
+        // 2. Check for validation errors on element or adjacent DOM container
+        let hasError = false;
+        let errorReason = '';
+
+        if (element.getAttribute && element.getAttribute('aria-invalid') === 'true') {
+            hasError = true;
+            errorReason = 'Element marked aria-invalid="true"';
+        }
+
+        const container = (typeof element.closest === 'function') 
+            ? element.closest('.form-group, [data-automation-id="formField"], .field, fieldset') || element.parentElement
+            : element.parentElement;
+
+        if (container) {
+            const errorNodes = container.querySelectorAll('.has-error, .is-invalid, .invalid-feedback, .error-message, [role="alert"], [class*="error"]');
+            for (const node of errorNodes) {
+                // Avoid mistaking the element itself if it contains 'error' in another context
+                if (node !== element && this.isVisible(node)) {
+                    const text = (node.textContent || '').trim();
+                    if (text.length > 2 && !/^(optional|required)$/i.test(text)) {
+                        hasError = true;
+                        errorReason = text;
+                        break;
+                    }
+                }
+            }
+        }
+
+        return {
+            verified: isMatching && !hasError,
+            actualValue,
+            hasError,
+            errorReason
+        };
+    }
+
+    /**
+     * Self-Correction Loop: Adapt value or formatting when ATS validation rejects initial fill.
+     */
+    async selfCorrectField(fieldData, element, value, verificationResult) {
+        const type = fieldData.type || element.type || element.tagName.toLowerCase();
+        let retryValue = value;
+
+        // 1. Phone number formatting correction
+        if (type === 'tel' || /phone|mobile/i.test(fieldData.label || '')) {
+            const rawDigits = String(value).replace(/\D/g, '');
+            // If full with country code failed, try last 10 digits
+            if (rawDigits.length > 10) {
+                retryValue = rawDigits.slice(-10);
+            } else if (rawDigits.length === 10) {
+                // Try format (XXX) XXX-XXXX
+                retryValue = `(${rawDigits.slice(0, 3)}) ${rawDigits.slice(3, 6)}-${rawDigits.slice(6)}`;
+            } else {
+                retryValue = rawDigits;
+            }
+        }
+        // 2. Date format correction
+        else if (type === 'date' || /date|birth/i.test(fieldData.label || '')) {
+            const dateStr = String(value).trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                // Convert ISO YYYY-MM-DD to US MM/DD/YYYY
+                const [y, m, d] = dateStr.split('-');
+                retryValue = `${m}/${d}/${y}`;
+            } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+                // Convert US MM/DD/YYYY to ISO YYYY-MM-DD
+                const [m, d, y] = dateStr.split('/');
+                retryValue = `${y}-${m}-${d}`;
+            }
+        }
+        // 3. Fallback: Trim whitespace or special characters
+        else if (typeof value === 'string') {
+            retryValue = value.trim();
+        }
+
+        // Re-attempt fill with corrected representation
+        await this.fillTextInput(element, retryValue);
+        await this.wait(80);
+
+        // Re-verify
+        const recheck = await this.verifyField(fieldData, element, retryValue);
+        return {
+            verified: recheck.verified,
+            correctedValue: retryValue,
+            recheck
+        };
     }
 
     /**
@@ -671,33 +884,6 @@ class IntelligentFormFiller {
         element.textContent = strVal;
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-    }
-
-    /**
-     * Verify that field was filled correctly
-     */
-    async verifyField(fieldData, expectedValue) {
-        await this.wait(100); // Wait for value to settle
-
-        const { element, type } = fieldData;
-        const actualValue = this.getCurrentValue(element, type);
-
-        // For selects and radios, verify exact match
-        if (['select', 'radio', 'custom-select'].includes(type)) {
-            return String(actualValue).trim() === String(expectedValue).trim();
-        }
-
-        // For text fields, verify value is present
-        if (['text', 'email', 'tel', 'url', 'textarea', 'contenteditable'].includes(type)) {
-            return String(actualValue).trim().length > 0;
-        }
-
-        // For checkboxes, verify checked state
-        if (type === 'checkbox') {
-            return element.checked === this.shouldCheck(expectedValue);
-        }
-
         return true;
     }
 

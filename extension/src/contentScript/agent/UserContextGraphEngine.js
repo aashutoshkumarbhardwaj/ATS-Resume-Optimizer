@@ -84,7 +84,19 @@
                         tools: [],
                         all: []
                     },
-                    education: [],
+                    education: {
+                        highestEducation: "Bachelor's Degree",
+                        degree: 'Computer Science',
+                        university: '',
+                        graduationYear: '',
+                        gpa: ''
+                    },
+                    demographics: {
+                        gender: 'Male',
+                        raceEthnicity: 'Decline to Self-Identify',
+                        veteranStatus: 'I am not a protected veteran',
+                        disabilityStatus: 'No, I do not have a disability'
+                    },
                     experience: [],
                     qaGraph: []
                 },
@@ -127,6 +139,9 @@
                     }
                 }
 
+                // 3.5. Ensure canonical standardized Q&A coverage
+                this.seedCanonicalQuestions();
+
                 this.isInitialized = true;
                 console.log('[UserContextGraph] 🌐 Context Graph initialized for user:', this.graph.meta.profileName || this.userId);
 
@@ -141,6 +156,9 @@
                 return this.graph;
             } catch (error) {
                 console.error('[UserContextGraph] ❌ Initialization error:', error);
+                // 3.5. Ensure canonical standardized Q&A coverage
+                this.seedCanonicalQuestions();
+
                 this.isInitialized = true;
                 return this.graph;
             }
@@ -194,6 +212,50 @@
             prof.workAuthorization = profile.work_authorization || prof.workAuthorization || 'Yes';
             prof.sponsorshipRequired = profile.require_sponsorship || prof.sponsorshipRequired || 'No';
 
+            // Education
+            if (!this.graph.nodes.education || Array.isArray(this.graph.nodes.education)) {
+                this.graph.nodes.education = {
+                    highestEducation: "Bachelor's Degree",
+                    degree: 'Computer Science',
+                    university: '',
+                    graduationYear: '',
+                    gpa: ''
+                };
+            }
+            if (profile.highest_education || profile.highestEducation || profile.degree) {
+                this.graph.nodes.education.highestEducation = profile.highest_education || profile.highestEducation || this.graph.nodes.education.highestEducation;
+                this.graph.nodes.education.degree = profile.degree || profile.major || this.graph.nodes.education.degree;
+            }
+            if (profile.university || profile.school || profile.institution) {
+                this.graph.nodes.education.university = profile.university || profile.school || profile.institution;
+            }
+            if (profile.graduation_year || profile.graduationYear) {
+                this.graph.nodes.education.graduationYear = profile.graduation_year || profile.graduationYear;
+            }
+            if (profile.gpa) {
+                this.graph.nodes.education.gpa = profile.gpa;
+            }
+
+            // Demographics & EEO
+            if (!this.graph.nodes.demographics) {
+                this.graph.nodes.demographics = {
+                    gender: 'Male',
+                    raceEthnicity: 'Decline to Self-Identify',
+                    veteranStatus: 'I am not a protected veteran',
+                    disabilityStatus: 'No, I do not have a disability'
+                };
+            }
+            if (profile.gender) this.graph.nodes.demographics.gender = profile.gender;
+            if (profile.race_ethnicity || profile.raceEthnicity || profile.ethnicity) {
+                this.graph.nodes.demographics.raceEthnicity = profile.race_ethnicity || profile.raceEthnicity || profile.ethnicity;
+            }
+            if (profile.veteran_status || profile.veteranStatus) {
+                this.graph.nodes.demographics.veteranStatus = profile.veteran_status || profile.veteranStatus;
+            }
+            if (profile.disability_status || profile.disabilityStatus) {
+                this.graph.nodes.demographics.disabilityStatus = profile.disability_status || profile.disabilityStatus;
+            }
+
             // Skills
             if (profile.skills) {
                 const rawSkills = Array.isArray(profile.skills) ? profile.skills : String(profile.skills).split(/[,;|\n]+/);
@@ -202,6 +264,64 @@
 
             this.touch();
             this.persistLocally();
+        }
+
+        /**
+         * Seed standardized canonical question answers so all users have identical comprehensive Q&A coverage
+         */
+        seedCanonicalQuestions() {
+            const canonicalSet = [
+                {
+                    canonicalIntent: 'about_you',
+                    question: 'Tell me about yourself / Summary',
+                    answer: 'Passionate software engineer experienced in building performant full-stack systems, clean APIs, and automated agent workflows.'
+                },
+                {
+                    canonicalIntent: 'why_company',
+                    question: 'Why do you want to work here?',
+                    answer: 'Your team solves critical technical challenges with high engineering excellence. I am inspired by your mission and eager to contribute directly to product scale.'
+                },
+                {
+                    canonicalIntent: 'why_hire',
+                    question: 'Why should we hire you?',
+                    answer: 'I bring a proven blend of rapid development, deep analytical problem-solving, and a focus on maintainable, highly-reliable code.'
+                },
+                {
+                    canonicalIntent: 'achievements',
+                    question: 'What is your greatest technical achievement?',
+                    answer: 'Engineered high-throughput event processing pipelines that scaled system throughput by 300% while cutting P99 latency below 50ms.'
+                },
+                {
+                    canonicalIntent: 'conflict_resolution',
+                    question: 'Describe how you handle conflict or ambiguity.',
+                    answer: 'I align on objective metrics, decouple personal opinions through automated experiments, and seek alignment around customer impact.'
+                },
+                {
+                    canonicalIntent: 'leadership',
+                    question: 'Describe a time you demonstrated leadership.',
+                    answer: 'I instituted architectural design reviews, introduced automated testing standards, and mentored junior engineers to take full service ownership.'
+                },
+                {
+                    canonicalIntent: 'salary_expectations',
+                    question: 'What are your salary expectations?',
+                    answer: 'Open to competitive market compensation aligned with the level of impact and scope of the role.'
+                },
+                {
+                    canonicalIntent: 'notice_period',
+                    question: 'What is your availability or notice period?',
+                    answer: 'Available immediately or within a standard 2-week notice period.'
+                }
+            ];
+
+            for (const item of canonicalSet) {
+                const exists = this.graph.nodes.qaGraph.some(q => 
+                    q.canonicalIntent === item.canonicalIntent || 
+                    this.normalizeText(q.question) === this.normalizeText(item.question)
+                );
+                if (!exists) {
+                    this.recordQA(item.question, item.answer, item.canonicalIntent, { source: 'canonical_seed', confidence: 1.0 });
+                }
+            }
         }
 
         /**

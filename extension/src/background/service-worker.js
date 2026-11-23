@@ -105,6 +105,39 @@ const CONFIG = {
 // Track active tabs to detect switches
 let lastActiveTab = null;
 
+// Enable opening the native Chrome side panel on action click (Claude in Chrome behavior)
+function configureSidePanelBehavior() {
+    if (typeof chrome !== 'undefined' && chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
+        chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+            .then(() => console.log('[ServiceWorker] ✅ SidePanel behavior set: openPanelOnActionClick=true'))
+            .catch(err => console.warn('[ServiceWorker] Note on sidePanel setPanelBehavior:', err));
+    }
+}
+configureSidePanelBehavior();
+
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onInstalled) {
+    chrome.runtime.onInstalled.addListener(() => {
+        configureSidePanelBehavior();
+    });
+}
+
+// Resilient fallback click handler to ensure Side Panel opens in all Chrome versions
+if (typeof chrome !== 'undefined' && chrome.action && chrome.action.onClicked) {
+    chrome.action.onClicked.addListener(async (tab) => {
+        if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
+            try {
+                if (tab && tab.windowId) {
+                    await chrome.sidePanel.open({ windowId: tab.windowId });
+                } else if (tab && tab.id) {
+                    await chrome.sidePanel.open({ tabId: tab.id });
+                }
+            } catch (err) {
+                console.warn('[ServiceWorker] Fallback sidePanel.open note:', err);
+            }
+        }
+    });
+}
+
 // ============================================================================
 // AUTH MESSAGE LISTENER - Handle messages from Job Orbit auth page
 // ============================================================================
@@ -1070,6 +1103,8 @@ console.log('[ServiceWorker] ✅ Initialization complete');
 
 // Note: Auto-resume on reload/tab update is disabled so refreshing never restarts the agent unexpectedly.
 
+// Auth redirect listener on tab URL updates
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.url && changeInfo.url.includes('ext_status=connected') && changeInfo.url.includes('ext_token=')) {
         console.log('[ServiceWorker] 🔍 Detected auth redirect URL:', changeInfo.url);
         try {

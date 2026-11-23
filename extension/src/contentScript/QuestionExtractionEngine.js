@@ -182,7 +182,175 @@ class QuestionExtractionEngine {
             }
         }
 
+        // 6. Visual proximity fallback (Claude in Chrome visual-geometric grounding)
+        if (!labelText && typeof el.getBoundingClientRect === 'function') {
+            labelText = this.findVisualProximityLabel(el);
+        }
+
         return this.cleanText(labelText);
+    }
+
+    /**
+     * Find nearest label text based on 2D visual layout (above or to the left)
+     * Inspired by vision-grounded web agents (Claude in Chrome / browser-use).
+     */
+    findVisualProximityLabel(el) {
+        if (!el || typeof el.getBoundingClientRect !== 'function') return '';
+        const targetRect = el.getBoundingClientRect();
+        if (targetRect.width === 0 && targetRect.height === 0) return '';
+
+        const container = el.closest('form, [role="form"], [data-automation-id="formField"], .form-group, fieldset') || el.parentElement;
+        if (!container) return '';
+
+        const textElements = Array.from(container.querySelectorAll('label, p, span, div, h1, h2, h3, h4, h5, h6, dt, b, strong'))
+            .filter(node => {
+                if (node === el || node.contains(el)) return false;
+                const text = (node.textContent || '').trim();
+                if (text.length < 2 || text.length > 250) return false;
+                // Exclude other inputs/buttons/selects
+                if (node.querySelector('input, select, textarea, button')) return false;
+                return true;
+            });
+
+        let bestMatch = null;
+        let lowestDistance = Infinity;
+
+        for (const candidate of textElements) {
+            const candRect = candidate.getBoundingClientRect();
+            if (candRect.width === 0 && candRect.height === 0) continue;
+
+            const deltaY = targetRect.top - candRect.bottom;
+            const deltaX = targetRect.left - candRect.right;
+
+            // Priority 1: Directly above within 100px vertical distance
+            if (deltaY >= -10 && deltaY <= 100 && Math.abs(candRect.left - targetRect.left) < 150) {
+                const dist = Math.abs(deltaY) + Math.abs(candRect.left - targetRect.left) * 0.5;
+                if (dist < lowestDistance) {
+                    lowestDistance = dist;
+                    bestMatch = candidate;
+                }
+            }
+            // Priority 2: Directly to the left on the same horizontal line (within 20px Y-alignment, 250px X-distance)
+            else if (deltaX >= 0 && deltaX <= 250 && Math.abs(candRect.top - targetRect.top) < 25) {
+                const dist = deltaX + Math.abs(candRect.top - targetRect.top) * 2;
+                if (dist < lowestDistance) {
+                    lowestDistance = dist;
+                    bestMatch = candidate;
+                }
+            }
+        }
+
+        return bestMatch ? (bestMatch.textContent || '').trim() : '';
+    }
+
+    /**
+     * Detect if an element is a sensitive field (Password, SSN, Credit Card, PIN)
+     * Enables automatic masking & user safety pauses.
+     */
+    isSensitiveField(el, label = '') {
+        if (!el) return false;
+        const type = (el.type || '').toLowerCase();
+        if (type === 'password') return true;
+
+        const checkStr = `${el.id || ''} ${el.name || ''} ${el.autocomplete || ''} ${label}`.toLowerCase();
+        const sensitiveRegex = /\b(ssn|social\s*security|tax\s*id|credit\s*card|card\s*number|cvv|cvc|expir|pin|otp|secret|auth\s*token)\b/i;
+        return sensitiveRegex.test(checkStr);
+    }
+
+    /**
+     * Detect if an element is a CAPTCHA or anti-bot challenge
+     */
+    isCaptchaElement(el) {
+        if (!el) return false;
+        const className = (typeof el.className === 'string' ? el.className : '') || (typeof el.getAttribute === 'function' ? (el.getAttribute('class') || '') : '');
+        const siteKey = typeof el.getAttribute === 'function' ? (el.getAttribute('data-sitekey') || '') : '';
+        const checkStr = `${el.id || ''} ${el.name || ''} ${className} ${siteKey}`.toLowerCase();
+        if (/captcha|recaptcha|hcaptcha|turnstile|arkose|geetest|datadome|challenge/i.test(checkStr)) {
+            return true;
+        }
+        if (el.closest && el.closest('.h-captcha, .g-recaptcha, [data-sitekey], .cf-turnstile, [id*="captcha"]')) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Extract full Accessibility Tree (AXTree) snapshot of interactive elements on the page.
+     * Implements Claude in Chrome's observe layer for multimodal & structured DOM inspection.
+     */
+    extractAccessibilitySnapshot(rootNode = document) {
+        const interactiveSelectors = [
+            'input:not([type="hidden"])',
+            'textarea',
+            'select',
+            '[contenteditable="true"]',
+            '[role="textbox"]',
+            '[role="combobox"]',
+            '[role="radio"]',
+            '[role="checkbox"]',
+            '[role="listbox"]'
+        ];
+
+        const rawNodes = Array.from(rootNode.querySelectorAll(interactiveSelectors.join(', ')));
+        
+        // Deep traverse same-origin iframes
+        const iframes = Array.from(rootNode.querySelectorAll('iframe'));
+        for (const iframe of iframes) {
+            try {
+                if (iframe.contentDocument && iframe.contentDocument.body) {
+                    const iframeNodes = Array.from(iframe.contentDocument.querySelectorAll(interactiveSelectors.join(', ')));
+                    rawNodes.push(...iframeNodes);
+                }
+            } catch (e) {
+                // Ignore cross-origin iframe security boundaries
+            }
+        }
+
+        // Deduplicate
+        const uniqueNodes = Array.from(new Set(rawNodes));
+
+        // Sort candidates in strict visual top-to-bottom reading sequence
+        uniqueNodes.sort((a, b) => {
+            const rectA = a.getBoundingClientRect ? a.getBoundingClientRect() : { top: 0, left: 0 };
+            const rectB = b.getBoundingClientRect ? b.getBoundingClientRect() : { top: 0, left: 0 };
+            if (Math.abs(rectA.top - rectB.top) > 6) {
+                return rectA.top - rectB.top;
+            }
+            return rectA.left - rectB.left;
+        });
+
+        return uniqueNodes.map((el, index) => {
+            const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { top: 0, left: 0, width: 0, height: 0 };
+            const tag = (el.tagName || '').toLowerCase();
+            const role = (el.getAttribute && el.getAttribute('role')) || (tag === 'select' ? 'combobox' : (el.type || 'textbox'));
+            const label = this.extractQuestionText(el);
+            const isSensitive = this.isSensitiveField(el, label);
+            const isCaptcha = this.isCaptchaElement(el);
+
+            return {
+                index,
+                id: this.generateFieldId(el),
+                tag,
+                role,
+                type: el.type || (tag === 'textarea' ? 'textarea' : (tag === 'select' ? 'select' : 'text')),
+                label,
+                placeholder: el.placeholder || '',
+                helpText: this.extractHelpText(el),
+                value: isSensitive ? '***MASKED***' : (el.value || el.textContent || ''),
+                required: this.extractRequiredStatus(el),
+                invalid: el.getAttribute('aria-invalid') === 'true' || !!(el.closest && el.closest('.has-error, .is-invalid')),
+                disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+                sensitive: isSensitive,
+                isCaptcha,
+                rect: {
+                    top: Math.round(rect.top),
+                    left: Math.round(rect.left),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height)
+                },
+                element: el
+            };
+        });
     }
 
     /**

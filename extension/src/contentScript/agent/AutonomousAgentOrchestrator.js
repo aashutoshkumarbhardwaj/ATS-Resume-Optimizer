@@ -329,20 +329,31 @@ class AutonomousAgentOrchestrator {
                         }
                     }
 
-                    // 5. Execute Visual Action & Native Typing / Dropdown Selection
+                    // 5. Execute Visual Action & Native Typing / Dropdown Selection (ACT phase)
                     const success = await this.executeAction(field, answer, isRequiredField);
-                    if (success !== false) {
+                    
+                    // 5.5. Closed-Loop Verification & Self-Correction (VERIFY phase - Claude in Chrome pattern)
+                    let isVerified = success !== false;
+                    if (isVerified && element) {
+                        const verification = await this.verifyAndCorrectAction(field, element, answer);
+                        isVerified = verification.verified;
+                    }
+
+                    if (isVerified) {
                         this.stats.filled++;
                         pageFilledCount++;
+                        this.cursor.setStatus(`Verified: ${field.label || 'Field'} ✅`, '✅', 'idle');
                         this.filledFieldsRecord.push({
                             id: field.id || field.name || field.label,
                             label: field.label,
                             intent: field.intent || field.semanticIntent?.intent,
                             type: field.type,
                             value: answer,
-                            status: 'auto_filled'
+                            status: 'auto_filled',
+                            verified: true
                         });
                     } else {
+                        console.warn(`[AgentOrchestrator] ⚠️ Field "${field.label}" failed post-action verification.`);
                         this.stats.failed++;
                     }
 
@@ -425,8 +436,105 @@ class AutonomousAgentOrchestrator {
             await this.cursor.moveTo(element);
             await this.cursor.click(element);
             await this.cursor.type(element, answer, { humanSpeed: true });
+
+            // Enforce React/Vue/Angular native prototype descriptor sync
+            try {
+                const proto = Object.getPrototypeOf(element);
+                const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+                    || (typeof window !== 'undefined' && window.HTMLInputElement && Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set)
+                    || (typeof window !== 'undefined' && window.HTMLTextAreaElement && Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set);
+                if (nativeSetter) {
+                    nativeSetter.call(element, String(answer));
+                } else {
+                    element.value = String(answer);
+                }
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                element.dispatchEvent(new Event('blur', { bubbles: true }));
+            } catch (e) {}
+
             return true;
         }
+    }
+
+    /**
+     * Post-action verification and self-correction loop (Claude in Chrome verify-actuator pattern)
+     */
+    async verifyAndCorrectAction(field, element, expectedAnswer) {
+        if (!element) return { verified: true };
+        await this.cursor.sleep(80);
+
+        const type = field.type || element.type || (element.tagName ? element.tagName.toLowerCase() : 'text');
+        const expectedStr = String(expectedAnswer).trim().toLowerCase();
+        let actualStr = '';
+
+        if (element.tagName === 'SELECT') {
+            const opt = element.options ? element.options[element.selectedIndex] : null;
+            actualStr = opt ? (opt.value || opt.text || '').trim().toLowerCase() : '';
+        } else if (type === 'radio' || type === 'checkbox') {
+            actualStr = element.checked ? 'true' : 'false';
+        } else {
+            actualStr = (element.value || element.textContent || '').trim().toLowerCase();
+        }
+
+        const matches = actualStr.length > 0 && (actualStr === expectedStr || actualStr.includes(expectedStr) || expectedStr.includes(actualStr));
+        const isInvalid = element.getAttribute && element.getAttribute('aria-invalid') === 'true';
+
+        // Check for visible error message container
+        const container = (typeof element.closest === 'function')
+            ? element.closest('.form-group, [data-automation-id="formField"], .field, fieldset') || element.parentElement
+            : element.parentElement;
+        const hasErrorNode = container ? !!container.querySelector('.has-error, .is-invalid, .invalid-feedback, .error-message, [role="alert"]') : false;
+
+        if (matches && !isInvalid && !hasErrorNode) {
+            return { verified: true, actual: actualStr };
+        }
+
+        // Self-Correction Fallback Loop
+        console.warn(`[AgentOrchestrator] ⚠️ Verification flag on "${field.label}". Attempting self-correction...`);
+        this.cursor.setStatus(`Validating: ${field.label || 'Field'}...`, '🔧', 'moving');
+
+        let correctedVal = expectedAnswer;
+        if (type === 'tel' || /phone|mobile/i.test(field.label || '')) {
+            const digits = String(expectedAnswer).replace(/\D/g, '');
+            correctedVal = digits.length > 10 ? digits.slice(-10) : digits;
+        } else if (type === 'date' || /date|birth/i.test(field.label || '')) {
+            const dStr = String(expectedAnswer).trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+                const [y, m, d] = dStr.split('-');
+                correctedVal = `${m}/${d}/${y}`;
+            } else if (/^\d{2}\/\d{2}\/\d{4}$/.test(dStr)) {
+                const [m, d, y] = dStr.split('/');
+                correctedVal = `${y}-${m}-${d}`;
+            }
+        }
+
+        try {
+            const proto = Object.getPrototypeOf(element);
+            const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+                || (typeof window !== 'undefined' && window.HTMLInputElement && Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set);
+            if (nativeSetter) {
+                nativeSetter.call(element, String(correctedVal));
+            } else {
+                element.value = String(correctedVal);
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new Event('blur', { bubbles: true }));
+        } catch (e) {}
+
+        await this.cursor.sleep(100);
+        const recheckVal = (element.value || '').trim();
+        const recheckMatches = recheckVal.length > 0;
+        const recheckInvalid = element.getAttribute && element.getAttribute('aria-invalid') === 'true';
+
+        if (recheckMatches && !recheckInvalid) {
+            console.log(`[AgentOrchestrator] 🎯 Self-correction succeeded for "${field.label}" with value: ${correctedVal}`);
+            this.cursor.setStatus(`Corrected: ${field.label || 'Field'} 🎯`, '🎯', 'idle');
+            return { verified: true, corrected: true, value: correctedVal };
+        }
+
+        return { verified: recheckMatches, actual: recheckVal, warning: true };
     }
 
     /**

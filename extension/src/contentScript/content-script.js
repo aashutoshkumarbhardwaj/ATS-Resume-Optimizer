@@ -308,6 +308,82 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         sendResponse({ success: true });
         return true;
+    } else if (request.type === 'PREVIEW_ACTION_PLAN') {
+        (async () => {
+            try {
+                const QEEClass = (typeof window !== 'undefined' && window.QuestionExtractionEngine) || (typeof QuestionExtractionEngine !== 'undefined' ? QuestionExtractionEngine : null);
+                const qee = QEEClass ? new QEEClass() : null;
+                const platform = qee ? qee.platform : 'Generic';
+                const snapshot = qee ? qee.extractAccessibilitySnapshot() : [];
+
+                const BrainClass = (typeof window !== 'undefined' && window.PersonalAgentBrain) || (typeof PersonalAgentBrain !== 'undefined' ? PersonalAgentBrain : null);
+                const brain = BrainClass ? new BrainClass() : null;
+                if (brain) {
+                    await brain.init();
+                    if (request.profile) brain.profile = Object.assign({}, brain.profile, request.profile);
+                }
+
+                const plan = [];
+                for (const node of snapshot) {
+                    let predictedValue = null;
+                    if (brain) {
+                        try {
+                            const res = await brain.resolveAnswer({ label: node.label, type: node.type, id: node.id, element: node.element }, {});
+                            predictedValue = res ? res.value : null;
+                        } catch (e) {}
+                    }
+                    plan.push({
+                        id: node.id,
+                        label: node.label || 'Unlabeled Field',
+                        type: node.type,
+                        role: node.role,
+                        required: node.required,
+                        sensitive: node.sensitive,
+                        isCaptcha: node.isCaptcha,
+                        currentValue: node.value,
+                        predictedValue: predictedValue || node.value || '',
+                        status: (node.value && node.value !== '***MASKED***' && String(node.value).trim().length > 0) ? 'prefilled' : (predictedValue ? 'ready' : 'empty')
+                    });
+                }
+
+                sendResponse({
+                    success: true,
+                    platform,
+                    totalFields: plan.length,
+                    plan
+                });
+            } catch (err) {
+                console.error('[Content] Error generating action plan:', err);
+                sendResponse({ success: false, error: err.message });
+            }
+        })();
+        return true;
+    } else if (request.type === 'GET_AGENT_STATUS') {
+        const instance = window.__autonomousAgentOrchestratorInstance;
+        sendResponse({
+            success: true,
+            isRunning: instance ? !!instance.isRunning : false,
+            state: instance ? instance.state : 'IDLE',
+            stats: instance ? instance.stats : { filled: 0, skipped: 0, failed: 0, total: 0 }
+        });
+        return true;
+    } else if (request.type === 'UPDATE_CONTEXT_GRAPH_PROFILE') {
+        try {
+            if (window.__autonomousAgentOrchestratorInstance && window.__autonomousAgentOrchestratorInstance.brain) {
+                window.__autonomousAgentOrchestratorInstance.brain.profile = Object.assign(
+                    {},
+                    window.__autonomousAgentOrchestratorInstance.brain.profile,
+                    request.profile
+                );
+                if (window.__autonomousAgentOrchestratorInstance.brain.contextGraphEngine) {
+                    window.__autonomousAgentOrchestratorInstance.brain.contextGraphEngine.updateFromProfile(request.profile);
+                }
+            }
+            sendResponse({ success: true });
+        } catch (e) {
+            sendResponse({ success: false, error: e.message });
+        }
+        return true;
     } else if (request.type === 'PERFORM_AUTOFILL') {
         try {
             const result = performAutofill(request.profile);

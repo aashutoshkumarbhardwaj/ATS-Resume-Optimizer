@@ -72,15 +72,22 @@ class ResumeController {
     }
 
     /**
-     * Parse resume into structured details
+     * Parse resume into structured details (from uploaded file or raw text)
      */
     static async parseResume(req, res) {
         try {
-            const { resumeText } = req.body;
+            let resumeText = req.body?.resumeText;
 
-            if (!resumeText) {
+            // If a file (PDF, DOCX, TXT) was uploaded via multipart/form-data
+            if (req.file) {
+                const FileUploadService = require('../services/fileUploadService');
+                const extracted = await FileUploadService.extractText(req.file);
+                resumeText = extracted.text;
+            }
+
+            if (!resumeText || typeof resumeText !== 'string' || !resumeText.trim()) {
                 return res.status(400).json({
-                    error: 'Missing required field: resumeText'
+                    error: 'Missing required field: file or resumeText'
                 });
             }
 
@@ -89,6 +96,7 @@ class ResumeController {
 
             res.json({
                 success: true,
+                text: resumeText,
                 parsedData
             });
         } catch (error) {
