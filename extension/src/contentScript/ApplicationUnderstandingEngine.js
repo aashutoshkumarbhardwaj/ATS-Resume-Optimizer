@@ -486,31 +486,34 @@ class ApplicationUnderstandingEngine {
      * Detect section for a field
      */
     detectSection(element) {
+        if (!element) return 'General';
         // Look for heading elements above the field
-        let current = element;
-        while (current && current !== document.body) {
-            current = current.parentElement;
-            
-            // Check for section headings
-            const heading = current.querySelector('h1, h2, h3, h4, h5, h6');
-            if (heading) {
-                return this.cleanText(heading.textContent);
-            }
+        let current = element.parentElement;
+        while (current && current !== document.body && current !== document.documentElement) {
+            if (typeof current.querySelector === 'function') {
+                // Check for section headings
+                const heading = current.querySelector('h1, h2, h3, h4, h5, h6');
+                if (heading) {
+                    return this.cleanText(heading.textContent);
+                }
 
-            // Check for fieldset legend
-            if (current.tagName === 'FIELDSET') {
-                const legend = current.querySelector('legend');
-                if (legend) {
-                    return this.cleanText(legend.textContent);
+                // Check for fieldset legend
+                if (current.tagName === 'FIELDSET') {
+                    const legend = current.querySelector('legend');
+                    if (legend) {
+                        return this.cleanText(legend.textContent);
+                    }
+                }
+
+                // Check for div with section-like class
+                const classList = current.classList ? Array.from(current.classList).join(' ').toLowerCase() : '';
+                if (classList.includes('section') || classList.includes('step')) {
+                    const sectionText = this.extractSectionTitle(current);
+                    if (sectionText) return sectionText;
                 }
             }
 
-            // Check for div with section-like class
-            const classList = Array.from(current.classList).join(' ').toLowerCase();
-            if (classList.includes('section') || classList.includes('step')) {
-                const sectionText = this.extractSectionTitle(current);
-                if (sectionText) return sectionText;
-            }
+            current = current.parentElement;
         }
 
         return 'General';
@@ -520,6 +523,7 @@ class ApplicationUnderstandingEngine {
      * Extract section title from container
      */
     extractSectionTitle(container) {
+        if (!container || typeof container.querySelector !== 'function') return '';
         const heading = container.querySelector('h1, h2, h3, h4, h5, h6');
         if (heading) {
             return this.cleanText(heading.textContent);

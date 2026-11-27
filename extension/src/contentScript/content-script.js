@@ -250,6 +250,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, message: err.message });
         }
     } else if (request.type === 'DETECT_JOB') {
+        // Subframes without job content should never squelch top-level job detection
+        if (window !== window.top) {
+            return false;
+        }
         try {
             const jobData = detectJobDescription();
             sendResponse(jobData);
@@ -258,8 +262,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, message: err.message });
         }
     } else if (request.type === 'GET_DETECTED_JOB') {
+        if (window !== window.top && !detectedJob) {
+            return false;
+        }
         sendResponse({ success: true, job: detectedJob });
     } else if (request.type === 'RUN_AUTONOMOUS_AGENT' || request.action === 'RUN_AUTONOMOUS_AGENT') {
+        // If in an iframe, do not run or respond unless this frame contains interactive form fields
+        if (window !== window.top) {
+            const hasInputs = document.querySelector('input:not([type="hidden"]), textarea, select, [role="textbox"], [role="combobox"]');
+            if (!hasInputs) return false;
+        }
         console.log('[Content] 🤖 Launching Autonomous Agent via message trigger...');
         try {
             const OrchestratorClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
@@ -279,6 +291,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, error: e.message });
         }
     } else if (request.type === 'RESUME_AUTONOMOUS_AGENT') {
+        if (window !== window.top) {
+            const hasInputs = document.querySelector('input:not([type="hidden"]), textarea, select, [role="textbox"], [role="combobox"]');
+            if (!hasInputs) return false;
+        }
         console.log('[Content] 🔄 Received RESUME_AUTONOMOUS_AGENT signal from background...');
         if (window.__unifiedAutofillButtonInstance && typeof window.__unifiedAutofillButtonInstance.resumeSession === 'function') {
             window.__unifiedAutofillButtonInstance.resumeSession(request.session);
@@ -309,12 +325,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
         return true;
     } else if (request.type === 'PREVIEW_ACTION_PLAN') {
+        // Prevent empty tracking / ad iframes from hijacking or squelching the main application form
+        if (window !== window.top) {
+            const hasInputs = document.querySelector('input:not([type="hidden"]), textarea, select, [role="textbox"], [role="combobox"]');
+            if (!hasInputs) return false;
+        }
         (async () => {
             try {
                 const QEEClass = (typeof window !== 'undefined' && window.QuestionExtractionEngine) || (typeof QuestionExtractionEngine !== 'undefined' ? QuestionExtractionEngine : null);
                 const qee = QEEClass ? new QEEClass() : null;
                 const platform = qee ? qee.platform : 'Generic';
                 const snapshot = qee ? qee.extractAccessibilitySnapshot() : [];
+
+                // If subframe extracted 0 inputs, silently decline so top window can respond
+                if (window !== window.top && snapshot.length === 0) {
+                    return;
+                }
 
                 const BrainClass = (typeof window !== 'undefined' && window.PersonalAgentBrain) || (typeof PersonalAgentBrain !== 'undefined' ? PersonalAgentBrain : null);
                 const brain = BrainClass ? new BrainClass() : null;
@@ -385,6 +411,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         return true;
     } else if (request.type === 'PERFORM_AUTOFILL') {
+        if (window !== window.top) {
+            const hasInputs = document.querySelector('input:not([type="hidden"]), textarea, select, [role="textbox"], [role="combobox"]');
+            if (!hasInputs) return false;
+        }
         try {
             const result = performAutofill(request.profile);
             
@@ -2606,18 +2636,19 @@ new MutationObserver(() => {
  */
 
 const FIELD_MAP = {
-  full_name:   ['\\bfull\\s*name\\b', '^name$', 'complete\\s*name', 'applicant\\s*name', 'your\\s*name'],
+  full_name:   ['\\bfull\\s*name\\b', '^name$', 'complete\\s*name', 'applicant\\s*name', 'your\\s*name', 'legal\\s*name'],
   first_name:  ['\\bfirst\\s*name\\b', '^fname$', 'given\\s*name', 'forename'],
   last_name:   ['\\blast\\s*name\\b', '^lname$', 'surname', 'family\\s*name'],
+  confirm_email: ['confirm.*(?:your\\s*)?email', 'verify.*email', 're-?enter.*email'],
   email:       ['email', 'e\\.?mail', 'email\\s*address'],
   country_code: ['country\\s*code', 'dial\\s*code', 'phone\\s*prefix', 'isd\\s*code', '\\bisd\\b', 'calling\\s*code'],
-  phone:       ['phone', 'mobile', 'telephone', 'cell', 'contact\\s*no', 'ph\\.?no', 'contact\\s*number'],
+  phone:       ['phone', 'mobile', 'telephone', 'cell', 'contact\\s*no', 'ph\\.?no', 'contact\\s*number', 'phone\\s*number'],
   gender:      ['\\bgender\\b', '\\bsex\\b'],
   address_line2: ['address\\s*line\\s*2', 'apartment', 'suite', 'apt', 'unit', 'flat', 'building'],
   street_address: ['street\\s*address', 'address\\s*line\\s*1', 'address\\s*1', 'residential\\s*address', '\\baddress\\b'],
-  city:        ['city', 'town', 'location'],
+  city:        ['city', 'town', 'location', 'residing\\s*city'],
   state:       ['\\bstate\\b', 'province', 'region'],
-  zip:         ['zip', 'postal', 'pin\\s*code', 'pincode'],
+  zip:         ['zip', 'postal', 'pin\\s*code', 'pincode', 'zipcode'],
   country:     ['country', 'nation'],
   linkedin:    ['linkedin', 'linked\\.?in', 'profile\\s*url'],
   github:      ['github', 'git-hub', 'git\\s*repo'],
@@ -2632,12 +2663,16 @@ const FIELD_MAP = {
 };
 
 function detectFieldType(input) {
+  const cleanLabel = getCleanLabel(input) || '';
   const signals = [
+    cleanLabel,
     input.name,
     input.id,
     input.placeholder,
     input.getAttribute('aria-label'),
     input.getAttribute('autocomplete'),
+    input.getAttribute('data-qa'),
+    input.getAttribute('data-automation-id'),
     input.closest('label')?.textContent,
     document.querySelector(`label[for="${input.id}"]`)?.textContent,
   ].filter(Boolean).join(' ').toLowerCase();
@@ -2769,9 +2804,13 @@ function performAutofill(profile) {
     let filledCount = 0;
     const missedFields = [];
     
-    // Strategy 1: Traditional HTML inputs
-    console.log('[Content] 📝 Filling traditional HTML form fields...');
-    const rawInputs = Array.from(document.querySelectorAll('input, textarea, select'));
+    // Strategy 1: Traditional HTML inputs & Web Component fields
+    console.log('[Content] 📝 Filling form fields with deep accessibility traversal...');
+    const QEEClass = (typeof window !== 'undefined' && window.QuestionExtractionEngine) || (typeof QuestionExtractionEngine !== 'undefined' ? QuestionExtractionEngine : null);
+    const qee = QEEClass ? new QEEClass() : null;
+    const rawInputs = qee && typeof qee.collectElementsDeep === 'function' 
+        ? qee.collectElementsDeep(document, 'input, textarea, select, [contenteditable="true"]') 
+        : Array.from(document.querySelectorAll('input, textarea, select'));
     
     // Filter out buttons, submits, image, hidden, search, disabled, and captcha fields
     const inputs = rawInputs.filter(input => {
@@ -2809,8 +2848,12 @@ function performAutofill(profile) {
         let valueToFill = null;
         
         // 1. Check standard fields
-        if (fieldType && profile[fieldType]) {
-            valueToFill = profile[fieldType];
+        if (fieldType) {
+            if (fieldType === 'confirm_email') {
+                valueToFill = profile.email || profile.confirm_email;
+            } else if (profile[fieldType]) {
+                valueToFill = profile[fieldType];
+            }
         }
 
         // 2. Check custom fields if not filled
@@ -3709,25 +3752,57 @@ function getFieldContext(input) {
 }
 
 function getCleanLabel(input) {
+    if (!input) return null;
+
+    // 1. Try QuestionExtractionEngine if available
+    try {
+        const QEEClass = (typeof window !== 'undefined' && window.QuestionExtractionEngine) || (typeof QuestionExtractionEngine !== 'undefined' ? QuestionExtractionEngine : null);
+        if (QEEClass) {
+            const qee = new QEEClass();
+            const qText = qee.extractQuestionText(input);
+            if (qText && qText.trim().length > 1) {
+                return cleanLabelText(qText);
+            }
+        }
+    } catch (e) {}
+
+    // 2. Standard label[for]
     if (input.id) {
         const label = document.querySelector(`label[for="${input.id}"]`);
         if (label && label.textContent.trim()) {
             return cleanLabelText(label.textContent);
         }
     }
+
+    // 3. Wrapping label
     const parentLabel = input.closest('label');
     if (parentLabel && parentLabel.textContent.trim()) {
         return cleanLabelText(parentLabel.textContent);
     }
+
+    // 4. Container label (SmartRecruiters, Ashby, Workday, etc.)
+    const container = input.closest('.form-group, .field, [class*="field"], [class*="input"], [class*="form"], spl-input, custom-field') || input.parentElement;
+    if (container) {
+        const candLabel = container.querySelector('label, [class*="label"], [class*="title"], [data-qa*="label"]');
+        if (candLabel && candLabel !== input && (typeof candLabel.contains === 'function' ? !candLabel.contains(input) : true) && candLabel.textContent.trim()) {
+            return cleanLabelText(candLabel.textContent);
+        }
+    }
     
+    // 5. Aria attributes
+    if (input.getAttribute('aria-label')) {
+        return cleanLabelText(input.getAttribute('aria-label'));
+    }
+
+    // 6. Placeholder
     if (input.placeholder) {
         return cleanLabelText(input.placeholder);
     }
     
+    // 7. Input name or ID
     if (input.name) {
         return capitalizeName(input.name);
     }
-    
     if (input.id) {
         return capitalizeName(input.id);
     }

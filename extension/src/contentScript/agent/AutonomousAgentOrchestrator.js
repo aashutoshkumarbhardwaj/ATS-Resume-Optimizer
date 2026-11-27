@@ -131,8 +131,13 @@ class AutonomousAgentOrchestrator {
                 // Step 3: Run Perception Analysis on Current Page
                 let formStructure = null;
                 if (this.aue && typeof this.aue.analyzeApplication === 'function') {
-                    formStructure = await this.aue.analyzeApplication();
-                } else {
+                    try {
+                        formStructure = await this.aue.analyzeApplication();
+                    } catch (aueErr) {
+                        console.warn('[AgentOrchestrator] ⚠️ AUE analysis error, falling back to direct input scanning:', aueErr);
+                    }
+                }
+                if (!formStructure || !formStructure.fields) {
                     const rawInputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea, [role="combobox"], [role="listbox"]'))
                         .filter(el => this.isJobApplicationField(el));
                     formStructure = {
@@ -158,9 +163,15 @@ class AutonomousAgentOrchestrator {
                     const openedApply = await this.handleInitialApplyButton();
                     if (openedApply) {
                         // Re-run perception analysis now that application form / modal has opened
+                        formStructure = null;
                         if (this.aue && typeof this.aue.analyzeApplication === 'function') {
-                            formStructure = await this.aue.analyzeApplication();
-                        } else {
+                            try {
+                                formStructure = await this.aue.analyzeApplication();
+                            } catch (aueErr) {
+                                console.warn('[AgentOrchestrator] ⚠️ AUE analysis error after apply, falling back:', aueErr);
+                            }
+                        }
+                        if (!formStructure || !formStructure.fields) {
                             const rawInputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), select, textarea, [role="combobox"], [role="listbox"]'))
                                 .filter(el => this.isJobApplicationField(el));
                             formStructure = {
@@ -453,8 +464,122 @@ class AutonomousAgentOrchestrator {
                 element.dispatchEvent(new Event('blur', { bubbles: true }));
             } catch (e) {}
 
+            // Inspect and click on any autocomplete suggestion popoff appearing after typing (e.g. City on SmartRecruiters, Lever, Workday)
+            await this.handleAutocompletePopoff(element, answer, field);
+
             return true;
         }
+    }
+
+    /**
+     * Inspect and handle any autocomplete suggestions / popoff list appearing after typing
+     * (e.g. City autocomplete on SmartRecruiters, Google Places, Lever, Workday)
+     */
+    async handleAutocompletePopoff(element, answer, field = {}) {
+        if (!element) return;
+
+        // Give dynamic autocomplete dropdown 300ms to mount/render suggestions
+        await this.cursor.sleep(300);
+
+        const targetText = String(answer || '').trim().toLowerCase();
+
+        // Common autocomplete suggestions container & item selectors
+        const suggestionSelectors = [
+            // SmartRecruiters & custom ATS listboxes
+            '[role="listbox"] [role="option"]',
+            '[role="listbox"] li',
+            '.c-autocomplete__list li',
+            '.c-autocomplete__item',
+            '.spl-select-options li',
+            '.spl-autocomplete-item',
+            // Google Places & Typeahead
+            '.pac-container .pac-item',
+            '.typeahead-dropdown .item',
+            '.suggestions-list li',
+            '.suggestions-list [class*="item"]',
+            'ul[class*="suggestion"] li',
+            'div[class*="suggestion-item"]',
+            'ul[class*="autocomplete"] li',
+            'div[class*="autocomplete-item"]',
+            '[class*="option-item"]',
+            // Generic active dropdown menus
+            '.dropdown-menu.show li',
+            '.dropdown-menu.visible li',
+            '[aria-expanded="true"] + [role="listbox"] [role="option"]'
+        ];
+
+        let visibleOptions = [];
+        for (const sel of suggestionSelectors) {
+            try {
+                const found = Array.from(document.querySelectorAll(sel)).filter(el => this.isElementVisible(el));
+                if (found.length > 0) {
+                    visibleOptions = found;
+                    break;
+                }
+            } catch (e) {}
+        }
+
+        if (visibleOptions.length > 0) {
+            console.log(`[AgentOrchestrator] 🎯 Detected ${visibleOptions.length} autocomplete popoff suggestions after typing into "${field.label || 'field'}".`);
+            
+            // Priority 1: Option matching the answer or part of the answer (e.g. city name)
+            let bestOption = visibleOptions.find(opt => {
+                const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                return text === targetText || text.includes(targetText) || (targetText.length > 3 && targetText.includes(text));
+            });
+
+            // Priority 2: If no exact substring match, pick the top/first visible suggestion
+            if (!bestOption) {
+                bestOption = visibleOptions[0];
+            }
+
+            if (bestOption) {
+                const optText = (bestOption.textContent || bestOption.innerText || '').trim();
+                this.cursor.setStatus(`Selecting suggestion: "${optText}"...`, '🎯', 'moving');
+
+                // Move cursor to suggestion item and click
+                await this.cursor.moveTo(bestOption);
+                this.cursor.highlightElement(bestOption);
+                await this.cursor.click(bestOption);
+
+                if (this.automation && typeof this.automation.clickHumanLike === 'function') {
+                    await this.automation.clickHumanLike(bestOption);
+                } else {
+                    bestOption.click();
+                }
+
+                // Dispatch pointer events to ensure framework commits selection
+                if (typeof MouseEvent !== 'undefined') {
+                    bestOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    bestOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                    bestOption.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                }
+
+                await this.cursor.sleep(300);
+            }
+        }
+
+        // Final check: If any popup / listbox / country dropdown is STILL open, dismiss it cleanly
+        await this.dismissLingeringPopoffs();
+    }
+
+    /**
+     * Dismiss any lingering or unclosed popoffs, open dropdowns, or country code overlays
+     */
+    async dismissLingeringPopoffs() {
+        try {
+            // Check if open listboxes or country code menus are still visible
+            const openMenus = Array.from(document.querySelectorAll(
+                '[role="listbox"]:not([aria-hidden="true"]), .dropdown-menu.show, .c-autocomplete__list, .spl-select-options'
+            )).filter(el => this.isElementVisible(el));
+
+            if (openMenus.length > 0) {
+                // Press Escape to dismiss
+                document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                await this.cursor.sleep(120);
+            }
+        } catch (e) {}
     }
 
     /**
@@ -899,7 +1024,7 @@ class AutonomousAgentOrchestrator {
         await this.cursor.sleep(400);
 
         // Check if there is an inner search input to filter options
-        const searchInput = document.querySelector('input[type="search"], input[role="searchbox"], [role="listbox"] input, .select-menu input, [class*="search"] input');
+        const searchInput = document.querySelector('input[type="search"], input[role="searchbox"], [role="listbox"] input, .select-menu input, [class*="search"] input, input[placeholder*="search" i], input[placeholder*="country" i], input[aria-label*="search" i]');
         if (searchInput && this.isElementVisible(searchInput)) {
             await this.cursor.moveTo(searchInput);
             await this.cursor.type(searchInput, targetText, { humanSpeed: true });
@@ -967,6 +1092,11 @@ class AutonomousAgentOrchestrator {
                 matchedOption = candidateOptions.find(opt => {
                     const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
                     return text.includes('+91') || text.includes('india') || text.includes('(91)');
+                });
+            } else if (!matchedOption && (/^\+?1$/i.test(targetText) || /united\s*states|usa?\b/i.test(targetText))) {
+                matchedOption = candidateOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return text.includes('united states') || text.includes('+1') || text.includes('(1)');
                 });
             }
 
@@ -1037,17 +1167,22 @@ class AutonomousAgentOrchestrator {
                 }
 
                 await this.cursor.sleep(350);
+                await this.dismissLingeringPopoffs();
                 return true;
             } else {
                 console.warn(`[AgentOrchestrator] No matching dropdown option found for: "${targetText}"`);
+                await this.dismissLingeringPopoffs();
             }
         }
 
         // Final fallback: try fillFieldRobustly
         if (this.automation && typeof this.automation.fillFieldRobustly === 'function') {
-            return await this.automation.fillFieldRobustly(element, answer);
+            const res = await this.automation.fillFieldRobustly(element, answer);
+            await this.dismissLingeringPopoffs();
+            return res;
         }
 
+        await this.dismissLingeringPopoffs();
         return false;
     }
 
@@ -1099,10 +1234,10 @@ class AutonomousAgentOrchestrator {
                 return false;
             }
 
-            // Priority patterns for Apply buttons
-            const isMatch = /^(?:apply|easy\s*apply|quick\s*apply|start\s*application)\b/i.test(text) ||
-                            /\bapply\s*(?:now|online|for\s*this\s*job|to\s*job|with\s*resume|today|externally|on\s*company\s*site)\b/i.test(text) ||
-                            /^(?:apply|easy\s*apply)$/i.test(text) ||
+            // Priority patterns for Apply buttons (including SmartRecruiters "I'm interested")
+            const isMatch = /^(?:apply|easy\s*apply|quick\s*apply|start\s*application|i['’]m\s*interested|interested)\b/i.test(text) ||
+                            /\b(?:apply\s*(?:now|online|for\s*this\s*job|to\s*job|with\s*resume|today|externally|on\s*company\s*site)|i['’]m\s*interested)\b/i.test(text) ||
+                            /^(?:apply|easy\s*apply|i['’]m\s*interested)$/i.test(text) ||
                             (el.getAttribute('data-automation-id') || '').includes('apply') ||
                             (el.getAttribute('data-testid') || '').includes('apply') ||
                             el.classList.contains('jobs-apply-button') ||

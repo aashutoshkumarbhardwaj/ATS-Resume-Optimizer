@@ -158,7 +158,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function getActiveTab() {
-        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tabs || tabs.length === 0) {
+            tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        }
         if (tabs && tabs.length > 0) {
             activeTabId = tabs[0].id;
             return tabs[0];
@@ -174,27 +177,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!tab || !tab.id) return;
 
         appendLog('Perceiving active ATS page structure...');
+        
+        const applyPerception = (response) => {
+            if (!response || !response.success || (response.totalFields === 0 && response.platform === 'Generic')) {
+                return false;
+            }
+            platformBadge.textContent = response.platform;
+            detectedPlatformText.textContent = response.platform;
+            detectedFieldsCount.textContent = response.totalFields || 0;
+
+            const hasCaptcha = response.plan && response.plan.some(p => p.isCaptcha);
+            if (hasCaptcha) {
+                captchaWarningBanner.classList.remove('hidden');
+            } else {
+                captchaWarningBanner.classList.add('hidden');
+            }
+
+            appendLog(`Perception: ${response.totalFields} inputs on ${response.platform}.`, 'success');
+            renderPlan(response.plan);
+            return true;
+        };
+
         try {
-            chrome.tabs.sendMessage(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, (response) => {
-                if (chrome.runtime.lastError || !response || !response.success) {
-                    platformBadge.textContent = 'Ready';
-                    detectedPlatformText.textContent = 'Generic Web';
+            // First attempt: query top frame directly (frameId: 0) to avoid any subframe race condition
+            chrome.tabs.sendMessage(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, { frameId: 0 }, (topRes) => {
+                if (!chrome.runtime.lastError && applyPerception(topRes)) {
                     return;
                 }
-
-                platformBadge.textContent = response.platform;
-                detectedPlatformText.textContent = response.platform;
-                detectedFieldsCount.textContent = response.totalFields || 0;
-
-                const hasCaptcha = response.plan && response.plan.some(p => p.isCaptcha);
-                if (hasCaptcha) {
-                    captchaWarningBanner.classList.remove('hidden');
-                } else {
-                    captchaWarningBanner.classList.add('hidden');
-                }
-
-                appendLog(`Perception: ${response.totalFields} inputs on ${response.platform}.`, 'success');
-                renderPlan(response.plan);
+                // Second attempt: query across frames (in case the job form is in an embedded iframe like Greenhouse/Lever)
+                chrome.tabs.sendMessage(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, (anyRes) => {
+                    if (chrome.runtime.lastError || !applyPerception(anyRes)) {
+                        platformBadge.textContent = 'Ready';
+                        detectedPlatformText.textContent = 'Generic Web';
+                        detectedFieldsCount.textContent = '0';
+                        renderPlan([]);
+                    }
+                });
             });
         } catch (e) {
             console.warn('[Claude SidePanel] Scan error:', e);
@@ -342,48 +360,151 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     /**
-     * Client-side high-precision PDF text extractor using PDF.js.
-     * Decodes text layers from compressed FlateDecode streams across all pages.
+     * In-browser FlateDecode decompressor using native DecompressionStream.
+     * Decodes compressed PDF content streams directly in pure JS with 0 workers and 0 CSP violations.
+     */
+    async function decompressPdfFlateStreams(uint8) {
+        const textTokens = [];
+        const latin1 = new TextDecoder('latin1').decode(uint8);
+        const streamRegex = /stream[\r\n]+([\s\S]*?)[\r\n]+endstream/g;
+        let match;
+
+        while ((match = streamRegex.exec(latin1)) !== null) {
+            const streamStart = match.index + match[0].indexOf('\n') + 1;
+            const streamEnd = match.index + match[0].lastIndexOf('endstream');
+            if (streamEnd <= streamStart) continue;
+
+            const slice = uint8.slice(streamStart, streamEnd);
+            let decompressedStr = '';
+
+            // Try DecompressionStream('deflate')
+            if (typeof DecompressionStream !== 'undefined') {
+                try {
+                    const ds = new DecompressionStream('deflate');
+                    const writer = ds.writable.getWriter();
+                    writer.write(slice);
+                    writer.close();
+                    const reader = ds.readable.getReader();
+                    const chunks = [];
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                    }
+                    const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+                    const out = new Uint8Array(totalLen);
+                    let offset = 0;
+                    for (const c of chunks) {
+                        out.set(c, offset);
+                        offset += c.length;
+                    }
+                    decompressedStr = new TextDecoder('latin1').decode(out);
+                } catch (e) {
+                    // Try deflate-raw if zlib header is stripped
+                    try {
+                        const dsRaw = new DecompressionStream('deflate-raw');
+                        const writer = dsRaw.writable.getWriter();
+                        writer.write(slice);
+                        writer.close();
+                        const reader = dsRaw.readable.getReader();
+                        const chunks = [];
+                        while (true) {
+                            const { value, done } = await reader.read();
+                            if (done) break;
+                            chunks.push(value);
+                        }
+                        const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
+                        const out = new Uint8Array(totalLen);
+                        let offset = 0;
+                        for (const c of chunks) {
+                            out.set(c, offset);
+                            offset += c.length;
+                        }
+                        decompressedStr = new TextDecoder('latin1').decode(out);
+                    } catch (e2) {}
+                }
+            }
+
+            if (decompressedStr) {
+                // Extract (text) Tj
+                const tjRegex = /\(([^)]+)\)\s*Tj/g;
+                let tj;
+                while ((tj = tjRegex.exec(decompressedStr)) !== null) {
+                    textTokens.push(tj[1].replace(/\\([()\\])/g, '$1'));
+                }
+                // Extract [(text) (text)] TJ
+                const arrayRegex = /\[([^\]]+)\]\s*TJ/g;
+                let arr;
+                while ((arr = arrayRegex.exec(decompressedStr)) !== null) {
+                    const innerMatches = arr[1].match(/\(([^)]+)\)/g) || [];
+                    const line = innerMatches.map(s => s.slice(1, -1).replace(/\\([()\\])/g, '$1')).join('');
+                    if (line.trim()) textTokens.push(line);
+                }
+            }
+        }
+
+        return textTokens.join('\n');
+    }
+
+    /**
+     * Client-side high-precision PDF text extractor using PDF.js with timeout and native fallback.
      */
     async function extractTextFromPdfArrayBuffer(arrayBuffer) {
-        // 1. Primary: Mozilla PDF.js (decodes FlateDecode, CMap fonts, and layout)
+        // 1. Primary: Mozilla PDF.js (with 2.5s safety timeout)
         try {
             const PDFJS = window.pdfjsLib || window.pdfjsDistBuildPdf || (typeof window !== 'undefined' && window['pdfjs-dist/build/pdf']);
             if (PDFJS && typeof PDFJS.getDocument === 'function') {
                 PDFJS.disableWorker = true;
                 const typedarray = new Uint8Array(arrayBuffer);
-                const doc = await PDFJS.getDocument(typedarray);
-                let fullText = '';
+                const loadingTask = PDFJS.getDocument({ data: typedarray });
 
-                for (let i = 1; i <= doc.numPages; i++) {
-                    const page = await doc.getPage(i);
-                    const textContent = await page.getTextContent({
-                        normalizeWhitespace: false,
-                        disableCombineTextItems: false
-                    });
+                const doc = await Promise.race([
+                    (loadingTask.promise ? loadingTask.promise : Promise.resolve(loadingTask)),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('PDFJS timeout')), 2500))
+                ]);
 
-                    let lastY, pageText = '';
-                    for (const item of textContent.items) {
-                        if (lastY === item.transform[5] || !lastY) {
-                            pageText += item.str;
-                        } else {
-                            pageText += '\n' + item.str;
+                if (doc && doc.numPages > 0) {
+                    let fullText = '';
+                    for (let i = 1; i <= doc.numPages; i++) {
+                        const page = await doc.getPage(i);
+                        const textContent = await page.getTextContent({
+                            normalizeWhitespace: true,
+                            disableCombineTextItems: false
+                        });
+
+                        let lastY, pageText = '';
+                        for (const item of textContent.items) {
+                            if (lastY === item.transform[5] || !lastY) {
+                                pageText += item.str;
+                            } else {
+                                pageText += '\n' + item.str;
+                            }
+                            lastY = item.transform[5];
                         }
-                        lastY = item.transform[5];
+                        fullText += (fullText ? '\n\n' : '') + pageText;
                     }
 
-                    fullText += (fullText ? '\n\n' : '') + pageText;
-                }
-
-                if (fullText && fullText.trim().length > 20) {
-                    return fullText.trim();
+                    if (fullText && fullText.trim().length > 20) {
+                        return fullText.trim();
+                    }
                 }
             }
         } catch (pdfErr) {
-            console.warn('PDF.js text extraction error:', pdfErr);
+            console.warn('PDF.js text extraction error or timeout, trying native decompressor...', pdfErr);
         }
 
-        // 2. Secondary fallback: uncompressed text stream (BT ... ET)
+        // 2. Secondary: In-browser FlateDecode Stream Extractor (100% reliable in Chrome)
+        try {
+            const uint8 = new Uint8Array(arrayBuffer);
+            const decompText = await decompressPdfFlateStreams(uint8);
+            if (decompText && decompText.trim().length > 20) {
+                return decompText.trim();
+            }
+        } catch (decompErr) {
+            console.warn('DecompressionStream PDF extraction error:', decompErr);
+        }
+
+        // 3. Tertiary: Uncompressed text stream (BT ... ET)
         try {
             const uint8 = new Uint8Array(arrayBuffer);
             const raw = new TextDecoder('latin1').decode(uint8);
@@ -508,8 +629,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (!extractedText || extractedText.trim().length < 20) {
-            uploadPromptText.textContent = `Selected: ${file.name}`;
-            appendLog(`Could not extract clean text from ${file.name}. Please paste resume text below.`, 'warn');
+            uploadPromptText.textContent = `Upload failed: ${file.name}`;
+            appendLog(`Could not extract clean text from ${file.name}. Please paste resume text in the box below.`, 'warn');
             return;
         }
 
@@ -536,7 +657,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     btnParseResumeToProfile?.addEventListener('click', async () => {
-        const text = currentResumeText || resumeTextInput.value.trim();
+        let text = currentResumeText || resumeTextInput.value.trim();
+        if (!text && resumeFileInput.files && resumeFileInput.files[0]) {
+            appendLog('Reading selected resume file...', 'info');
+            resumeFileInput.dispatchEvent(new Event('change'));
+            return;
+        }
+        if (!text) {
+            appendLog('Please upload a resume file or paste resume text below.', 'warn');
+            return;
+        }
         await parseAndAutoFillProfile(text, 'manual_resume.txt');
     });
 

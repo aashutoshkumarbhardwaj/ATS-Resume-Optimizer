@@ -168,6 +168,24 @@ class QuestionExtractionEngine {
             }
         }
 
+        // 4.5. Surrounding container label (SmartRecruiters, Ashby, Workday, modern Web Components)
+        if (!labelText) {
+            const container = el.closest('.form-group, .field, [class*="field"], [class*="input"], [class*="form"], [class*="control"], spl-input, custom-field, [data-qa*="field"]') || el.parentElement;
+            if (container) {
+                const candLabel = container.querySelector('label, [class*="label"], [class*="title"], [data-qa*="label"]');
+                if (candLabel && candLabel !== el && (typeof candLabel.contains === 'function' ? !candLabel.contains(el) : true)) {
+                    if (typeof candLabel.cloneNode === 'function') {
+                        const clone = candLabel.cloneNode(true);
+                        const reqMarks = typeof clone.querySelectorAll === 'function' ? clone.querySelectorAll('.asterisk, .required, [title="required"]') : [];
+                        Array.from(reqMarks).forEach(m => typeof m.remove === 'function' && m.remove());
+                        labelText = clone.textContent.trim();
+                    } else {
+                        labelText = (candLabel.textContent || '').trim();
+                    }
+                }
+            }
+        }
+
         // 5. Preceding text heuristic
         if (!labelText) {
             let current = el.previousElementSibling;
@@ -185,6 +203,16 @@ class QuestionExtractionEngine {
         // 6. Visual proximity fallback (Claude in Chrome visual-geometric grounding)
         if (!labelText && typeof el.getBoundingClientRect === 'function') {
             labelText = this.findVisualProximityLabel(el);
+        }
+
+        // 7. Input attribute fallbacks (title, placeholder, data-qa, name, id)
+        if (!labelText) {
+            labelText = el.getAttribute('title') || 
+                        el.placeholder || 
+                        el.getAttribute('data-qa') || 
+                        el.getAttribute('data-automation-id') || 
+                        el.name || 
+                        el.id || '';
         }
 
         return this.cleanText(labelText);
@@ -275,6 +303,50 @@ class QuestionExtractionEngine {
     }
 
     /**
+     * Collect elements deeply across document, open shadow roots, and accessible child iframes.
+     */
+    collectElementsDeep(rootNode = document, selector = '', collected = [], visited = new Set(), depth = 0) {
+        if (!rootNode || depth > 5 || visited.has(rootNode)) return collected;
+        visited.add(rootNode);
+
+        try {
+            if (typeof rootNode.querySelectorAll === 'function') {
+                const els = rootNode.querySelectorAll(selector);
+                for (let i = 0; i < els.length; i++) {
+                    collected.push(els[i]);
+                }
+            }
+
+            // Traverse open shadow roots (Web Components / custom elements)
+            const allNodes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('*') : [];
+            for (let i = 0; i < allNodes.length; i++) {
+                const node = allNodes[i];
+                if (node && node.shadowRoot && !visited.has(node.shadowRoot)) {
+                    this.collectElementsDeep(node.shadowRoot, selector, collected, visited, depth + 1);
+                }
+            }
+
+            // Traverse accessible child iframes
+            const iframes = typeof rootNode.querySelectorAll === 'function' ? rootNode.querySelectorAll('iframe, frame') : [];
+            for (let i = 0; i < iframes.length; i++) {
+                try {
+                    const iframe = iframes[i];
+                    const iframeDoc = iframe.contentDocument || (iframe.contentWindow && iframe.contentWindow.document);
+                    if (iframeDoc && !visited.has(iframeDoc)) {
+                        this.collectElementsDeep(iframeDoc, selector, collected, visited, depth + 1);
+                    }
+                } catch (frameErr) {
+                    // Cross-origin iframe boundaries
+                }
+            }
+        } catch (e) {
+            console.warn('[QEE] Error collecting elements deep:', e);
+        }
+
+        return collected;
+    }
+
+    /**
      * Extract full Accessibility Tree (AXTree) snapshot of interactive elements on the page.
      * Implements Claude in Chrome's observe layer for multimodal & structured DOM inspection.
      */
@@ -291,23 +363,17 @@ class QuestionExtractionEngine {
             '[role="listbox"]'
         ];
 
-        const rawNodes = Array.from(rootNode.querySelectorAll(interactiveSelectors.join(', ')));
-        
-        // Deep traverse same-origin iframes
-        const iframes = Array.from(rootNode.querySelectorAll('iframe'));
-        for (const iframe of iframes) {
-            try {
-                if (iframe.contentDocument && iframe.contentDocument.body) {
-                    const iframeNodes = Array.from(iframe.contentDocument.querySelectorAll(interactiveSelectors.join(', ')));
-                    rawNodes.push(...iframeNodes);
-                }
-            } catch (e) {
-                // Ignore cross-origin iframe security boundaries
-            }
-        }
+        const selectorStr = interactiveSelectors.join(', ');
+        const rawNodes = this.collectElementsDeep(rootNode, selectorStr);
 
-        // Deduplicate
-        const uniqueNodes = Array.from(new Set(rawNodes));
+        // Deduplicate while filtering out tiny/invisible nodes and captcha widgets
+        const uniqueNodes = Array.from(new Set(rawNodes)).filter(el => {
+            // Keep elements that are either visible or standard inputs
+            if (el.type === 'hidden') return false;
+            const rect = el.getBoundingClientRect ? el.getBoundingClientRect() : { width: 100, height: 20 };
+            if (rect.width === 0 && rect.height === 0 && el.offsetParent === null) return false;
+            return true;
+        });
 
         // Sort candidates in strict visual top-to-bottom reading sequence
         uniqueNodes.sort((a, b) => {

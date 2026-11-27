@@ -537,10 +537,16 @@ class PersonalAgentBrain {
         }
 
         // 6. Level 6: Interactive Fallback ("if not able to find, ask me")
-        // The user specifically requested: if not in database, ask the user what to do!
-        if (context.virtualCursor && typeof context.virtualCursor.askUser === 'function') {
+        // Only ask the user if this field is explicitly required (*), otherwise let optional fields stay blank without interrupting
+        const isRequiredField = fieldData.required === true || 
+                                /\*/.test(rawLabel) || 
+                                /\*/.test(cleanLabel) ||
+                                (fieldData.element && fieldData.element.required) ||
+                                (fieldData.element && typeof fieldData.element.getAttribute === 'function' && fieldData.element.getAttribute('aria-required') === 'true');
+
+        if (isRequiredField && context.virtualCursor && typeof context.virtualCursor.askUser === 'function') {
             const displayQuestion = cleanLabel || rawLabel || 'Please provide an answer for this field:';
-            console.log(`[PersonalAgentBrain] ❓ Asking user for unknown field: "${displayQuestion}"`);
+            console.log(`[PersonalAgentBrain] ❓ Asking user for required field: "${displayQuestion}"`);
             const optionsList = (fieldData.options || []).map(o => typeof o === 'string' ? o : (o.label || o.value)).slice(0, 5);
             const userChoice = await context.virtualCursor.askUser(
                 displayQuestion,
