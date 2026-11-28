@@ -266,6 +266,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return false;
         }
         sendResponse({ success: true, job: detectedJob });
+    } else if (request.type === 'START_LINKEDIN_AUTO_APPLY') {
+        if (window !== window.top) return false;
+        console.log('[Content] 💼 Launching LinkedIn Easy Apply Autopilot...');
+        try {
+            const OrchestratorClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
+            if (!OrchestratorClass) {
+                throw new Error('AutonomousAgentOrchestrator not loaded. Please refresh the LinkedIn page.');
+            }
+            const orchestrator = new OrchestratorClass();
+            orchestrator.start({
+                mode: 'linkedin_auto_apply',
+                visualAgent: true,
+                profile: request.profile,
+                maxApplications: request.maxApplications || 15,
+                unfollowCompany: request.unfollowCompany !== false,
+                autoSubmit: request.autoSubmit !== false
+            }).then(result => {
+                sendResponse({ success: true, result });
+            }).catch(err => {
+                sendResponse({ success: false, error: err.message });
+            });
+            return true;
+        } catch (e) {
+            sendResponse({ success: false, error: e.message });
+        }
     } else if (request.type === 'RUN_AUTONOMOUS_AGENT' || request.action === 'RUN_AUTONOMOUS_AGENT') {
         // If in an iframe, do not run or respond unless this frame contains interactive form fields
         if (window !== window.top) {

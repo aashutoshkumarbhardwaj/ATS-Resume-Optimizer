@@ -5,7 +5,7 @@
  * 2. Explainable Candidate Suitability evaluation with evidence provenance,
  *    partial/missing requirements, rejection risks, and Apply/Stretch/Skip recommendation.
  */
-class JobIntelligenceEngine {
+var JobIntelligenceEngine = (typeof window !== 'undefined' && window.JobIntelligenceEngine) || class JobIntelligenceEngine {
     static SKILL_CATALOG = [
         'Python', 'JavaScript', 'TypeScript', 'Java', 'C++', 'C#', 'Go', 'Rust', 'SQL', 'NoSQL',
         'React', 'Next.js', 'Vue', 'Angular', 'Node.js', 'Express', 'FastAPI', 'Django', 'Flask', 'Spring Boot',

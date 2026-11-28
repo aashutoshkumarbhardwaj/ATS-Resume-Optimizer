@@ -205,6 +205,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         'src/contentScript/agent/BatchQueueManager.js',
         'src/utils/smartAnswerEngine.js',
         'src/contentScript/agent/PersonalAgentBrain.js',
+        'src/contentScript/agent/workflow/PageObserver.js',
+        'src/contentScript/agent/workflow/DropdownInteractionEngine.js',
+        'src/contentScript/agent/workflow/PageStateClassifier.js',
+        'src/contentScript/agent/workflow/SelfHealingResolver.js',
+        'src/contentScript/agent/workflow/ActionExecutor.js',
+        'src/contentScript/agent/workflow/ATSWorkflowAdapters.js',
+        'src/contentScript/agent/workflow/WorkflowStateMachine.js',
+        'src/contentScript/agent/workflow/WorkflowRecorder.js',
         'src/contentScript/agent/LinkedInEasyApplyAgent.js',
         'src/contentScript/agent/AutonomousAgentOrchestrator.js',
         'src/contentScript/content-script.js'
@@ -1597,14 +1605,58 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ──────────────────────────────────────────────────────────────────────────
     // 5. APPLICATIONS KANBAN
     // ──────────────────────────────────────────────────────────────────────────
+    function normalizeKanbanStatus(raw) {
+        const s = String(raw || 'applied').toLowerCase().trim();
+        if (s === 'submitted' || s === 'confirmed') return 'applied';
+        if (['wishlist', 'discovered', 'analyzed', 'ready'].includes(s)) return 'wishlist';
+        if (['interview', 'interviewing'].includes(s)) return 'interview';
+        if (s === 'offer') return 'offer';
+        if (['needs_review', 'in_progress', 'failed', 'rejected', 'withdrawn'].includes(s)) return s;
+        return 'applied';
+    }
+
     async function loadKanbanData() {
-        const data = await chrome.storage.local.get(['applications', 'recentApplications']);
-        applicationRecords = data.applications || data.recentApplications || [];
+        const data = await chrome.storage.local.get([
+            'applications',
+            'recentApplications',
+            'user_context_graph',
+            'jobOrbitApplications',
+            'applicationHistory'
+        ]);
+
+        const merged = [];
+        const seenKeys = new Set();
+        const addRecords = (arr) => {
+            if (!Array.isArray(arr)) return;
+            for (const item of arr) {
+                if (!item) continue;
+                const key = item.id || `${String(item.url || '').split('#')[0]}|${item.company || ''}|${item.jobTitle || item.title || ''}`;
+                if (seenKeys.has(key)) continue;
+                seenKeys.add(key);
+                merged.push({
+                    id: item.id || `app_${Date.now()}_${merged.length}`,
+                    company: item.company || 'Company',
+                    jobTitle: item.jobTitle || item.title || 'Role',
+                    url: item.url || '',
+                    platform: item.platform || 'ATS',
+                    status: normalizeKanbanStatus(item.status),
+                    date: item.date || item.timestamp || new Date().toISOString()
+                });
+            }
+        };
+
+        addRecords(data.applications);
+        addRecords(data.recentApplications);
+        addRecords(data.user_context_graph?.applicationHistory);
+        addRecords(data.jobOrbitApplications);
+        addRecords(data.applicationHistory);
+
+        merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        applicationRecords = merged;
 
         const counts = { wishlist: 0, applied: 0, interview: 0, offer: 0 };
         applicationRecords.forEach(app => {
-            const status = (app.status || 'applied').toLowerCase();
-            if (counts[status] !== undefined) counts[status]++;
+            if (counts[app.status] !== undefined) counts[app.status]++;
         });
 
         kanbanCountWishlist.textContent = counts.wishlist;
@@ -1613,19 +1665,70 @@ document.addEventListener('DOMContentLoaded', async () => {
         kanbanCountOffer.textContent = counts.offer;
 
         if (applicationRecords.length === 0) {
-            kanbanListContainer.innerHTML = '<div class="empty-state"><p>No tracked applications yet. Use the agent to auto-track applications.</p></div>';
+            kanbanListContainer.innerHTML = '<div class="empty-state"><p>No tracked applications yet. Run the agent or click "+ Track Page".</p></div>';
             return;
         }
 
-        kanbanListContainer.innerHTML = applicationRecords.slice(0, 15).map(app => `
-            <div class="kanban-item">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <strong style="font-size:12px;">${escapeHtml(app.company || 'Company')}</strong>
-                    <span class="badge-pill platform-badge">${escapeHtml(app.status || 'Applied')}</span>
+        const statusOptions = ['wishlist', 'needs_review', 'applied', 'interview', 'offer', 'rejected'];
+        kanbanListContainer.innerHTML = applicationRecords.slice(0, 30).map((app, idx) => `
+            <div class="kanban-item" data-app-idx="${idx}">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                    <strong style="font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(app.company)}</strong>
+                    <select class="kanban-status-select" data-app-id="${escapeHtml(app.id)}" style="font-size:10.5px; padding:2px 6px; border-radius:6px; border:1px solid #E5E0D8; background:#FAF8F5; color:#1F2937;">
+                        ${statusOptions.map(st => `<option value="${st}" ${app.status === st ? 'selected' : ''}>${st.replace('_', ' ')}</option>`).join('')}
+                    </select>
                 </div>
-                <span style="font-size:11px; color:#636159;">${escapeHtml(app.jobTitle || app.title || 'Role')} • ${new Date(app.date || Date.now()).toLocaleDateString()}</span>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px;">
+                    <span style="font-size:11px; color:#636159;">${escapeHtml(app.jobTitle)} • ${escapeHtml(app.platform)} • ${new Date(app.date).toLocaleDateString()}</span>
+                    ${app.url ? `<a href="${escapeHtml(app.url)}" target="_blank" style="font-size:10.5px; color:#D97757; text-decoration:none;">Open</a>` : ''}
+                </div>
             </div>
         `).join('');
+
+        kanbanListContainer.querySelectorAll('.kanban-status-select').forEach((sel) => {
+            sel.addEventListener('change', async (e) => {
+                const appId = e.target.getAttribute('data-app-id');
+                const newStatus = e.target.value;
+                const rec = applicationRecords.find((a) => a.id === appId);
+                if (rec) rec.status = newStatus;
+                await chrome.storage.local.set({ applications: applicationRecords });
+                await loadKanbanData();
+            });
+        });
+    }
+
+    const btnTrackCurrentJob = document.getElementById('btnTrackCurrentJob');
+    if (btnTrackCurrentJob) {
+        btnTrackCurrentJob.addEventListener('click', async () => {
+            const tab = await getActiveTab();
+            if (!tab) return;
+            let detected = null;
+            try {
+                const res = await sendMessageSafe(tab.id, { type: 'DETECT_JOB' });
+                detected = res?.job || null;
+            } catch (e) {}
+
+            const data = await chrome.storage.local.get(['applications']);
+            const list = Array.isArray(data.applications) ? data.applications : [];
+            const url = tab.url || '';
+            const company = detected?.company || (tab.title || '').split(/[-|]/)[1]?.trim() || 'Company';
+            const jobTitle = detected?.title || detected?.jobTitle || (tab.title || '').split(/[-|]/)[0]?.trim() || 'Role';
+
+            if (!list.some((a) => a.url === url && url)) {
+                list.unshift({
+                    id: `app_${Date.now()}`,
+                    company,
+                    jobTitle,
+                    url,
+                    platform: detected?.platform || 'Web ATS',
+                    status: 'wishlist',
+                    date: new Date().toISOString()
+                });
+                await chrome.storage.local.set({ applications: list });
+            }
+            await loadKanbanData();
+            appendLog(`Tracked "${jobTitle}" at ${company} in Kanban.`, 'success');
+        });
     }
 
     btnRefreshKanban.addEventListener('click', loadKanbanData);
@@ -1693,6 +1796,115 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     btnClearAuditLogs.addEventListener('click', () => {
         if (systemAuditLogs) systemAuditLogs.innerHTML = '';
+    });
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TAB 4B: LINKEDIN AUTO APPLY
+    // ──────────────────────────────────────────────────────────────────────────
+    const btnStartLinkedInAutoApply = document.getElementById('btnStartLinkedInAutoApply');
+    const btnStopLinkedInAutoApply = document.getElementById('btnStopLinkedInAutoApply');
+    const linkedinStatusBadge = document.getElementById('linkedinStatusBadge');
+    const linkedinAppliedCount = document.getElementById('linkedinAppliedCount');
+    const linkedinSkippedCount = document.getElementById('linkedinSkippedCount');
+    const linkedinFailedCount = document.getElementById('linkedinFailedCount');
+    const linkedinLiveStatus = document.getElementById('linkedinLiveStatus');
+
+    chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.type === 'LINKEDIN_APPLY_PROGRESS') {
+            if (linkedinAppliedCount) linkedinAppliedCount.textContent = String(msg.applied ?? 0);
+            if (linkedinSkippedCount) linkedinSkippedCount.textContent = String(msg.skipped ?? 0);
+            if (linkedinFailedCount) linkedinFailedCount.textContent = String(msg.failed ?? 0);
+            if (linkedinLiveStatus && msg.statusText) linkedinLiveStatus.textContent = msg.statusText;
+            if (msg.statusText && /applied to|finished active modal/i.test(msg.statusText)) {
+                loadKanbanData();
+            }
+        }
+    });
+
+    if (btnStartLinkedInAutoApply) {
+        btnStartLinkedInAutoApply.addEventListener('click', async () => {
+            const tab = await getActiveTab();
+            if (!tab || !tab.url || !tab.url.includes('linkedin.com/jobs')) {
+                if (linkedinLiveStatus) linkedinLiveStatus.textContent = 'Please open a LinkedIn Jobs page (linkedin.com/jobs/...) first.';
+                appendLog('LinkedIn Auto Apply requires an active linkedin.com/jobs tab.', 'warn');
+                return;
+            }
+
+            const maxApplications = parseInt(document.getElementById('linkedinMaxApps')?.value || '15', 10) || 15;
+            const autoSubmit = document.getElementById('linkedinAutoSubmit')?.checked !== false;
+            const unfollowCompany = document.getElementById('linkedinUnfollowCompany')?.checked !== false;
+
+            if (linkedinStatusBadge) {
+                linkedinStatusBadge.textContent = 'Running';
+                linkedinStatusBadge.className = 'badge-pill status-running';
+            }
+            if (linkedinLiveStatus) linkedinLiveStatus.textContent = 'Starting LinkedIn Easy Apply Autopilot...';
+            btnStartLinkedInAutoApply.disabled = true;
+
+            try {
+                await ensureContentScriptsInjected(tab.id);
+                const resp = await sendMessageSafe(tab.id, {
+                    type: 'START_LINKEDIN_AUTO_APPLY',
+                    profile: currentProfile,
+                    maxApplications,
+                    autoSubmit,
+                    unfollowCompany
+                });
+                if (resp && resp.result) {
+                    if (linkedinAppliedCount) linkedinAppliedCount.textContent = String(resp.result.applied ?? 0);
+                    if (linkedinSkippedCount) linkedinSkippedCount.textContent = String(resp.result.skipped ?? 0);
+                    if (linkedinFailedCount) linkedinFailedCount.textContent = String(resp.result.failed ?? 0);
+                }
+                if (linkedinStatusBadge) {
+                    linkedinStatusBadge.textContent = 'Done';
+                    linkedinStatusBadge.className = 'badge-pill status-idle';
+                }
+                await loadKanbanData();
+            } catch (err) {
+                if (linkedinLiveStatus) linkedinLiveStatus.textContent = `Error: ${err.message}`;
+                if (linkedinStatusBadge) {
+                    linkedinStatusBadge.textContent = 'Error';
+                    linkedinStatusBadge.className = 'badge-pill status-idle';
+                }
+            } finally {
+                btnStartLinkedInAutoApply.disabled = false;
+            }
+        });
+    }
+
+    if (btnStopLinkedInAutoApply) {
+        btnStopLinkedInAutoApply.addEventListener('click', async () => {
+            const tab = await getActiveTab();
+            if (tab) {
+                chrome.tabs.sendMessage(tab.id, { type: 'AGENT_SESSION_STOP' }).catch(() => {});
+            }
+            if (linkedinStatusBadge) {
+                linkedinStatusBadge.textContent = 'Stopped';
+                linkedinStatusBadge.className = 'badge-pill status-idle';
+            }
+            if (linkedinLiveStatus) linkedinLiveStatus.textContent = 'Stopped by user.';
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TAB 4C: CLOSED-LOOP WORKFLOW & LIVE DEBUGGER
+    // ──────────────────────────────────────────────────────────────────────────
+    const dbgStateBadge = document.getElementById('dbgStateBadge');
+    const dbgPageState = document.getElementById('dbgPageState');
+    const dbgObservation = document.getElementById('dbgObservation');
+    const dbgPlan = document.getElementById('dbgPlan');
+    const dbgAction = document.getElementById('dbgAction');
+    const dbgVerification = document.getElementById('dbgVerification');
+
+    chrome.runtime.onMessage.addListener((msg) => {
+        if (msg && msg.type === 'WORKFLOW_DEBUG_STEP') {
+            if (dbgStateBadge) dbgStateBadge.textContent = msg.state || 'RUNNING';
+            if (dbgPageState) dbgPageState.textContent = msg.state || 'UNKNOWN';
+            if (dbgObservation) dbgObservation.textContent = msg.observationSummary || '';
+            if (dbgPlan) dbgPlan.textContent = msg.planSummary || '';
+            if (dbgAction) dbgAction.textContent = msg.actionSummary || '';
+            if (dbgVerification) dbgVerification.textContent = msg.verificationSummary || '';
+        }
     });
 
     // ──────────────────────────────────────────────────────────────────────────

@@ -206,9 +206,20 @@ class VirtualCursorEngine {
 
         if ((typeof HTMLElement !== 'undefined' && target instanceof HTMLElement) || (target && typeof target.getBoundingClientRect === 'function')) {
             targetElement = target;
-            await this.ensureElementInView(target);
+            let rect = targetElement.getBoundingClientRect();
+            if ((rect.width === 0 || rect.height === 0) && typeof targetElement.querySelectorAll === 'function') {
+                const visibleChild = Array.from(targetElement.querySelectorAll('*')).find((c) => {
+                    const cr = c.getBoundingClientRect();
+                    return cr.width > 4 && cr.height > 4;
+                });
+                if (visibleChild) {
+                    targetElement = visibleChild;
+                    rect = visibleChild.getBoundingClientRect();
+                }
+            }
+            await this.ensureElementInView(targetElement);
 
-            const rect = target.getBoundingClientRect();
+            rect = targetElement.getBoundingClientRect();
             targetX = rect.left + Math.max(8, Math.min(rect.width / 2, rect.width - 8));
             targetY = rect.top + Math.max(6, Math.min(rect.height / 2, rect.height - 6));
 

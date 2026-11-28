@@ -837,9 +837,9 @@ Candidate Knowledge Base:
         }
 
         // 3. Dynamic Resume-Grounded Synthesizer (Zero-API / Offline RAG)
-        // NEVER run narrative essay synthesizer on short factual/numeric/entity fields (CGPA, Graduation Year, Branch, Stipend, College)
-        const isShortFactual = /\b(cgpa|gpa|percentage|marks|year\s*of\s*completion|graduation\s*year|passing\s*year|branch|speciali[sz]ation|stipend|hourly\s*(?:rate|compensation)|college|university|school|institution|degree|roll\s*no|enrollment|register\s*number|pan|aadhaar|passport|license)\b/i.test(questionText);
-        const SmartEngine = !isShortFactual ? getSmartAnswerEngine() : null;
+        // ONLY run narrative essay synthesizer on genuine open-ended narrative questions (never on short factual/date/numeric fields)
+        const isShortFactual = /\b(cgpa|gpa|percentage|marks|year\s*of\s*completion|graduation\s*year|passing\s*year|branch|speciali[sz]ation|stipend|hourly\s*(?:rate|compensation)|college|university|school|institution|degree|roll\s*no|enrollment|register\s*number|pan|aadhaar|passport|license|start\s*month|start\s*date)\b/i.test(questionText);
+        const SmartEngine = (!isShortFactual && this.isOpenEndedNarrativeQuestion(questionText, fieldData)) ? getSmartAnswerEngine() : null;
         if (SmartEngine) {
             try {
                 const smartRes = SmartEngine.generate(questionText, this.resumeData, this.profile, context);

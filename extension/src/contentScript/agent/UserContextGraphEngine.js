@@ -426,19 +426,19 @@
                         }
                     }
 
-                    // Semantic token overlap (Jaccard similarity >= 0.85)
+                    // Semantic token overlap (Jaccard similarity >= 0.65)
                     const nodeTokens = new Set(nodeQ.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|are|you|for|with|this|that|your|what|how|from|about|have|will)$/.test(w)));
                     if (qTokens.length > 0 && nodeTokens.size > 0) {
                         const common = qTokens.filter(t => nodeTokens.has(t));
                         const score = common.length / Math.max(qTokens.length, nodeTokens.size);
-                        if (score > highestOverlap && score >= 0.85) {
+                        if (score > highestOverlap && score >= 0.65) {
                             highestOverlap = score;
                             bestNode = node;
                         }
                     }
                 }
 
-                if (bestNode && highestOverlap >= 0.85) {
+                if (bestNode && highestOverlap >= 0.65) {
                     return { answer: bestNode.answer, confidence: 0.85 + (highestOverlap * 0.1), source: 'qa_graph_semantic_overlap' };
                 }
             }
@@ -532,6 +532,7 @@
 
                 this.touch();
                 await this.persistLocally();
+                await this.syncRecordToKanbanStorage(record);
                 console.log(`[UserContextGraph] 📑 Form submission tracked for "${record.company}" (${record.fieldsCount} fields).`);
 
                 // Sync to backend Supabase / PostgreSQL API
@@ -542,6 +543,38 @@
                 console.error('[UserContextGraph] ❌ Failed to record form submission:', error);
                 return null;
             }
+        }
+
+        /**
+         * Mirror tracked application into chrome.storage.local.applications for unified Kanban view
+         */
+        async syncRecordToKanbanStorage(record) {
+            if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local || !record) return;
+            try {
+                await new Promise((resolve) => {
+                    chrome.storage.local.get(['applications'], (res) => {
+                        const list = Array.isArray(res.applications) ? res.applications : [];
+                        const normUrl = String(record.url || '').split('#')[0];
+                        const idx = list.findIndex((a) =>
+                            (a.id && a.id === record.id) ||
+                            (normUrl && a.url && String(a.url).split('#')[0] === normUrl && (a.company || '') === (record.company || ''))
+                        );
+                        const item = {
+                            id: record.id,
+                            company: record.company || 'Company',
+                            jobTitle: record.jobTitle || 'Role',
+                            url: record.url || '',
+                            platform: record.platform || 'ATS',
+                            status: record.status || 'applied',
+                            date: record.timestamp || new Date().toISOString(),
+                            fieldsCount: record.fieldsCount || 0
+                        };
+                        if (idx >= 0) list[idx] = Object.assign({}, list[idx], item);
+                        else list.unshift(item);
+                        chrome.storage.local.set({ applications: list.slice(0, 300) }, resolve);
+                    });
+                });
+            } catch (e) {}
         }
 
         /**

@@ -3,7 +3,7 @@
  * Supports multiple immutable resume versions (e.g., SWE, AI/ML, Backend, Data Scientist),
  * compares them against a structured JD, explains selection, and identifies missing evidence.
  */
-class ResumeIntelligenceEngine {
+var ResumeIntelligenceEngine = (typeof window !== 'undefined' && window.ResumeIntelligenceEngine) || class ResumeIntelligenceEngine {
     static STORAGE_KEY = 'resumeVersions';
 
     static async loadVersions() {

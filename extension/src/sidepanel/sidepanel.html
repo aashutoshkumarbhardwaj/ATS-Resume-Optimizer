@@ -45,6 +45,14 @@
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                 Profile
             </button>
+            <button class="nav-tab" data-tab="tab-linkedin">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+                LinkedIn
+            </button>
+            <button class="nav-tab" data-tab="tab-workflows">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                Workflow
+            </button>
             <button class="nav-tab" data-tab="tab-kanban">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
                 Kanban
@@ -552,13 +560,111 @@
             </section>
 
             <!-- =============================================================== -->
+            <!-- TAB 4B: LINKEDIN AUTO APPLY                                     -->
+            <!-- =============================================================== -->
+            <section id="tab-linkedin" class="tab-pane">
+                <div class="claude-card">
+                    <div class="card-header">
+                        <span class="card-title">LinkedIn Easy Apply Autopilot</span>
+                        <span id="linkedinStatusBadge" class="badge-pill status-idle">Ready</span>
+                    </div>
+                    <p style="font-size:11.5px; color:#6B615A; line-height:1.45; margin-bottom:10px;">
+                        Open a LinkedIn Jobs page or search results (with <strong>Easy Apply</strong>), then click below to automatically scan jobs, fill questions, and apply with high precision.
+                    </p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Max Applications</label>
+                            <input type="number" id="linkedinMaxApps" value="15" min="1" max="50">
+                        </div>
+                        <div class="form-group" style="display:flex; flex-direction:column; justify-content:flex-end; gap:6px; padding-bottom:4px;">
+                            <label style="display:flex; align-items:center; gap:6px; font-size:11.5px; cursor:pointer;">
+                                <input type="checkbox" id="linkedinAutoSubmit" checked> Auto-submit completed modals
+                            </label>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:11.5px; cursor:pointer;">
+                                <input type="checkbox" id="linkedinUnfollowCompany" checked> Unfollow company
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="claude-actions-bar" style="margin-top:8px;">
+                        <button id="btnStartLinkedInAutoApply" class="btn-primary-terracotta">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            Start LinkedIn Auto Apply
+                        </button>
+                        <button id="btnStopLinkedInAutoApply" class="btn-secondary btn-danger-soft" style="width:100%;">Stop</button>
+                    </div>
+                </div>
+
+                <div class="claude-card">
+                    <div class="card-header">
+                        <span class="card-title">Session Progress</span>
+                    </div>
+                    <div class="score-breakdown-grid">
+                        <div class="metric">
+                            <span class="metric-label">Applied</span>
+                            <span id="linkedinAppliedCount" class="metric-val text-accent">0</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Skipped</span>
+                            <span id="linkedinSkippedCount" class="metric-val">0</span>
+                        </div>
+                        <div class="metric">
+                            <span class="metric-label">Failed</span>
+                            <span id="linkedinFailedCount" class="metric-val">0</span>
+                        </div>
+                    </div>
+                    <div id="linkedinLiveStatus" style="margin-top:10px; font-size:11.5px; color:#534741; background:#FAF8F5; padding:8px 10px; border-radius:8px; border:1px solid #E8E3DC;">
+                        Waiting to start on a LinkedIn Jobs tab...
+                    </div>
+                </div>
+            </section>
+
+            <!-- =============================================================== -->
+            <!-- TAB 4C: CLOSED-LOOP WORKFLOW & LIVE DEBUGGER                    -->
+            <!-- =============================================================== -->
+            <section id="tab-workflows" class="tab-pane">
+                <div class="claude-card">
+                    <div class="card-header">
+                        <span class="card-title">Live Closed-Loop Execution</span>
+                        <span id="dbgStateBadge" class="badge-pill status-idle">IDLE</span>
+                    </div>
+                    <div style="font-size:11.5px; color:#374151; display:flex; flex-direction:column; gap:6px;">
+                        <div><strong>CURRENT STATE:</strong> <span id="dbgPageState">UNKNOWN</span></div>
+                        <div><strong>OBSERVATION:</strong> <span id="dbgObservation">Waiting for page observation...</span></div>
+                        <div><strong>PLAN:</strong> <span id="dbgPlan">--</span></div>
+                        <div><strong>ACTION:</strong> <span id="dbgAction">--</span></div>
+                        <div><strong>VERIFICATION:</strong> <span id="dbgVerification">--</span></div>
+                    </div>
+                </div>
+
+                <div class="claude-card">
+                    <div class="card-header">
+                        <span class="card-title">Workflow Demonstration &amp; Replay</span>
+                    </div>
+                    <p style="font-size:11.5px; color:#6B615A; margin-bottom:10px;">
+                        Record a semantic ATS workflow once and replay it across redesigned DOMs using self-healing element resolution.
+                    </p>
+                    <div class="secondary-btn-group">
+                        <button id="btnRecordWorkflow" class="btn-primary-terracotta" style="flex:1;">Record Workflow</button>
+                        <button id="btnStopRecordWorkflow" class="btn-secondary" style="flex:1;" disabled>Stop &amp; Save</button>
+                    </div>
+                    <div id="recordedWorkflowsList" style="margin-top:10px; font-size:11.5px; color:#534741;">
+                        No recorded workflows yet.
+                    </div>
+                </div>
+            </section>
+
+            <!-- =============================================================== -->
             <!-- TAB 5: APPLICATIONS KANBAN                                      -->
             <!-- =============================================================== -->
             <section id="tab-kanban" class="tab-pane">
                 <div class="claude-card">
                     <div class="card-header">
                         <span class="card-title">Application Pipeline</span>
-                        <button id="btnRefreshKanban" class="btn-text">Refresh</button>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <button id="btnTrackCurrentJob" class="btn-text">+ Track Page</button>
+                            <button id="btnRefreshKanban" class="btn-text">Refresh</button>
+                        </div>
                     </div>
                     <div class="kanban-summary-grid">
                         <div class="metric">

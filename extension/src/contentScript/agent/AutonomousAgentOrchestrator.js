@@ -116,7 +116,7 @@ class AutonomousAgentOrchestrator {
 
             // LinkedIn Jobs Easy Apply Mode (auto-scans job cards & steps through Easy Apply modals)
             const LinkedInAgentClass = (typeof window !== 'undefined' && window.LinkedInEasyApplyAgent) || (typeof LinkedInEasyApplyAgent !== 'undefined' ? LinkedInEasyApplyAgent : null);
-            if (LinkedInAgentClass && LinkedInAgentClass.isLinkedInJobsPage()) {
+            if (LinkedInAgentClass && (options.mode === 'linkedin_auto_apply' || LinkedInAgentClass.isLinkedInJobsPage())) {
                 console.log('[AgentOrchestrator] 💼 LinkedIn Jobs detected — starting LinkedInEasyApplyAgent...');
                 const liAgent = new LinkedInAgentClass(this);
                 const liResult = await liAgent.run(options);
@@ -248,6 +248,19 @@ class AutonomousAgentOrchestrator {
                     if (!element || processedElements.has(element) || !this.isElementVisible(element) || element.disabled) {
                         this.stats.skipped++;
                         continue;
+                    }
+
+                    // Safeguard: Check if DropdownInteractionEngine has already processed or exceeded attempts on this field
+                    if (this.dropdownEngine) {
+                        const DropdownClass = (typeof window !== 'undefined' && window.DropdownInteractionEngine) || (typeof DropdownInteractionEngine !== 'undefined' ? DropdownInteractionEngine : null);
+                        if (DropdownClass) {
+                            const sig = DropdownClass.getFieldSignature(element);
+                            const rec = this.dropdownEngine.processedFields.get(sig);
+                            if (rec && (rec.status === 'completed' || rec.status === 'skipped' || rec.attempts >= this.dropdownEngine.maxAttemptsPerField)) {
+                                this.stats.skipped++;
+                                continue;
+                            }
+                        }
                     }
                     processedElements.add(element);
 
@@ -1346,6 +1359,24 @@ class AutonomousAgentOrchestrator {
         const element = field.element || (field.id ? document.getElementById(field.id) : null);
         if (!element) return false;
 
+        const DropdownClass = (typeof window !== 'undefined' && window.DropdownInteractionEngine) ||
+                              (typeof DropdownInteractionEngine !== 'undefined' ? DropdownInteractionEngine : null);
+        if (DropdownClass) {
+            if (!this.dropdownEngine) {
+                this.dropdownEngine = new DropdownClass({ maxAttemptsPerField: 2 });
+            }
+            const res = await this.dropdownEngine.handleDropdown(field, answer, {
+                cursor: this.cursor,
+                profile: this.brain?.profile
+            });
+            if (res && (res.success || res.status === 'completed')) {
+                return true;
+            }
+            if (res && res.status === 'skipped_no_match') {
+                return false;
+            }
+        }
+
         const targetText = String(answer || '').trim().toLowerCase();
         if (!targetText && !isRequiredField) return false;
 
@@ -1909,6 +1940,12 @@ class AutonomousAgentOrchestrator {
      */
     sortFieldsSequentially(fields) {
         if (!Array.isArray(fields) || fields.length <= 1) return fields;
+
+        const DropdownClass = (typeof window !== 'undefined' && window.DropdownInteractionEngine) ||
+                              (typeof DropdownInteractionEngine !== 'undefined' ? DropdownInteractionEngine : null);
+        if (DropdownClass && typeof DropdownClass.sortFieldsSequentially === 'function') {
+            return DropdownClass.sortFieldsSequentially(fields);
+        }
 
         const scrollY = (typeof window !== 'undefined' && typeof window.scrollY === 'number' ? window.scrollY : 0);
         const scrollX = (typeof window !== 'undefined' && typeof window.scrollX === 'number' ? window.scrollX : 0);
