@@ -77,113 +77,141 @@ const SmartAnswerEngine = (() => {
     }
 
     const GENERATORS = {
-        about_yourself(r, p) {
-            const name  = r.contact?.name || p?.firstName || '';
-            const title = r.contact?.currentTitle || p?.currentTitle || 'professional';
-            const yoe   = calcYearsExperience(r);
-            const skills = (r.skills || []).slice(0, 3).join(', ');
-            const edu = (r.education || [])[0];
-            const eduLine = edu ? ` I hold a ${edu.degree || 'degree'} from ${edu.institution || 'university'}.` : '';
-            return trim100(`${name ? 'I am ' + name + ', a' : 'I am a'} ${title} with ${yoe ? yoe + '+' : 'several'} years of experience. My expertise spans ${skills || 'software development and system design'}.${eduLine} I am passionate about delivering impactful work and continuous learning.`);
+        about_yourself(r, p, subject, question, context = {}) {
+            const name = r.contact?.name || p?.fullName || p?.name || p?.firstName || '';
+            const title = context.jobTitle || r.contact?.currentTitle || p?.currentTitle || p?.current_title || 'Software Engineer';
+            const yoe = calcYearsExperience(r) || p?.years_of_experience || '3+';
+            const skills = (r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || []).slice(0, 4).join(', ');
+            const topBullet = r.experience?.[0]?.bullets?.[0] ? ` ${r.experience[0].bullets[0].replace(/^[•\-\*]\s*/, '').trim()}` : '';
+            const targetComp = context.company ? ` at ${context.company}` : '';
+
+            return trim100(`I am ${name ? name + ', a' : 'a'} results-driven ${title} with ${yoe} years of hands-on experience building scalable applications. My primary technical stack includes ${skills || 'full-stack engineering, cloud infrastructure, and modern APIs'}.${topBullet} I am eager to bring this engineering discipline and enthusiasm${targetComp} to deliver immediate high-impact results.`);
         },
-        why_company(r, p) {
-            const why = p?.whyInterested?.trim();
-            if (why && why.length > 10) return trim100(why);
-            const skills = (r.skills || []).slice(0, 2).join(' and ');
-            return trim100(`I am drawn to this company for its strong reputation and commitment to innovation. My background in ${skills || 'relevant technologies'} aligns well with your goals, and I am excited about contributing meaningfully to your team.`);
+        why_company(r, p, subject, question, context = {}) {
+            const why = p?.whyInterested?.trim() || p?.why_interested?.trim() || p?.answer_why_company?.trim();
+            if (why && why.length > 15) return trim100(why);
+
+            const comp = context.company || 'your organization';
+            const skills = (r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || []).slice(0, 3).join(' and ');
+            const title = context.jobTitle || r.contact?.currentTitle || p?.current_title || 'this position';
+
+            return trim100(`I have been actively following ${comp}'s industry impact and technical trajectory. My background in ${skills || 'modern software architecture and product development'} directly aligns with the engineering excellence and high bar set by your team. I am excited to contribute my problem-solving ability and hands-on drive to help scale ${comp}'s mission.`);
         },
-        why_role(r, p) {
-            const title = r.contact?.currentTitle || p?.currentTitle || 'this field';
-            const skills = (r.skills || []).slice(0, 3).join(', ');
-            return trim100(`This role is an excellent match for my experience as a ${title}. I have built strong expertise in ${skills || 'the required skills'} and I am eager to apply this knowledge to drive real results in this position.`);
+        why_role(r, p, subject, question, context = {}) {
+            const title = context.jobTitle || r.contact?.currentTitle || p?.currentTitle || p?.current_title || 'this role';
+            const skills = (r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || []).slice(0, 3).join(', ');
+            const topBullet = r.experience?.[0]?.bullets?.[0] ? ` Specifically, in my recent work, I ${r.experience[0].bullets[0].replace(/^[•\-\*]\s*/, '').toLowerCase().trim()}` : '';
+
+            return trim100(`This position as ${title} perfectly bridges my technical background in ${skills || 'distributed systems and software development'} with my passion for shipping reliable, user-facing solutions.${topBullet} I am ready to hit the ground running and take complete ownership of core challenges in this role.`);
         },
-        strength(r, p) {
-            const s = p?.keyStrength?.trim();
-            if (s && s.length > 10) return trim100(s);
-            const topSkill = (r.skills || [])[0] || 'problem-solving';
-            const bullet   = r.experience?.[0]?.bullets?.[0] || '';
-            return trim100(`My greatest strength is ${topSkill} combined with attention to detail. ${bullet ? 'For example, I ' + bullet.replace(/^[•\-\*]\s*/, '').toLowerCase() + '.' : ''} I consistently apply this focus to deliver quality outcomes on time.`);
+        strength(r, p, subject, question, context = {}) {
+            const s = p?.keyStrength?.trim() || p?.key_strength?.trim() || p?.answer_hire_you?.trim();
+            if (s && s.length > 15) return trim100(s);
+
+            const topSkills = (r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || []).slice(0, 2).join(' and ');
+            const bullet = r.experience?.[0]?.bullets?.[0] ? ` In my recent experience, I ${r.experience[0].bullets[0].replace(/^[•\-\*]\s*/, '').toLowerCase().trim()}` : '';
+
+            return trim100(`My greatest strength is deep technical execution in ${topSkills || 'system architecture and problem solving'} paired with end-to-end product ownership.${bullet} I take pride in delivering resilient, clean code on schedule while collaborating closely across teams.`);
         },
         weakness(r, p) {
-            return trim100(`I tend to be detail-oriented to a fault, spending extra time perfecting work. I have actively addressed this by setting clear time limits and using structured prioritisation frameworks to balance quality with delivery speed.`);
+            return trim100(`Early on, I often took on too many tasks concurrently to ensure perfection across every detail. I overcame this by adopting rigorous sprint prioritization frameworks and automated CI/CD checks, allowing me to maintain exceptional software quality while accelerating delivery cadence.`);
         },
-        experience_years(r, p) {
-            const yoe = calcYearsExperience(r);
-            const title = r.contact?.currentTitle || 'this domain';
-            return trim100(`I have approximately ${yoe || 'several'} years of experience in ${title}. Over this time I have delivered across multiple projects, progressing from hands-on individual contributor to leading end-to-end initiatives.`);
+        experience_years(r, p, subject, question, context = {}) {
+            const yoe = calcYearsExperience(r) || p?.years_of_experience || '3+';
+            const title = context.jobTitle || r.contact?.currentTitle || p?.current_title || 'software engineering';
+            return trim100(`I have ${yoe} years of professional experience in ${title}. Across my career, I have progressed from executing core architectural tasks to owning end-to-end features, driving measurable improvements in scalability, reliability, and code quality.`);
         },
-        experience_with(r, p, subject) {
+        experience_with(r, p, subject, question, context = {}) {
             const kw = subject || 'this technology';
             const bullets = findRelevantBullets(r, kw);
-            if (bullets.length) return trim100(`I have solid hands-on experience with ${kw}. ${bullets[0].replace(/^[•\-\*]\s*/, '')}`);
-            const inSkills = (r.skills || []).some(s => s.toLowerCase().includes((kw).toLowerCase()));
-            if (inSkills) return trim100(`${kw} is part of my core skill set. I have applied it across professional projects and am confident working with it independently.`);
-            return trim100(`While my direct professional exposure to ${kw} is limited, I have foundational knowledge and a strong track record of picking up new technologies quickly based on my background.`);
+            if (bullets.length) {
+                return trim100(`I have extensive production experience with ${kw}. ${bullets[0].replace(/^[•\-\*]\s*/, '').trim()}`);
+            }
+            const allSkills = r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || [];
+            const inSkills = allSkills.some(s => s.toLowerCase().includes((kw).toLowerCase()));
+            if (inSkills) {
+                return trim100(`${kw} is part of my active technical stack. I have architected and deployed production solutions with it, focusing on modularity, robust error handling, and performance optimization.`);
+            }
+            const related = allSkills.slice(0, 3).join(', ');
+            return trim100(`While my primary hands-on stack is centered around ${related || 'modern engineering frameworks'}, my foundational knowledge of system design and fast ramp-up capabilities enable me to master and apply ${kw} immediately in production.`);
         },
         salary(r, p) {
-            const ctc = p?.expectedCTC?.trim();
+            const ctc = p?.expectedCTC?.trim() || p?.expected_salary?.trim();
             return ctc && ctc.length > 0
-                ? trim100(`My expected compensation is ${ctc}, reflecting my experience and market benchmarks for this role. I am open to discussing the full package including benefits and growth opportunities.`)
-                : trim100(`My salary expectations are competitive and negotiable based on the overall compensation package, scope of the role, and growth opportunities. I am happy to discuss further.`);
+                ? trim100(`My target compensation is ${ctc}, in line with my experience and industry benchmarks. I am open to discussing the complete package based on overall benefits and equity opportunities.`)
+                : trim100(`My compensation expectations are competitive and aligned with market standards for this position. I value the overall opportunity, growth scope, and total rewards, and am very open to discussing details.`);
         },
         notice_period(r, p) {
-            const np = p?.noticePeriod?.trim();
+            const np = p?.noticePeriod?.trim() || p?.notice_period?.trim();
             return np && np.length > 0
-                ? trim100(`My current notice period is ${np}. I can coordinate with my current employer to ensure a smooth and professional transition.`)
-                : trim100(`I can typically be available within 2 to 4 weeks, allowing adequate time to complete handovers and ensure a smooth transition from my current role.`);
+                ? trim100(`My notice period is ${np}, and I can ensure a comprehensive transition with my current team.`)
+                : trim100(`I am available to join within 2 to 4 weeks (or immediately depending on final formalities), ensuring a seamless and prompt onboarding.`);
         },
-        location(r, p) {
-            const mode = p?.workMode || 'flexible';
-            return trim100(`I am open to ${mode} working arrangements. I have experience in both remote and onsite environments and can adapt to whatever works best for the team and organisation.`);
+        location(r, p, subject, question, context = {}) {
+            const mode = p?.workMode || p?.work_mode || 'flexible (remote, hybrid, or onsite)';
+            return trim100(`I am fully open to ${mode} working arrangements. I have extensive experience collaborating asynchronously across distributed time zones as well as on-site teams.`);
         },
         achievement(r, p) {
-            const bullet = r.experience?.[0]?.bullets?.[0] || null;
-            if (bullet) return trim100(`One achievement I am proud of is when I ${bullet.replace(/^[•\-\*]\s*/, '').toLowerCase()} This had a measurable positive impact and demonstrated my ability to deliver under pressure.`);
-            return trim100(`I led a cross-functional initiative that significantly improved delivery speed and reduced errors. Through structured planning and proactive communication, the project was completed ahead of schedule with measurable outcomes.`);
+            const bullet = r.experience?.[0]?.bullets?.[0] || r.experience?.[1]?.bullets?.[0] || null;
+            if (bullet) {
+                return trim100(`A defining achievement in my career was when I ${bullet.replace(/^[•\-\*]\s*/, '').toLowerCase().trim()} This delivered measurable business impact and demonstrated my ability to solve critical engineering challenges.`);
+            }
+            return trim100(`I led the architectural revamp of core services, reducing system latency by 35% and improving uptime. By aligning cross-functional teams and implementing automated tests, we delivered on time with zero production incidents.`);
         },
         challenge(r, p) {
-            return trim100(`I once managed a project with rapidly shifting requirements and a tight deadline. I broke the work into phases, aligned stakeholders on priorities, and delivered on time. This taught me the value of clear communication and adaptive planning.`);
+            return trim100(`When confronted with a mission-critical production bottleneck under tight delivery constraints, I performed root-cause profiling, isolated the performance blocker, and engineered an optimized caching layer. This reduced load times by 40% while preserving data consistency.`);
         },
         team(r, p) {
-            return trim100(`I thrive in collaborative settings. I believe strong teamwork is built on clear communication, mutual respect, and shared ownership. I adapt my style to the team's needs while proactively contributing to collective goals.`);
+            return trim100(`I excel in collaborative engineering teams. I advocate for open technical reviews, transparent communication, and mutual accountability. I mentor teammates when possible while continuously learning from collective domain insights.`);
         },
-        goal(r, p) {
-            const title = r.contact?.currentTitle || 'my field';
-            return trim100(`In the next five years I aim to deepen my expertise in ${title}, take on greater leadership responsibilities, and contribute to high-impact products. I also want to mentor others and give back to the community.`);
+        goal(r, p, subject, question, context = {}) {
+            const title = context.jobTitle || r.contact?.currentTitle || p?.current_title || 'senior engineering';
+            return trim100(`Over the next few years, I aim to deepen my architectural expertise as a ${title}, spearhead high-impact technical initiatives, and mentor emerging engineers while driving sustainable product growth.`);
         },
-        open(r, p, subject, question) {
-            const summary = r.summary;
-            if (summary && summary.length > 20) return trim100(summary);
-            const bullet = r.experience?.[0]?.bullets?.[0];
-            if (bullet) return trim100(bullet.replace(/^[•\-\*]\s*/, ''));
-            return trim100(`Based on my background and experience, I am well positioned to contribute to this area. I would be happy to discuss specific examples and how I can add value in this role.`);
+        open(r, p, subject, question, context = {}) {
+            const q = (question || '').toLowerCase();
+            const comp = context.company || '';
+            const title = context.jobTitle || r.contact?.currentTitle || p?.current_title || 'Software Engineer';
+            const allSkills = (r.skills || (typeof p?.skills === 'string' ? p.skills.split(/[,;]+/) : p?.skills) || []).slice(0, 4).join(', ');
+            const topBullet = r.experience?.[0]?.bullets?.[0] ? ` Notably, I ${r.experience[0].bullets[0].replace(/^[•\-\*]\s*/, '').toLowerCase().trim()}` : '';
+
+            if (/project|portfolio|github|work sample|code/i.test(q)) {
+                const link = p?.github || p?.portfolio || r.contact?.github || r.contact?.portfolio || '';
+                return trim100(`I have architected and maintained production-grade projects utilizing ${allSkills || 'modern full-stack tools'}.${topBullet}${link ? ' You can review my work at ' + link + '.' : ''}`);
+            }
+
+            if (/lead|manage|mentor|culture|values/i.test(q)) {
+                return trim100(`I actively foster an inclusive, high-ownership engineering culture. I prioritize clear documentation, proactive mentorship, and cross-functional transparency to ensure our team consistently delivers high-velocity, reliable software.`);
+            }
+
+            return trim100(`With a proven track record as a ${title} specializing in ${allSkills || 'scalable system development'}, I bring rigorous problem-solving and immediate execution capability.${topBullet} I am excited to apply these strengths${comp ? ' at ' + comp : ''} to deliver tangible, high-quality outcomes.`);
         }
     };
 
     function scoreConfidence(category, resumeData, subject) {
-        if (category === 'open') return 40;
+        if (category === 'open') return 80;
         if (category === 'experience_with' && subject) {
             const bullets = findRelevantBullets(resumeData, subject);
-            if (bullets.length) return 92;
+            if (bullets.length) return 95;
             const inSkills = (resumeData.skills || []).some(s => s.toLowerCase().includes((subject || '').toLowerCase()));
-            return inSkills ? 78 : 52;
+            return inSkills ? 88 : 75;
         }
-        if (['salary', 'notice_period'].includes(category)) return 85;
-        if (['about_yourself', 'strength', 'why_role', 'why_company'].includes(category)) return 80;
-        return 70;
+        if (['salary', 'notice_period', 'location'].includes(category)) return 90;
+        if (['about_yourself', 'strength', 'why_role', 'why_company', 'achievement', 'challenge', 'team', 'goal'].includes(category)) return 88;
+        return 80;
     }
 
     return {
-        generate(question, resumeData = {}, profile = {}) {
+        generate(question, resumeData = {}, profile = {}, context = {}) {
             const { category, subject } = classify(question);
             const generator = GENERATORS[category] || GENERATORS.open;
             let answer;
-            try { answer = generator(resumeData, profile, subject, question); }
-            catch (e) { answer = GENERATORS.open(resumeData, profile, null, question); }
+            try { answer = generator(resumeData, profile, subject, question, context); }
+            catch (e) { answer = GENERATORS.open(resumeData, profile, null, question, context); }
             return { answer: answer || '', category, confidence: scoreConfidence(category, resumeData, subject) };
         },
-        generateAll(questions, resumeData = {}, profile = {}) {
-            return questions.map(q => ({ ...q, ...this.generate(q.question, resumeData, profile) }));
+        generateAll(questions, resumeData = {}, profile = {}, context = {}) {
+            return questions.map(q => ({ ...q, ...this.generate(q.question, resumeData, profile, context) }));
         }
     };
 })();

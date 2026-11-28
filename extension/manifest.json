@@ -11,7 +11,8 @@
     "tabs",
     "identity",
     "alarms",
-    "sidePanel"
+    "sidePanel",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -58,10 +59,13 @@
         "src/contentScript/virtualCursor/VirtualCursorEngine.js",
         "src/contentScript/agent/FreeLLMClient.js",
         "src/contentScript/agent/UserContextGraphEngine.js",
+        "src/contentScript/agent/JobIntelligenceEngine.js",
+        "src/contentScript/agent/ResumeIntelligenceEngine.js",
         "src/contentScript/agent/PersonaManager.js",
         "src/contentScript/agent/BatchQueueManager.js",
         "src/utils/smartAnswerEngine.js",
         "src/contentScript/agent/PersonalAgentBrain.js",
+        "src/contentScript/agent/LinkedInEasyApplyAgent.js",
         "src/contentScript/agent/AutonomousAgentOrchestrator.js",
         "src/contentScript/content-script.js"
       ],

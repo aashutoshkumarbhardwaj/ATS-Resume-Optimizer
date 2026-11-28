@@ -662,3 +662,61 @@ body {
     border-radius: 50%;
     background-color: var(--status-green);
 }
+
+/* Agent Live Loader, Progress Panel & ETA */
+@keyframes claudeSpin {
+    to { transform: rotate(360deg); }
+}
+
+.claude-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(217, 119, 87, 0.25);
+    border-top-color: #D97757;
+    border-radius: 50%;
+    animation: claudeSpin 0.75s linear infinite;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.claude-spinner-white {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #FFFFFF;
+    border-radius: 50%;
+    animation: claudeSpin 0.75s linear infinite;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.agent-progress-panel {
+    background: #FAF9F5;
+    border: 1px solid #E5E2DC;
+    border-radius: 8px;
+    padding: 9px 10px;
+    margin-bottom: 10px;
+}
+
+.mini-stat-pill {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #FFFFFF;
+    border: 1px solid #E5E2DC;
+    color: #534741;
+    font-weight: 500;
+}
+
+.mini-stat-pill.filled {
+    color: #2E7D32;
+    border-color: rgba(46, 125, 50, 0.25);
+    background: rgba(46, 125, 50, 0.06);
+}
+
+.mini-stat-pill.eta {
+    color: #D97757;
+    border-color: rgba(217, 119, 87, 0.3);
+    background: #FAF0EB;
+    font-weight: 600;
+}

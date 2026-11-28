@@ -93,7 +93,26 @@
                 <div class="claude-card">
                     <div class="card-header">
                         <span class="card-title">Agent Execution Stream</span>
-                        <span class="badge-subtle">CUA Loop</span>
+                        <span class="badge-subtle" id="agentProgressPercent">Idle</span>
+                    </div>
+                    <div id="agentProgressWrap" class="agent-progress-panel" style="display:none;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px;">
+                            <div style="display:flex; align-items:center; gap:7px; min-width:0;">
+                                <span id="agentLoaderSpinner" class="claude-spinner"></span>
+                                <span id="agentLiveStatusText" style="font-size:11.5px; font-weight:600; color:#2C2623; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Initializing agent...</span>
+                            </div>
+                            <span id="agentEtaBadge" class="mini-stat-pill eta">Est. --</span>
+                        </div>
+                        <div style="width:100%; height:6px; background:#E8E5DD; border-radius:999px; overflow:hidden; margin-bottom:7px;">
+                            <div id="agentProgressBar" style="width:0%; height:100%; background:#D97757; border-radius:999px; transition:width 0.25s ease;"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:6px; flex-wrap:wrap;">
+                            <span id="agentProgressText" style="font-size:10.5px; color:#6B615A; font-weight:500;">0 / 0 fields</span>
+                            <div style="display:flex; gap:4px; align-items:center;">
+                                <span id="statFilledBadge" class="mini-stat-pill filled">Filled: 0</span>
+                                <span id="agentElapsedText" class="mini-stat-pill">0s</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="opav-stream" id="opavStream">
                         <div class="opav-step step-observe active">
@@ -144,7 +163,7 @@
                     <div class="card-header">
                         <div>
                             <span class="card-title">Pre-Flight Action Plan</span>
-                            <div class="card-subtitle">Inspected fields on current page</div>
+                            <div class="card-subtitle" id="planEtaSubtitle">Inspected fields on current page</div>
                         </div>
                         <button id="btnRefreshPlan" class="btn-text">Refresh Plan</button>
                     </div>
@@ -316,7 +335,10 @@
                 <div class="claude-card">
                     <div class="card-header">
                         <span class="card-title">Active Persona</span>
-                        <button id="btnSaveProfileTab" class="btn-text">Save Profile</button>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span id="profAutoSaveStatus" style="font-size:11px; color:#1B7F53; font-weight:500; transition:opacity 0.25s ease; opacity:0;">✓ Saved</span>
+                            <button id="btnSaveProfileTab" class="btn-text">Save Profile</button>
+                        </div>
                     </div>
                     <div class="form-group">
                         <select id="personaSelect">
@@ -389,9 +411,15 @@
                                 <input type="url" id="profGitHub" placeholder="https://github.com/...">
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Portfolio / Personal Website</label>
-                            <input type="url" id="profPortfolio" placeholder="https://yourportfolio.com">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Portfolio / Personal Website</label>
+                                <input type="url" id="profPortfolio" placeholder="https://yourportfolio.com">
+                            </div>
+                            <div class="form-group">
+                                <label>Twitter / X Profile</label>
+                                <input type="url" id="profTwitter" placeholder="https://x.com/...">
+                            </div>
                         </div>
 
                         <!-- Section 3: Professional Experience -->
@@ -579,22 +607,35 @@
                     <div class="form-group">
                         <label>Provider</label>
                         <select id="llmProviderSelect">
+                            <option value="cloudflare" selected>Cloudflare AI Worker (Zero-Latency & High Precision)</option>
                             <option value="gemini">Google Gemini 2.0 / 1.5</option>
                             <option value="groq">Groq (Llama-3.3-70B)</option>
                             <option value="local">Local PersonalAgentBrain (Free)</option>
                         </select>
                     </div>
+                    <div class="form-group" id="cfWorkerUrlGroup">
+                        <label>Cloudflare AI Worker URL / Endpoint</label>
+                        <input type="url" id="cfWorkerUrlInput" placeholder="https://my-ai-worker.subdomain.workers.dev">
+                    </div>
+                    <div class="form-group" id="cfApiTokenGroup">
+                        <label>Cloudflare API Token (Optional / Bearer)</label>
+                        <input type="password" id="cfApiTokenInput" placeholder="Cloudflare API Token...">
+                    </div>
                     <div class="form-group">
-                        <label>Gemini API Key</label>
+                        <label>Gemini API Key (Fallback)</label>
                         <input type="password" id="geminiApiKeyInput" placeholder="AIzaSy...">
                     </div>
                     <div class="form-group">
-                        <label>Groq API Key</label>
+                        <label>Groq API Key (Fallback)</label>
                         <input type="password" id="groqApiKeyInput" placeholder="gsk_...">
                     </div>
                     <button id="btnSaveApiKeys" class="btn-secondary" style="width:100%; margin-top:6px;">
                         Save API Configuration
                     </button>
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#FAF0EB; padding:6px 10px; border-radius:6px; margin-top:10px; border:1px solid rgba(217,119,87,0.25); font-size:11px; color:#534741;">
+                        <span>⚡ <b>Persistent Cache:</b> <span id="qaCacheCount">0 answers cached</span></span>
+                        <span style="color:#2E7D32; font-weight:600;">Active</span>
+                    </div>
                 </div>
 
                 <!-- Live Audit Logs -->
@@ -627,6 +668,8 @@
     <script src="../utils/pdf.worker.js"></script>
     <script src="../utils/mammoth.browser.min.js"></script>
     <script src="../utils/ResumeParserClient.js"></script>
+    <script src="../contentScript/agent/JobIntelligenceEngine.js"></script>
+    <script src="../contentScript/agent/ResumeIntelligenceEngine.js"></script>
     <script src="sidepanel.js"></script>
 </body>
 </html>

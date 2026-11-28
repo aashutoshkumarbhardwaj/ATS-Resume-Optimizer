@@ -87,17 +87,17 @@ window.UnifiedAutofillButton = class {
             // Create shadow DOM for style isolation
             const shadow = container.attachShadow({ mode: 'open' });
             
-            // Create styles
+            // Create styles (Job Orbit Claude Aesthetic + Movable + Collapsible)
             const style = document.createElement('style');
             style.textContent = `
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
                 :host {
                     position: fixed;
                     bottom: 20px;
                     right: 20px;
                     z-index: 2147483647;
-                    font-family: 'Inter', sans-serif;
+                    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
                 }
                 
                 .button-wrapper {
@@ -105,69 +105,102 @@ window.UnifiedAutofillButton = class {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    gap: 6px;
-                    background: rgba(17, 24, 39, 0.85);
-                    backdrop-filter: blur(10px);
-                    -webkit-backdrop-filter: blur(10px);
-                    padding: 4px 6px;
-                    border-radius: 24px;
-                    border: 1px solid rgba(255, 255, 255, 0.15);
-                    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+                    gap: 5px;
+                    background: rgba(255, 255, 255, 0.96);
+                    backdrop-filter: blur(12px);
+                    -webkit-backdrop-filter: blur(12px);
+                    padding: 5px 7px;
+                    border-radius: 999px;
+                    border: 1px solid #E5E2DC;
+                    box-shadow: 0 10px 28px rgba(31, 30, 29, 0.14), 0 2px 6px rgba(31, 30, 29, 0.06);
+                    transition: box-shadow 0.2s ease, opacity 0.2s ease;
+                }
+
+                .button-wrapper:hover {
+                    box-shadow: 0 12px 32px rgba(31, 30, 29, 0.18), 0 3px 8px rgba(31, 30, 29, 0.08);
+                }
+
+                .drag-handle {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 18px;
+                    height: 26px;
+                    color: #9A918A;
+                    cursor: grab;
+                    user-select: none;
+                    border-radius: 12px;
+                    transition: color 0.15s ease, background 0.15s ease;
+                    flex-shrink: 0;
+                }
+
+                .drag-handle:hover {
+                    color: #534741;
+                    background: #FAF9F5;
+                }
+
+                .drag-handle:active {
+                    cursor: grabbing;
+                    color: #D97757;
                 }
                 
                 .autofill-btn {
                     display: flex;
                     align-items: center;
                     gap: 6px;
-                    padding: 9px 14px;
-                    color: white;
-                    border: none;
-                    border-radius: 18px;
+                    padding: 7px 13px;
+                    border: 1px solid transparent;
+                    border-radius: 999px;
                     cursor: pointer;
                     font-size: 12px;
                     font-weight: 600;
-                    transition: all 0.2s ease;
+                    transition: all 0.18s ease;
                     user-select: none;
                     white-space: nowrap;
-                    letter-spacing: 0.02em;
+                    letter-spacing: 0.01em;
+                    font-family: inherit;
                 }
 
                 .agent-btn {
-                    background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-                    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+                    background: #D97757;
+                    color: #FFFFFF;
+                    box-shadow: 0 2px 8px rgba(217, 119, 87, 0.32);
                 }
 
                 .agent-btn:hover {
-                    background: linear-gradient(135deg, #4338ca 0%, #6d28d9 100%);
+                    background: #C46546;
                     transform: translateY(-1px);
-                    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.6);
+                    box-shadow: 0 4px 12px rgba(217, 119, 87, 0.44);
                 }
 
                 .stop-btn {
-                    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
-                    box-shadow: 0 2px 10px rgba(239, 68, 68, 0.5) !important;
+                    background: #DC2626 !important;
+                    color: #FFFFFF !important;
+                    box-shadow: 0 2px 10px rgba(220, 38, 38, 0.4) !important;
                     animation: stopBtnPulse 2s infinite ease-in-out !important;
                 }
 
                 .stop-btn:hover {
-                    background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
-                    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.75) !important;
+                    background: #B91C1C !important;
+                    box-shadow: 0 4px 14px rgba(220, 38, 38, 0.55) !important;
                     transform: translateY(-1px);
                 }
 
                 @keyframes stopBtnPulse {
-                    0%, 100% { box-shadow: 0 2px 10px rgba(239, 68, 68, 0.5); }
-                    50% { box-shadow: 0 0 18px rgba(239, 68, 68, 0.85); }
+                    0%, 100% { box-shadow: 0 2px 10px rgba(220, 38, 38, 0.4); }
+                    50% { box-shadow: 0 0 18px rgba(220, 38, 38, 0.7); }
                 }
 
                 .instant-btn {
-                    background: rgba(255, 255, 255, 0.1);
-                    color: #e5e7eb;
+                    background: #FAF9F5;
+                    color: #1F1E1D;
+                    border: 1px solid #E5E2DC;
                 }
 
                 .instant-btn:hover {
-                    background: rgba(255, 255, 255, 0.18);
-                    color: #ffffff;
+                    background: #F2EFE9;
+                    border-color: #D5D0C7;
+                    transform: translateY(-1px);
                 }
                 
                 .autofill-btn:active {
@@ -175,25 +208,27 @@ window.UnifiedAutofillButton = class {
                 }
                 
                 .autofill-btn.loading {
-                    opacity: 0.7;
+                    opacity: 0.75;
                     cursor: not-allowed;
                 }
                 
                 .autofill-btn.success {
-                    background: #10b981;
-                    color: white;
+                    background: #2E7D32 !important;
+                    color: #FFFFFF !important;
+                    border-color: #2E7D32 !important;
                 }
                 
                 .autofill-btn.error {
-                    background: #ef4444;
-                    color: white;
+                    background: #DC2626 !important;
+                    color: #FFFFFF !important;
+                    border-color: #DC2626 !important;
                 }
                 
                 .btn-icon {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    font-size: 14px;
+                    font-size: 13px;
                 }
                 
                 .btn-icon.spinner {
@@ -205,43 +240,77 @@ window.UnifiedAutofillButton = class {
                     to { transform: rotate(360deg); }
                 }
                 
-                .close-btn {
-                    width: 20px;
-                    height: 20px;
+                .icon-ctrl-btn {
+                    width: 24px;
+                    height: 24px;
                     padding: 0;
-                    background: rgba(255, 255, 255, 0.15);
-                    color: #9ca3af;
-                    border: none;
+                    background: #FAF9F5;
+                    color: #78706A;
+                    border: 1px solid #E5E2DC;
                     border-radius: 50%;
                     cursor: pointer;
-                    font-size: 14px;
+                    font-size: 13px;
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    transition: all 0.2s;
+                    transition: all 0.18s ease;
                     line-height: 1;
-                    margin-left: 2px;
+                    flex-shrink: 0;
                 }
                 
-                .close-btn:hover {
-                    background: rgba(255, 255, 255, 0.25);
-                    color: #ffffff;
+                .icon-ctrl-btn:hover {
+                    background: #F0ECE3;
+                    color: #1F1E1D;
+                    border-color: #D5D0C7;
+                }
+
+                .minimized-pill {
+                    display: none;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 7px 11px;
+                    background: rgba(255, 255, 255, 0.96);
+                    backdrop-filter: blur(10px);
+                    border: 1px solid #E5E2DC;
+                    border-radius: 999px;
+                    box-shadow: 0 8px 22px rgba(31, 30, 29, 0.14);
+                    cursor: pointer;
+                    color: #1F1E1D;
+                    font-size: 11.5px;
+                    font-weight: 600;
+                    user-select: none;
+                    transition: all 0.18s ease;
+                }
+
+                .minimized-pill:hover {
+                    border-color: #D97757;
+                    transform: translateY(-1px);
+                    box-shadow: 0 10px 26px rgba(217, 119, 87, 0.22);
+                }
+
+                .button-wrapper.is-minimized {
+                    display: none;
+                }
+
+                .minimized-pill.is-visible {
+                    display: flex;
                 }
                 
                 .toast-notification {
                     position: absolute;
-                    bottom: 50px;
+                    bottom: 48px;
                     right: 0;
-                    background: #111827;
-                    border: 1px solid rgba(255, 255, 255, 0.15);
-                    color: white;
-                    padding: 8px 12px;
-                    border-radius: 8px;
+                    background: #1F1E1D;
+                    border: 1px solid rgba(217, 119, 87, 0.45);
+                    color: #FAF9F5;
+                    padding: 8px 13px;
+                    border-radius: 10px;
                     font-size: 12px;
-                    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+                    font-weight: 500;
+                    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
                     opacity: 0;
-                    transform: translateY(10px);
-                    transition: all 0.3s ease;
+                    transform: translateY(8px);
+                    transition: all 0.25s ease;
                     pointer-events: none;
                     white-space: nowrap;
                 }
@@ -260,42 +329,124 @@ window.UnifiedAutofillButton = class {
             const wrapper = document.createElement('div');
             wrapper.className = 'button-wrapper';
             wrapper.innerHTML = `
+                <span class="drag-handle" title="Drag to move anywhere">
+                    <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+                        <circle cx="2.5" cy="2.5" r="1.2"/><circle cx="7.5" cy="2.5" r="1.2"/>
+                        <circle cx="2.5" cy="7" r="1.2"/><circle cx="7.5" cy="7" r="1.2"/>
+                        <circle cx="2.5" cy="11.5" r="1.2"/><circle cx="7.5" cy="11.5" r="1.2"/>
+                    </svg>
+                </span>
                 <button class="autofill-btn agent-btn" id="run-agent-btn" title="Run Autonomous AI Agent with Visual Virtual Cursor">
-                    <span class="btn-icon">🤖</span>
+                    <span class="btn-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/></svg>
+                    </span>
                     <span class="btn-text">Run Agent</span>
                 </button>
                 <button class="autofill-btn instant-btn" id="instant-fill-btn" title="Instant Fast Autofill">
                     <span class="btn-icon">⚡</span>
                     <span class="btn-text">Instant</span>
                 </button>
-                <button class="close-btn" title="Dismiss">×</button>
+                <button class="icon-ctrl-btn minimize-btn" title="Hide / Minimize to Sparkle">−</button>
+                <button class="icon-ctrl-btn close-btn" title="Dismiss">×</button>
                 <div class="toast-notification"></div>
+            `;
+
+            const minPill = document.createElement('div');
+            minPill.className = 'minimized-pill';
+            minPill.title = 'Show Job Orbit Controls (Drag to move)';
+            minPill.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="#D97757"><path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/></svg>
+                <span>Job Orbit</span>
             `;
             
             shadow.appendChild(style);
             shadow.appendChild(wrapper);
+            shadow.appendChild(minPill);
             document.body.appendChild(container);
             
             // Get elements from shadow DOM
             const agentBtn = wrapper.querySelector('#run-agent-btn');
             const instantBtn = wrapper.querySelector('#instant-fill-btn');
+            const minimizeBtn = wrapper.querySelector('.minimize-btn');
             const closeBtn = wrapper.querySelector('.close-btn');
+            const dragHandle = wrapper.querySelector('.drag-handle');
             const toast = wrapper.querySelector('.toast-notification');
 
             this.agentBtn = agentBtn;
             this.instantBtn = instantBtn;
             this.toast = toast;
             this.wrapperEl = wrapper;
-            
+
+            // Smooth Dragging (works on drag handle, pill background, and minimized pill)
+            let isDragging = false;
+            let didMove = false;
+            let startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+            const onPointerDown = (e) => {
+                if (e.button !== 0) return;
+                // Don't start drag from control buttons unless it's the drag handle or minimized pill
+                if (e.target.closest('button') && !e.target.closest('.drag-handle')) return;
+                const rect = container.getBoundingClientRect();
+                isDragging = true;
+                didMove = false;
+                startX = e.clientX;
+                startY = e.clientY;
+                origLeft = rect.left;
+                origTop = rect.top;
+                container.style.right = 'auto';
+                container.style.bottom = 'auto';
+                container.style.left = `${origLeft}px`;
+                container.style.top = `${origTop}px`;
+                e.preventDefault();
+            };
+
+            const onPointerMove = (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didMove = true;
+                const rect = container.getBoundingClientRect();
+                const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+                const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+                const nextLeft = Math.min(maxLeft, Math.max(8, origLeft + dx));
+                const nextTop = Math.min(maxTop, Math.max(8, origTop + dy));
+                container.style.left = `${nextLeft}px`;
+                container.style.top = `${nextTop}px`;
+            };
+
+            const onPointerUp = () => {
+                isDragging = false;
+            };
+
+            wrapper.addEventListener('pointerdown', onPointerDown);
+            minPill.addEventListener('pointerdown', onPointerDown);
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+
             // Attach event listeners
             agentBtn.addEventListener('click', () => {
+                if (didMove) return;
                 if (this.agentState === 'running') {
                     this.stopAutonomousAgent();
                 } else {
                     this.performAutofill(toast, agentBtn, wrapper, 'autonomous');
                 }
             });
-            instantBtn.addEventListener('click', () => this.performAutofill(toast, instantBtn, wrapper, 'simple'));
+            instantBtn.addEventListener('click', () => {
+                if (didMove) return;
+                this.performAutofill(toast, instantBtn, wrapper, 'simple');
+            });
+            minimizeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                wrapper.classList.add('is-minimized');
+                minPill.classList.add('is-visible');
+            });
+            minPill.addEventListener('click', (e) => {
+                if (didMove) return;
+                e.stopPropagation();
+                minPill.classList.remove('is-visible');
+                wrapper.classList.remove('is-minimized');
+            });
             closeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.hideButton();
@@ -343,7 +494,7 @@ window.UnifiedAutofillButton = class {
             this.agentBtn.classList.add('agent-btn');
             this.agentBtn.title = 'Run Autonomous AI Agent with Visual Virtual Cursor';
             if (iconSpan) {
-                iconSpan.textContent = '🤖';
+                iconSpan.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"/></svg>`;
                 iconSpan.classList.remove('spinner');
             }
             if (textSpan) textSpan.textContent = 'Run Agent';

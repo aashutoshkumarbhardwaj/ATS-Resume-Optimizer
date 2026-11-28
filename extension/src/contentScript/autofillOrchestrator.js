@@ -22,25 +22,26 @@ class AutofillOrchestrator {
             console.log('[Orchestrator] 🚀 Starting autofill workflow...');
             console.log('[Orchestrator] Options received:', options ? `${Object.keys(options).length} keys` : 'none');
 
-            // Check if autonomous visual agent mode is requested
-            if (options.mode === 'autonomous' || options.visualAgent || options.autonomousMode) {
-                console.log('[Orchestrator] 🤖 Using AUTONOMOUS VISUAL AGENT MODE');
-                const AgentClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
-                if (!AgentClass) {
-                    throw new Error('AutonomousAgentOrchestrator class not found. Please reload the webpage (Ctrl+R / Cmd+R).');
-                }
+            // Route ALL autofill modes (Autonomous Visual Agent & Instant Autofill) through the unified
+            // high-precision AutonomousAgentOrchestrator + PersonalAgentBrain pipeline.
+            const AgentClass = (typeof window !== 'undefined' && window.AutonomousAgentOrchestrator) || (typeof AutonomousAgentOrchestrator !== 'undefined' ? AutonomousAgentOrchestrator : null);
+            if (AgentClass) {
+                const isVisual = !!(options.mode === 'autonomous' || options.visualAgent || options.autonomousMode);
+                console.log(`[Orchestrator] 🧠 Routing to unified high-precision engine (visual=${isVisual})...`);
                 const agent = new AgentClass();
-                return await agent.start(options);
+                return await agent.start({
+                    ...options,
+                    mode: 'autonomous',
+                    visualAgent: isVisual,
+                    fastMode: !isVisual
+                });
             }
 
-            // Check if intelligent mode is enabled
+            // Fallback only if AutonomousAgentOrchestrator is unavailable
             const useIntelligentMode = options.intelligentMode || this.intelligentMode;
-
             if (useIntelligentMode) {
-                console.log('[Orchestrator] 🧠 Using INTELLIGENT MODE');
                 return await this.runIntelligentMode(options);
             } else {
-                console.log('[Orchestrator] ⚡ Using SIMPLE MODE');
                 return await this.runSimpleMode(options);
             }
         } catch (error) {

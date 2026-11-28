@@ -75,6 +75,7 @@ async function loadRoutes() {
         ['/api/analysis',      './routes/analysis'],
         ['/api/resume',        './routes/resume'],
         ['/api/documents',     './routes/documents'],
+        ['/api/ai',            './routes/ai'],
     ];
 
     for (const [prefix, mod] of routeMap) {

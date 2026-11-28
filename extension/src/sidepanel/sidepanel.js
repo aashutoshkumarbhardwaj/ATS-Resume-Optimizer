@@ -104,13 +104,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     const btnJobOrbitLogin = document.getElementById('btnJobOrbitLogin');
     const btnJobOrbitSync = document.getElementById('btnJobOrbitSync');
     const llmProviderSelect = document.getElementById('llmProviderSelect');
+    const cfWorkerUrlInput = document.getElementById('cfWorkerUrlInput');
+    const cfApiTokenInput = document.getElementById('cfApiTokenInput');
     const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
     const groqApiKeyInput = document.getElementById('groqApiKeyInput');
     const btnSaveApiKeys = document.getElementById('btnSaveApiKeys');
+    const qaCacheCount = document.getElementById('qaCacheCount');
     const btnClearAuditLogs = document.getElementById('btnClearAuditLogs');
     const systemAuditLogs = document.getElementById('systemAuditLogs');
 
-    // OPAV Stream Elements
+    // OPAV Stream & Progress Elements
+    const agentProgressWrap = document.getElementById('agentProgressWrap');
+    const agentLoaderSpinner = document.getElementById('agentLoaderSpinner');
+    const agentLiveStatusText = document.getElementById('agentLiveStatusText');
+    const agentEtaBadge = document.getElementById('agentEtaBadge');
+    const agentProgressBar = document.getElementById('agentProgressBar');
+    const agentProgressText = document.getElementById('agentProgressText');
+    const statFilledBadge = document.getElementById('statFilledBadge');
+    const agentElapsedText = document.getElementById('agentElapsedText');
+    const agentProgressPercent = document.getElementById('agentProgressPercent');
+    const planEtaSubtitle = document.getElementById('planEtaSubtitle');
     const stepObserve = document.querySelector('.step-observe');
     const stepPlan = document.querySelector('.step-plan');
     const stepAct = document.querySelector('.step-act');
@@ -172,6 +185,63 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ──────────────────────────────────────────────────────────────────────────
     // 1. AUTONOMOUS AGENT & AUTOFILL
     // ──────────────────────────────────────────────────────────────────────────
+    const CONTENT_SCRIPT_FILES = [
+        'src/utils/cryptoSecurity.js',
+        'src/contentScript/contentScriptGatekeeper.js',
+        'src/contentScript/authReceiver.js',
+        'src/contentScript/QuestionExtractionEngine.js',
+        'src/contentScript/BrowserAutomationModule.js',
+        'src/contentScript/ApplicationUnderstandingEngine.js',
+        'src/contentScript/IntelligentFormFiller.js',
+        'src/contentScript/floatingButtonManager.js',
+        'src/contentScript/autofillOrchestrator.js',
+        'src/contentScript/virtualCursor/VirtualCursorStyles.js',
+        'src/contentScript/virtualCursor/VirtualCursorEngine.js',
+        'src/contentScript/agent/FreeLLMClient.js',
+        'src/contentScript/agent/UserContextGraphEngine.js',
+        'src/contentScript/agent/JobIntelligenceEngine.js',
+        'src/contentScript/agent/ResumeIntelligenceEngine.js',
+        'src/contentScript/agent/PersonaManager.js',
+        'src/contentScript/agent/BatchQueueManager.js',
+        'src/utils/smartAnswerEngine.js',
+        'src/contentScript/agent/PersonalAgentBrain.js',
+        'src/contentScript/agent/LinkedInEasyApplyAgent.js',
+        'src/contentScript/agent/AutonomousAgentOrchestrator.js',
+        'src/contentScript/content-script.js'
+    ];
+
+    async function ensureContentScriptsInjected(tabId) {
+        if (!chrome.scripting || !chrome.scripting.executeScript) return false;
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId, allFrames: true },
+                files: CONTENT_SCRIPT_FILES
+            });
+            await new Promise(r => setTimeout(r, 250));
+            return true;
+        } catch (err) {
+            console.warn('[SidePanel] Auto-inject failed:', err);
+            return false;
+        }
+    }
+
+    function sendMessageSafe(tabId, message, options = null) {
+        return new Promise((resolve) => {
+            const cb = (res) => {
+                if (chrome.runtime.lastError) {
+                    resolve({ __error: chrome.runtime.lastError.message });
+                } else {
+                    resolve(res);
+                }
+            };
+            if (options) {
+                chrome.tabs.sendMessage(tabId, message, options, cb);
+            } else {
+                chrome.tabs.sendMessage(tabId, message, cb);
+            }
+        });
+    }
+
     async function scanPagePerception() {
         const tab = await getActiveTab();
         if (!tab || !tab.id) return;
@@ -179,7 +249,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         appendLog('Perceiving active ATS page structure...');
         
         const applyPerception = (response) => {
-            if (!response || !response.success || (response.totalFields === 0 && response.platform === 'Generic')) {
+            if (!response || response.__error || !response.success || (response.totalFields === 0 && response.platform === 'Generic')) {
                 return false;
             }
             platformBadge.textContent = response.platform;
@@ -199,21 +269,28 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
 
         try {
-            // First attempt: query top frame directly (frameId: 0) to avoid any subframe race condition
-            chrome.tabs.sendMessage(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, { frameId: 0 }, (topRes) => {
-                if (!chrome.runtime.lastError && applyPerception(topRes)) {
-                    return;
+            let topRes = await sendMessageSafe(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, { frameId: 0 });
+            if (applyPerception(topRes)) return;
+
+            let anyRes = await sendMessageSafe(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile });
+            if (applyPerception(anyRes)) return;
+
+            // If content script was disconnected (e.g. tab open before extension reload), auto-inject and retry!
+            if (topRes?.__error || anyRes?.__error) {
+                appendLog('Re-connecting extension to active tab...', 'info');
+                const injected = await ensureContentScriptsInjected(tab.id);
+                if (injected) {
+                    topRes = await sendMessageSafe(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, { frameId: 0 });
+                    if (applyPerception(topRes)) return;
+                    anyRes = await sendMessageSafe(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile });
+                    if (applyPerception(anyRes)) return;
                 }
-                // Second attempt: query across frames (in case the job form is in an embedded iframe like Greenhouse/Lever)
-                chrome.tabs.sendMessage(tab.id, { type: 'PREVIEW_ACTION_PLAN', profile: currentProfile }, (anyRes) => {
-                    if (chrome.runtime.lastError || !applyPerception(anyRes)) {
-                        platformBadge.textContent = 'Ready';
-                        detectedPlatformText.textContent = 'Generic Web';
-                        detectedFieldsCount.textContent = '0';
-                        renderPlan([]);
-                    }
-                });
-            });
+            }
+
+            platformBadge.textContent = 'Ready';
+            detectedPlatformText.textContent = 'Generic Web';
+            detectedFieldsCount.textContent = '0';
+            renderPlan([]);
         } catch (e) {
             console.warn('[Claude SidePanel] Scan error:', e);
         }
@@ -222,8 +299,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     function renderPlan(plan) {
         if (!planContainer) return;
         if (!plan || plan.length === 0) {
+            if (planEtaSubtitle) planEtaSubtitle.textContent = 'Inspected fields on current page';
             planContainer.innerHTML = '<div class="empty-state"><p>No form inputs found on current page.</p></div>';
             return;
+        }
+
+        const estSeconds = Math.max(2, Math.round(plan.length * 1.4));
+        if (planEtaSubtitle) {
+            planEtaSubtitle.textContent = `${plan.length} field${plan.length === 1 ? '' : 's'} ready • Est. ~${estSeconds}s`;
         }
 
         let html = '';
@@ -251,34 +334,210 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (step === 'verify') { stepVerify?.classList.add('active'); if (desc) verifyDesc.textContent = desc; }
     }
 
+    let agentRunStartedAt = null;
+    let agentEtaTimer = null;
+    let lastKnownStats = { filled: 0, skipped: 0, failed: 0, total: 0 };
+
+    function formatDuration(totalSec) {
+        const s = Math.max(0, Math.round(totalSec));
+        if (s < 60) return `${s}s`;
+        const m = Math.floor(s / 60);
+        const rem = s % 60;
+        return `${m}m ${rem}s`;
+    }
+
+    function startEtaTimer() {
+        if (!agentRunStartedAt) agentRunStartedAt = Date.now();
+        if (agentEtaTimer) clearInterval(agentEtaTimer);
+        agentEtaTimer = setInterval(() => {
+            if (!isAgentRunning || !agentRunStartedAt) return;
+            const elapsedSec = (Date.now() - agentRunStartedAt) / 1000;
+            if (agentElapsedText) agentElapsedText.textContent = formatDuration(elapsedSec);
+            const total = lastKnownStats.total || 0;
+            const processed = (lastKnownStats.filled || 0) + (lastKnownStats.skipped || 0) + (lastKnownStats.failed || 0);
+            if (total > 0 && agentEtaBadge) {
+                const remaining = Math.max(0, total - processed);
+                const avgPerField = processed > 0 ? Math.max(0.8, elapsedSec / processed) : 1.4;
+                agentEtaBadge.textContent = remaining === 0 ? 'Finishing...' : `~${formatDuration(remaining * avgPerField)} left`;
+            }
+        }, 1000);
+    }
+
+    function stopEtaTimer() {
+        if (agentEtaTimer) {
+            clearInterval(agentEtaTimer);
+            agentEtaTimer = null;
+        }
+    }
+
+    function updateProgressUI({ step, desc, stats, percent, isRunning, done } = {}) {
+        if (step && step !== 'stopped') {
+            setStepState(step, desc);
+        }
+        if (stats) {
+            lastKnownStats = { ...stats };
+        }
+        if (agentProgressWrap && (stats || isRunning || done)) {
+            agentProgressWrap.style.display = 'block';
+            const total = lastKnownStats.total || 0;
+            const filled = lastKnownStats.filled || 0;
+            const processed = filled + (lastKnownStats.skipped || 0) + (lastKnownStats.failed || 0);
+            const pct = percent !== undefined ? percent : (total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0);
+
+            if (agentProgressBar) agentProgressBar.style.width = `${pct}%`;
+            if (agentProgressText) agentProgressText.textContent = `${processed} / ${total} fields (${pct}%)`;
+            if (statFilledBadge) statFilledBadge.textContent = `Filled: ${filled}`;
+            if (agentLiveStatusText && desc) agentLiveStatusText.textContent = desc;
+            if (agentProgressPercent) agentProgressPercent.textContent = done ? (step === 'stopped' ? 'Stopped' : 'Done ✓') : `${pct}%`;
+
+            if (agentRunStartedAt) {
+                const elapsedSec = (Date.now() - agentRunStartedAt) / 1000;
+                if (agentElapsedText) agentElapsedText.textContent = formatDuration(elapsedSec);
+                if (agentEtaBadge && !done) {
+                    const remaining = Math.max(0, total - processed);
+                    const avgPerField = processed > 0 ? Math.max(0.8, elapsedSec / processed) : 1.4;
+                    agentEtaBadge.textContent = total > 0 ? `~${formatDuration(remaining * avgPerField)} left` : 'Estimating...';
+                }
+            }
+        }
+
+        if (isRunning === false || done) {
+            isAgentRunning = false;
+            stopEtaTimer();
+            if (agentLoaderSpinner) agentLoaderSpinner.style.display = 'none';
+            if (agentEtaBadge && done) agentEtaBadge.textContent = step === 'stopped' ? 'Stopped' : 'Completed ✓';
+            if (agentStatusBadge) {
+                agentStatusBadge.textContent = 'Idle';
+                agentStatusBadge.className = 'badge-pill status-idle';
+            }
+            if (btnRunAutonomousAgent) {
+                btnRunAutonomousAgent.disabled = false;
+                btnRunAutonomousAgent.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Run Autonomous Agent`;
+            }
+        } else if (isRunning === true) {
+            if (!isAgentRunning) {
+                agentRunStartedAt = Date.now();
+                startEtaTimer();
+            }
+            isAgentRunning = true;
+            if (agentLoaderSpinner) agentLoaderSpinner.style.display = 'inline-block';
+            if (agentStatusBadge) {
+                agentStatusBadge.textContent = 'Running';
+                agentStatusBadge.className = 'badge-pill status-running';
+            }
+            if (btnRunAutonomousAgent) {
+                btnRunAutonomousAgent.disabled = true;
+                btnRunAutonomousAgent.innerHTML = `<span class="claude-spinner-white"></span> Running Agent...`;
+            }
+        }
+    }
+
+    // Real-time progress & session state listener from active tab
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+        chrome.runtime.onMessage.addListener((msg) => {
+            if (!msg) return;
+            if (msg.type === 'AGENT_PROGRESS') {
+                updateProgressUI(msg);
+            } else if (msg.type === 'AGENT_SESSION_UPDATE' && msg.session) {
+                updateProgressUI({
+                    stats: msg.session.stats,
+                    isRunning: !!msg.session.isActive
+                });
+            } else if (msg.type === 'AGENT_SESSION_STOP') {
+                updateProgressUI({ step: 'stopped', isRunning: false, done: true });
+            }
+        });
+    }
+
+    // Sync state & re-scan automatically on tab refresh or tab switch
+    async function syncTabStateAndScan(retryIfEmpty = true) {
+        const tab = await getActiveTab();
+        if (!tab || !tab.id) return;
+
+        // Reset stale running badge if page refreshed and orchestrator is not running
+        chrome.tabs.sendMessage(tab.id, { type: 'GET_AGENT_STATUS' }, (statusRes) => {
+            if (chrome.runtime.lastError || !statusRes || !statusRes.isRunning) {
+                updateProgressUI({ isRunning: false });
+            } else {
+                updateProgressUI({ isRunning: true, stats: statusRes.stats });
+            }
+        });
+
+        scanPagePerception();
+        if (retryIfEmpty) {
+            setTimeout(() => {
+                if (detectedFieldsCount && detectedFieldsCount.textContent === '0') {
+                    scanPagePerception();
+                }
+            }, 1000);
+        }
+    }
+
+    if (typeof chrome !== 'undefined' && chrome.tabs) {
+        if (chrome.tabs.onUpdated) {
+            chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+                if (tab.active && changeInfo.status === 'complete') {
+                    syncTabStateAndScan(true);
+                }
+            });
+        }
+        if (chrome.tabs.onActivated) {
+            chrome.tabs.onActivated.addListener(() => {
+                syncTabStateAndScan(false);
+            });
+        }
+    }
+
     btnRunAutonomousAgent.addEventListener('click', async () => {
         const tab = await getActiveTab();
         if (!tab || !tab.id) return;
 
-        isAgentRunning = true;
-        agentStatusBadge.textContent = 'Running';
-        agentStatusBadge.className = 'badge-pill status-running';
-        btnRunAutonomousAgent.disabled = true;
-
+        const initialTotal = parseInt(detectedFieldsCount?.textContent || '0', 10) || 0;
+        updateProgressUI({
+            step: 'observe',
+            desc: 'Scanning fields and navigating virtual cursor...',
+            stats: { filled: 0, skipped: 0, failed: 0, total: initialTotal },
+            percent: 0,
+            isRunning: true
+        });
         appendLog('🚀 Launching Autonomous Visual Agent...', 'info');
-        setStepState('observe', 'Scanning fields and navigating virtual cursor...');
 
-        chrome.tabs.sendMessage(tab.id, {
+        let res = await sendMessageSafe(tab.id, {
             type: 'RUN_AUTONOMOUS_AGENT',
             profile: currentProfile
-        }, (res) => {
-            isAgentRunning = false;
-            agentStatusBadge.textContent = 'Idle';
-            agentStatusBadge.className = 'badge-pill status-idle';
-            btnRunAutonomousAgent.disabled = false;
-
-            if (res && res.success) {
-                appendLog('Autonomous form filling finished with verified precision!', 'success');
-                setStepState('verify', 'Form inputs verified with 100% precision.');
-            } else if (chrome.runtime.lastError) {
-                appendLog(`Note: ${chrome.runtime.lastError.message}`, 'warn');
-            }
         });
+
+        // Auto-inject content scripts if tab lost connection (e.g. extension reloaded)
+        if (res && res.__error) {
+            appendLog('Injecting agent into active tab...', 'info');
+            const injected = await ensureContentScriptsInjected(tab.id);
+            if (injected) {
+                await scanPagePerception();
+                res = await sendMessageSafe(tab.id, {
+                    type: 'RUN_AUTONOMOUS_AGENT',
+                    profile: currentProfile
+                });
+            }
+        }
+
+        if (res && res.success) {
+            appendLog('Autonomous form filling finished with verified precision!', 'success');
+            updateProgressUI({
+                step: 'verify',
+                desc: 'Form inputs verified with 100% precision.',
+                stats: res.result?.stats || lastKnownStats,
+                percent: 100,
+                isRunning: false,
+                done: true
+            });
+        } else {
+            updateProgressUI({ isRunning: false, done: true });
+            if (res && res.__error) {
+                appendLog(`Note: ${res.__error}`, 'warn');
+            } else if (res && res.error) {
+                appendLog(`Agent error: ${res.error}`, 'error');
+            }
+        }
     });
 
     btnFastAutofill.addEventListener('click', async () => {
@@ -360,11 +619,61 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     /**
+     * Extracts embedded hyperlinks and link annotations directly from PDF binary bytes.
+     * Captures /URI (https://...) actions, hex-encoded URIs, and embedded URLs in pure JS.
+     */
+    function extractHyperlinksFromPdfBytes(arrayBuffer) {
+        const urls = new Set();
+        try {
+            const uint8 = new Uint8Array(arrayBuffer);
+            const latin1 = new TextDecoder('latin1').decode(uint8);
+
+            // 1. Match /URI (url) annotations
+            const uriRegex = /\/URI\s*\(([^)]+)\)/gi;
+            let m;
+            while ((m = uriRegex.exec(latin1)) !== null) {
+                const raw = m[1].replace(/\\([()\\])/g, '$1').trim();
+                if (/^https?:\/\//i.test(raw) || /^mailto:/i.test(raw) || /^tel:/i.test(raw)) {
+                    urls.add(raw);
+                }
+            }
+
+            // 2. Match /URI <hex> annotations
+            const hexUriRegex = /\/URI\s*<([0-9a-fA-F]+)>/gi;
+            while ((m = hexUriRegex.exec(latin1)) !== null) {
+                try {
+                    const hex = m[1];
+                    let decoded = '';
+                    for (let k = 0; k < hex.length; k += 2) {
+                        decoded += String.fromCharCode(parseInt(hex.substr(k, 2), 16));
+                    }
+                    if (/^https?:\/\//i.test(decoded)) {
+                        urls.add(decoded.trim());
+                    }
+                } catch (e) {}
+            }
+
+            // 3. Match raw http/https URLs in decompressed streams or plaintext
+            const urlRegex = /https?:\/\/[a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=%]+/gi;
+            while ((m = urlRegex.exec(latin1)) !== null) {
+                const u = m[0].replace(/[.,;:)\]>]+$/, '');
+                if (u.length > 8 && !u.includes('adobe.com') && !u.includes('w3.org') && !u.includes('schema.org')) {
+                    urls.add(u);
+                }
+            }
+        } catch (e) {
+            console.warn('[SidePanel] PDF binary hyperlink extraction error:', e);
+        }
+        return Array.from(urls);
+    }
+
+    /**
      * In-browser FlateDecode decompressor using native DecompressionStream.
      * Decodes compressed PDF content streams directly in pure JS with 0 workers and 0 CSP violations.
      */
     async function decompressPdfFlateStreams(uint8) {
         const textTokens = [];
+        const extractedUrls = new Set();
         const latin1 = new TextDecoder('latin1').decode(uint8);
         const streamRegex = /stream[\r\n]+([\s\S]*?)[\r\n]+endstream/g;
         let match;
@@ -440,16 +749,42 @@ document.addEventListener('DOMContentLoaded', async () => {
                     const line = innerMatches.map(s => s.slice(1, -1).replace(/\\([()\\])/g, '$1')).join('');
                     if (line.trim()) textTokens.push(line);
                 }
+                // Extract /URI annotations inside decompressed streams
+                const streamUriRegex = /\/URI\s*\(([^)]+)\)/gi;
+                let sum;
+                while ((sum = streamUriRegex.exec(decompressedStr)) !== null) {
+                    const raw = sum[1].replace(/\\([()\\])/g, '$1').trim();
+                    if (/^https?:\/\//i.test(raw) || /^mailto:/i.test(raw)) extractedUrls.add(raw);
+                }
+                // Extract raw URLs inside decompressed text
+                const streamUrlRegex = /https?:\/\/[a-zA-Z0-9-._~:/?#[\]@!$&'()*+,;=%]+/gi;
+                while ((sum = streamUrlRegex.exec(decompressedStr)) !== null) {
+                    const u = sum[0].replace(/[.,;:)\]>]+$/, '');
+                    if (u.length > 8 && !u.includes('adobe.com') && !u.includes('w3.org') && !u.includes('schema.org')) {
+                        extractedUrls.add(u);
+                    }
+                }
             }
         }
 
-        return textTokens.join('\n');
+        let result = textTokens.join('\n');
+        if (extractedUrls.size > 0) {
+            result += '\n\n--- Extracted Hyperlinks ---\n' + Array.from(extractedUrls).join('\n');
+        }
+        return result;
     }
 
     /**
      * Client-side high-precision PDF text extractor using PDF.js with timeout and native fallback.
+     * Fully extracts visible text AND embedded link annotations (LinkedIn, GitHub, Portfolio, etc.).
      */
     async function extractTextFromPdfArrayBuffer(arrayBuffer) {
+        const extractedUrls = new Set();
+
+        // 0. Binary scan for PDF Link Annotations (/URI (...)) & byte streams
+        const byteLinks = extractHyperlinksFromPdfBytes(arrayBuffer);
+        byteLinks.forEach(u => extractedUrls.add(u));
+
         // 1. Primary: Mozilla PDF.js (with 2.5s safety timeout)
         try {
             const PDFJS = window.pdfjsLib || window.pdfjsDistBuildPdf || (typeof window !== 'undefined' && window['pdfjs-dist/build/pdf']);
@@ -482,9 +817,30 @@ document.addEventListener('DOMContentLoaded', async () => {
                             lastY = item.transform[5];
                         }
                         fullText += (fullText ? '\n\n' : '') + pageText;
+
+                        // Query link annotations on page (subtype: 'Link', url: 'https://...')
+                        try {
+                            const annotations = await page.getAnnotations({ intent: 'display' });
+                            if (Array.isArray(annotations)) {
+                                for (const annot of annotations) {
+                                    if (annot.url && typeof annot.url === 'string') {
+                                        extractedUrls.add(annot.url.trim());
+                                    }
+                                    if (annot.unsafeUrl && typeof annot.unsafeUrl === 'string') {
+                                        extractedUrls.add(annot.unsafeUrl.trim());
+                                    }
+                                }
+                            }
+                        } catch (annotErr) {
+                            // Non-blocking annotation query failure
+                        }
                     }
 
                     if (fullText && fullText.trim().length > 20) {
+                        const linksList = Array.from(extractedUrls).filter(Boolean);
+                        if (linksList.length > 0) {
+                            fullText += '\n\n--- Extracted Hyperlinks ---\n' + linksList.join('\n');
+                        }
                         return fullText.trim();
                     }
                 }
@@ -498,7 +854,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             const uint8 = new Uint8Array(arrayBuffer);
             const decompText = await decompressPdfFlateStreams(uint8);
             if (decompText && decompText.trim().length > 20) {
-                return decompText.trim();
+                const linksList = Array.from(extractedUrls).filter(Boolean);
+                let out = decompText.trim();
+                if (linksList.length > 0 && !out.includes('--- Extracted Hyperlinks ---')) {
+                    out += '\n\n--- Extracted Hyperlinks ---\n' + linksList.join('\n');
+                }
+                return out;
             }
         } catch (decompErr) {
             console.warn('DecompressionStream PDF extraction error:', decompErr);
@@ -522,7 +883,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             if (textBlocks.length > 5) {
-                return textBlocks.join(' ').replace(/\\([()\\])/g, '$1');
+                let out = textBlocks.join(' ').replace(/\\([()\\])/g, '$1');
+                const linksList = Array.from(extractedUrls).filter(Boolean);
+                if (linksList.length > 0) {
+                    out += '\n\n--- Extracted Hyperlinks ---\n' + linksList.join('\n');
+                }
+                return out;
             }
         } catch (e) {
             console.warn('Fallback stream PDF extraction error:', e);
@@ -533,20 +899,43 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     /**
      * Client-side high-precision DOCX text extractor using Mammoth.
+     * Extracts text AND embedded hyperlinks (<a href="...">).
      */
     async function extractTextFromDocxArrayBuffer(arrayBuffer) {
+        let text = '';
+        const extractedUrls = new Set();
         try {
             const mammoth = window.mammoth;
-            if (mammoth && typeof mammoth.extractRawText === 'function') {
-                const result = await mammoth.extractRawText({ arrayBuffer });
-                if (result && result.value) {
-                    return result.value.trim();
+            if (mammoth) {
+                if (typeof mammoth.extractRawText === 'function') {
+                    const result = await mammoth.extractRawText({ arrayBuffer });
+                    if (result && result.value) {
+                        text = result.value.trim();
+                    }
+                }
+                if (typeof mammoth.convertToHtml === 'function') {
+                    const htmlResult = await mammoth.convertToHtml({ arrayBuffer });
+                    if (htmlResult && htmlResult.value) {
+                        const hrefRegex = /href=["']([^"']+)["']/gi;
+                        let m;
+                        while ((m = hrefRegex.exec(htmlResult.value)) !== null) {
+                            const u = m[1].trim();
+                            if (/^https?:\/\//i.test(u) || /^mailto:/i.test(u) || /^tel:/i.test(u)) {
+                                extractedUrls.add(u);
+                            }
+                        }
+                    }
                 }
             }
         } catch (docxErr) {
             console.warn('Mammoth DOCX extraction error:', docxErr);
         }
-        return '';
+
+        if (extractedUrls.size > 0) {
+            text += '\n\n--- Extracted Hyperlinks ---\n' + Array.from(extractedUrls).join('\n');
+        }
+
+        return text;
     }
 
     resumeFileInput.addEventListener('change', async (e) => {
@@ -734,6 +1123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             linkedin: parsed.linkedin || currentProfile.linkedin || '',
             github: parsed.github || currentProfile.github || '',
             portfolio: parsed.portfolio || currentProfile.portfolio || '',
+            twitter: parsed.twitter || currentProfile.twitter || '',
             current_title: parsed.current_title || currentProfile.current_title || '',
             current_company: parsed.current_company || currentProfile.current_company || '',
             years_of_experience: parsed.years_of_experience || currentProfile.years_of_experience || '',
@@ -811,18 +1201,50 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
 
             displayAnalysis(data);
+            renderSuitabilityInsights(resumeText, jobDesc);
             appendLog(`ATS Analysis complete! Match Score: ${data.atsScore || data.score || 78}%`, 'success');
         } catch (err) {
             console.warn('[SidePanel] Fallback analysis:', err);
             const fallback = performClientAnalysis(resumeText, jobDesc);
             displayAnalysis(fallback);
+            renderSuitabilityInsights(resumeText, jobDesc);
         } finally {
             btnAnalyzeResume.textContent = '🔍 Analyze ATS Match Score';
             btnAnalyzeResume.disabled = false;
         }
     });
 
+    function renderSuitabilityInsights(resumeText, jobDesc) {
+        if (typeof JobIntelligenceEngine === 'undefined') return;
+        const box = document.getElementById('suitabilityExplainBox');
+        const badge = document.getElementById('suitabilityRecBadge');
+        const summaryEl = document.getElementById('suitabilitySummaryText');
+        const risksEl = document.getElementById('suitabilityRisksText');
+        if (!box || !badge || !summaryEl || !risksEl) return;
+
+        const structured = JobIntelligenceEngine.extractStructuredJob(jobDesc, {});
+        const suit = JobIntelligenceEngine.evaluateSuitability(structured, currentProfile || {}, { rawText: resumeText });
+        badge.textContent = `${suit.recommendation.replace(/_/g, ' ')} (${suit.overallScore}%)`;
+        summaryEl.textContent = `${structured.role} (${structured.seniority}) • Required skills matched: ${suit.strongMatches.length}/${structured.required_skills.length}.`;
+        risksEl.textContent = suit.rejectionRisks.length > 0 ? `Risks: ${suit.rejectionRisks.join(' ')}` : 'No major requirement gaps detected.';
+        box.classList.remove('hidden');
+    }
+
     function performClientAnalysis(resumeText, jobDesc) {
+        if (typeof JobIntelligenceEngine !== 'undefined') {
+            const structured = JobIntelligenceEngine.extractStructuredJob(jobDesc, {});
+            const suit = JobIntelligenceEngine.evaluateSuitability(structured, currentProfile || {}, { rawText: resumeText });
+            return {
+                atsScore: suit.overallScore,
+                breakdown: {
+                    keywords: suit.breakdown.requiredSkillCoverage,
+                    experience: suit.breakdown.experienceAlignment,
+                    skills: suit.breakdown.preferredSkillCoverage
+                },
+                matchedKeywords: [...suit.strongMatches, ...suit.partialMatches].slice(0, 15),
+                missingKeywords: suit.missingRequirements.slice(0, 10)
+            };
+        }
         const words = jobDesc.toLowerCase().match(/\b[a-z]{3,}\b/g) || [];
         const resLower = resumeText.toLowerCase();
         const unique = Array.from(new Set(words)).filter(w => !['and','the','with','for','that','this','from'].includes(w)).slice(0, 30);
@@ -1016,6 +1438,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('profLinkedIn').value = currentProfile.linkedin || '';
         document.getElementById('profGitHub').value = currentProfile.github || '';
         document.getElementById('profPortfolio').value = currentProfile.portfolio || currentProfile.website || '';
+        const profTw = document.getElementById('profTwitter');
+        if (profTw) profTw.value = currentProfile.twitter || '';
 
         // Experience & Skills
         document.getElementById('profTitle').value = currentProfile.current_title || currentProfile.title || '';
@@ -1043,9 +1467,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('profEthnicity').value = currentProfile.race_ethnicity || 'Decline to Self-Identify';
     }
 
-    btnSaveProfileTab.addEventListener('click', async () => {
-        const fn = document.getElementById('profFirstName').value.trim();
-        const ln = document.getElementById('profLastName').value.trim();
+    /**
+     * Comprehensive Candidate Profile Saver & Auto-Saver.
+     * Persists manual profile edits to chrome.storage.local (both autofillProfile and userProfile)
+     * and synchronizes the active tab's UserContextGraphEngine immediately.
+     */
+    async function saveCurrentProfile(isAutoSave = false) {
+        const fn = (document.getElementById('profFirstName')?.value || '').trim();
+        const ln = (document.getElementById('profLastName')?.value || '').trim();
         const full = `${fn} ${ln}`.trim();
 
         currentProfile = {
@@ -1054,42 +1483,43 @@ document.addEventListener('DOMContentLoaded', async () => {
             last_name: ln,
             full_name: full,
             name: full,
-            email: document.getElementById('profEmail').value.trim(),
-            country_code: document.getElementById('profCountryCode').value.trim(),
-            phone: document.getElementById('profPhone').value.trim(),
-            street_address: document.getElementById('profStreet').value.trim(),
-            address: document.getElementById('profStreet').value.trim(),
-            city: document.getElementById('profCity').value.trim(),
-            state: document.getElementById('profState').value.trim(),
-            zip: document.getElementById('profZip').value.trim(),
-            postal_code: document.getElementById('profZip').value.trim(),
-            country: document.getElementById('profCountry').value.trim(),
-            linkedin: document.getElementById('profLinkedIn').value.trim(),
-            github: document.getElementById('profGitHub').value.trim(),
-            portfolio: document.getElementById('profPortfolio').value.trim(),
-            website: document.getElementById('profPortfolio').value.trim(),
-            current_title: document.getElementById('profTitle').value.trim(),
-            title: document.getElementById('profTitle').value.trim(),
-            current_company: document.getElementById('profCompany').value.trim(),
-            company: document.getElementById('profCompany').value.trim(),
-            years_of_experience: document.getElementById('profExperience').value.trim(),
-            notice_period: document.getElementById('profNoticePeriod').value.trim(),
-            skills: document.getElementById('profSkills').value.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean),
-            degree: document.getElementById('profDegree').value.trim(),
-            highest_education: document.getElementById('profDegree').value.trim(),
-            university: document.getElementById('profUniversity').value.trim(),
-            school: document.getElementById('profUniversity').value.trim(),
-            graduation_year: document.getElementById('profGradYear').value.trim(),
-            gpa: document.getElementById('profGPA').value.trim(),
-            work_authorization: document.getElementById('profWorkAuth').value,
-            require_sponsorship: document.getElementById('profSponsorship').value,
-            expected_salary: document.getElementById('profSalary').value.trim(),
-            salary: document.getElementById('profSalary').value.trim(),
-            willing_to_relocate: document.getElementById('profRelocate').value,
-            gender: document.getElementById('profGender').value,
-            veteran_status: document.getElementById('profVeteran').value,
-            disability_status: document.getElementById('profDisability').value,
-            race_ethnicity: document.getElementById('profEthnicity').value
+            email: (document.getElementById('profEmail')?.value || '').trim(),
+            country_code: (document.getElementById('profCountryCode')?.value || '+1').trim(),
+            phone: (document.getElementById('profPhone')?.value || '').trim(),
+            street_address: (document.getElementById('profStreet')?.value || '').trim(),
+            address: (document.getElementById('profStreet')?.value || '').trim(),
+            city: (document.getElementById('profCity')?.value || '').trim(),
+            state: (document.getElementById('profState')?.value || '').trim(),
+            zip: (document.getElementById('profZip')?.value || '').trim(),
+            postal_code: (document.getElementById('profZip')?.value || '').trim(),
+            country: (document.getElementById('profCountry')?.value || 'United States').trim(),
+            linkedin: (document.getElementById('profLinkedIn')?.value || '').trim(),
+            github: (document.getElementById('profGitHub')?.value || '').trim(),
+            portfolio: (document.getElementById('profPortfolio')?.value || '').trim(),
+            website: (document.getElementById('profPortfolio')?.value || '').trim(),
+            twitter: (document.getElementById('profTwitter')?.value || '').trim(),
+            current_title: (document.getElementById('profTitle')?.value || '').trim(),
+            title: (document.getElementById('profTitle')?.value || '').trim(),
+            current_company: (document.getElementById('profCompany')?.value || '').trim(),
+            company: (document.getElementById('profCompany')?.value || '').trim(),
+            years_of_experience: (document.getElementById('profExperience')?.value || '').trim(),
+            notice_period: (document.getElementById('profNoticePeriod')?.value || 'Immediately').trim(),
+            skills: (document.getElementById('profSkills')?.value || '').split(/[,;\n]+/).map(s => s.trim()).filter(Boolean),
+            degree: (document.getElementById('profDegree')?.value || "Bachelor's Degree").trim(),
+            highest_education: (document.getElementById('profDegree')?.value || "Bachelor's Degree").trim(),
+            university: (document.getElementById('profUniversity')?.value || '').trim(),
+            school: (document.getElementById('profUniversity')?.value || '').trim(),
+            graduation_year: (document.getElementById('profGradYear')?.value || '').trim(),
+            gpa: (document.getElementById('profGPA')?.value || '').trim(),
+            work_authorization: document.getElementById('profWorkAuth')?.value || 'Yes',
+            require_sponsorship: document.getElementById('profSponsorship')?.value || 'No',
+            expected_salary: (document.getElementById('profSalary')?.value || '').trim(),
+            salary: (document.getElementById('profSalary')?.value || '').trim(),
+            willing_to_relocate: document.getElementById('profRelocate')?.value || 'Yes',
+            gender: document.getElementById('profGender')?.value || 'Male',
+            veteran_status: document.getElementById('profVeteran')?.value || 'I am not a protected veteran',
+            disability_status: document.getElementById('profDisability')?.value || 'No, I do not have a disability',
+            race_ethnicity: document.getElementById('profEthnicity')?.value || 'Decline to Self-Identify'
         };
 
         await chrome.storage.local.set({
@@ -1097,9 +1527,71 @@ document.addEventListener('DOMContentLoaded', async () => {
             userProfile: currentProfile
         });
 
-        btnSaveProfileTab.textContent = 'Saved!';
-        setTimeout(() => btnSaveProfileTab.textContent = 'Save Profile', 1500);
-        appendLog('Comprehensive candidate profile & standardized details saved to Context Graph.', 'success');
+        // Sync with active tab's UserContextGraphEngine and PersonalAgentBrain immediately
+        try {
+            const tab = await getActiveTab();
+            if (tab && tab.id) {
+                chrome.tabs.sendMessage(tab.id, {
+                    type: 'UPDATE_CONTEXT_GRAPH_PROFILE',
+                    profile: currentProfile
+                }, () => {});
+            }
+        } catch (syncErr) {
+            // Non-blocking tab message error
+        }
+
+        const autoStatus = document.getElementById('profAutoSaveStatus');
+        if (autoStatus) {
+            autoStatus.textContent = isAutoSave ? '✓ Auto-saved' : '✓ Saved';
+            autoStatus.style.opacity = '1';
+            clearTimeout(window.__autoSaveStatusTimeout);
+            window.__autoSaveStatusTimeout = setTimeout(() => {
+                autoStatus.style.opacity = '0';
+            }, 1800);
+        }
+
+        if (!isAutoSave && btnSaveProfileTab) {
+            btnSaveProfileTab.textContent = 'Saved!';
+            setTimeout(() => btnSaveProfileTab.textContent = 'Save Profile', 1500);
+            appendLog('Comprehensive candidate profile & standardized details saved to Context Graph.', 'success');
+        }
+    }
+
+    let profileAutoSaveTimer = null;
+    function triggerProfileAutoSave(immediate = false) {
+        clearTimeout(profileAutoSaveTimer);
+        if (immediate) {
+            saveCurrentProfile(true);
+        } else {
+            profileAutoSaveTimer = setTimeout(() => {
+                saveCurrentProfile(true);
+            }, 400);
+        }
+    }
+
+    /**
+     * Wire up automatic debounced save to every input, select, and textarea in Profile tab.
+     */
+    function setupProfileAutoSave() {
+        const profilePane = document.getElementById('tab-profile');
+        if (!profilePane) return;
+
+        const inputs = profilePane.querySelectorAll('input, select, textarea');
+        inputs.forEach(el => {
+            if (el.tagName === 'SELECT') {
+                el.addEventListener('change', () => triggerProfileAutoSave(true));
+            } else {
+                // Keystroke typing debounced by 400ms
+                el.addEventListener('input', () => triggerProfileAutoSave(false));
+                // Immediate save on change or focus exit (blur)
+                el.addEventListener('change', () => triggerProfileAutoSave(true));
+                el.addEventListener('blur', () => triggerProfileAutoSave(true));
+            }
+        });
+    }
+
+    btnSaveProfileTab.addEventListener('click', async () => {
+        await saveCurrentProfile(false);
     });
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -1150,24 +1642,39 @@ document.addEventListener('DOMContentLoaded', async () => {
             btnJobOrbitLogin.textContent = 'Connected';
         }
 
+        if (cfWorkerUrlInput && (data.cfWorkerUrl || data.cf_worker_url)) cfWorkerUrlInput.value = data.cfWorkerUrl || data.cf_worker_url;
+        if (cfApiTokenInput && (data.cfApiToken || data.cf_api_token)) cfApiTokenInput.value = data.cfApiToken || data.cf_api_token;
         if (data.geminiApiKey) geminiApiKeyInput.value = data.geminiApiKey;
         if (data.groqApiKey) groqApiKeyInput.value = data.groqApiKey;
         if (data.llmProvider) llmProviderSelect.value = data.llmProvider;
+
+        // Display cached responses count
+        if (qaCacheCount) {
+            const cachedItems = Object.keys(data.qa_cache || {}).length + (data.ai_memory || []).length;
+            qaCacheCount.textContent = `${cachedItems} answer${cachedItems === 1 ? '' : 's'} cached`;
+        }
     }
 
     btnSaveApiKeys.addEventListener('click', async () => {
+        const cfWorkerUrl = cfWorkerUrlInput ? cfWorkerUrlInput.value.trim() : '';
+        const cfApiToken = cfApiTokenInput ? cfApiTokenInput.value.trim() : '';
         const geminiKey = geminiApiKeyInput.value.trim();
         const groqKey = groqApiKeyInput.value.trim();
         const provider = llmProviderSelect.value;
 
         await chrome.storage.local.set({
+            cfWorkerUrl,
+            cf_worker_url: cfWorkerUrl,
+            cfApiToken,
+            cf_api_token: cfApiToken,
             geminiApiKey: geminiKey,
             groqApiKey: groqKey,
-            llmProvider: provider
+            llmProvider: provider,
+            ai_agent_provider: provider
         });
         btnSaveApiKeys.textContent = 'Saved!';
         setTimeout(() => btnSaveApiKeys.textContent = 'Save API Configuration', 1500);
-        appendLog('AI provider keys updated.', 'success');
+        appendLog('Cloudflare AI Worker & API configuration updated.', 'success');
     });
 
     btnJobOrbitLogin.addEventListener('click', () => {
@@ -1192,6 +1699,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // INITIALIZATION
     // ──────────────────────────────────────────────────────────────────────────
     await loadCandidateProfile();
+    setupProfileAutoSave();
     await loadAnswersData();
     await loadSettings();
     await scanPagePerception();

@@ -349,13 +349,56 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     if (request.profile) brain.profile = Object.assign({}, brain.profile, request.profile);
                 }
 
+                // Detect current page Job Title and Company for targeted candidate answers
+                const pageJobData = window.__lastDetectedJobData || {};
+                let pageCompany = pageJobData.company || '';
+                let pageTitle = pageJobData.title || '';
+                if (!pageTitle && typeof document !== 'undefined') {
+                    const h1 = document.querySelector('h1, [role="heading"][aria-level="1"], .F9yp7e, .job-title, [data-qa*="title" i], [class*="job-title" i]');
+                    if (h1) pageTitle = h1.textContent.trim();
+                }
+                if (pageTitle && !pageCompany) {
+                    const sepMatch = pageTitle.match(/^(.+?)\s+(?:application\s*[-–—|@]\s*|[-–—|@]\s*|at\s+)(.+)$/i);
+                    if (sepMatch) {
+                        pageTitle = sepMatch[1].replace(/\bapplication\b/i, '').trim();
+                        pageCompany = sepMatch[2].trim();
+                    }
+                }
+                if (!pageCompany && typeof document !== 'undefined') {
+                    const metaComp = document.querySelector('meta[property="og:site_name"], [class*="company" i], .company-name');
+                    if (metaComp) {
+                        const candComp = (metaComp.getAttribute('content') || metaComp.textContent || '').trim();
+                        if (!/^(?:google\s*docs|google\s*forms|typeform|tally|jotform|greenhouse|lever|workday|smartrecruiters|ashby)$/i.test(candComp)) {
+                            pageCompany = candComp;
+                        }
+                    }
+                }
+                const planContext = {
+                    company: pageCompany,
+                    jobTitle: pageTitle
+                };
+
                 const plan = [];
                 for (const node of snapshot) {
                     let predictedValue = null;
                     if (brain) {
                         try {
-                            const res = await brain.resolveAnswer({ label: node.label, type: node.type, id: node.id, element: node.element }, {});
+                            const res = await brain.resolveAnswer({ 
+                                label: node.label, 
+                                type: node.type, 
+                                id: node.id, 
+                                element: node.element, 
+                                options: node.options 
+                            }, planContext);
                             predictedValue = res ? res.value : null;
+
+                            // If not in profile and field is a question, generate high-caliber candidate answer
+                            if (!predictedValue && (node.type === 'textarea' || (node.label && (node.label.includes('?') || /why|experience|describe|tell|about|salary|notice|sponsor|authoriz|github|linkedin|portfolio|project|cover.*letter|additional|role|position|challenge|achievement|strength|weakness|qualification|hear\s*about/i.test(node.label))))) {
+                                const genRes = await brain.generateCandidateAnswer(node, node.label, planContext);
+                                if (genRes && genRes.value) {
+                                    predictedValue = genRes.value;
+                                }
+                            }
                         } catch (e) {}
                     }
                     plan.push({
@@ -2239,7 +2282,9 @@ function extractExperienceFromText(text) {
 }
 
 /**
- * Inject visual indicator when job is detected
+ * Inject visual indicator when job is detected.
+ * Styled in Job Orbit Claude Warm Aesthetic (#FFFFFF, #D97757, #E5E2DC)
+ * and fully movable/draggable anywhere on the screen without interfering with clicks.
  */
 function injectJobDetectionIndicator(experienceText = null) {
     // Remove existing indicator if present
@@ -2250,77 +2295,299 @@ function injectJobDetectionIndicator(experienceText = null) {
 
     const indicator = document.createElement('div');
     indicator.id = 'rf-job-indicator';
-    
-    const subText = experienceText 
-        ? `Requires: <strong>${experienceText}</strong>`
-        : `Experience: Not explicitly specified`;
-        
+
+    const hasSpecificExp = experienceText && experienceText !== 'Not specified';
+    const subTextBadge = hasSpecificExp
+        ? `<div style="display: inline-flex; align-items: center; gap: 4px; background: #FAF4EE; border: 1px solid rgba(217, 119, 87, 0.25); color: #853E26; font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 500;">
+             <span>Requires:</span><strong style="color: #D97757; font-weight: 600;">${experienceText}</strong>
+           </div>`
+        : `<div style="display: inline-flex; align-items: center; gap: 4px; background: #F4F3ED; border: 1px solid #E5E2DC; color: #636159; font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 500;">
+             <span>Requires:</span><span>Not specified</span>
+           </div>`;
+
     indicator.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 20px;">📄</span>
-            <span style="font-weight: 600;">Job Detected!</span>
+        <div id="rf-drag-header" style="display: flex; align-items: center; justify-content: space-between; cursor: grab; padding-bottom: 7px; border-bottom: 1px solid #F0EEE9; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink: 0;">
+                    <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" fill="#D97757"/>
+                </svg>
+                <span style="font-size: 12.5px; font-weight: 600; color: #1C1B18; letter-spacing: -0.2px;">Job Detected!</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 4px;">
+                <span title="Drag to move" style="display: flex; align-items: center; opacity: 0.45; cursor: grab; padding: 2px;">
+                    <svg width="10" height="12" viewBox="0 0 10 12" fill="#636159">
+                        <circle cx="2.5" cy="2" r="1.5"/><circle cx="7.5" cy="2" r="1.5"/>
+                        <circle cx="2.5" cy="6" r="1.5"/><circle cx="7.5" cy="6" r="1.5"/>
+                        <circle cx="2.5" cy="10" r="1.5"/><circle cx="7.5" cy="10" r="1.5"/>
+                    </svg>
+                </span>
+                <button id="rf-close-btn" title="Dismiss" style="background: transparent; border: none; color: #8C897E; cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: all 0.15s ease;">✕</button>
+            </div>
         </div>
-        <div style="font-size: 12px; margin-top: 4px; opacity: 0.9;">
-            ${subText}
+        <div style="margin-bottom: 9px; line-height: 1.3;">
+            ${subTextBadge}
         </div>
-        <button id="rf-mark-applied-btn" style="margin-top: 8px; padding: 4px 8px; background: white; color: #667eea; border-radius: 4px; border: none; cursor: pointer; font-size: 11px; width: 100%; font-weight: bold;">
-            ✅ Mark as Applied
+        <button id="rf-mark-applied-btn" style="width: 100%; padding: 7px 12px; background: #D97757; color: #FFFFFF; border-radius: 7px; border: none; cursor: pointer; font-size: 11.5px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 6px rgba(217, 119, 87, 0.25); transition: all 0.15s ease; font-family: inherit;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Mark as Applied</span>
         </button>
     `;
+
+    // Position: check if user previously moved the indicator
+    const hasSavedPos = window.__rf_indicator_pos && typeof window.__rf_indicator_pos.left === 'number';
+    const initLeftStyle = hasSavedPos ? `left: ${window.__rf_indicator_pos.left}px;` : '';
+    const initTopStyle = hasSavedPos ? `top: ${window.__rf_indicator_pos.top}px;` : 'top: 20px;';
+    const initRightStyle = hasSavedPos ? 'right: auto;' : 'right: 20px;';
+
     indicator.style.cssText = `
         position: fixed;
-        top: 20px;
-        right: 20px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 16px 20px;
+        ${initTopStyle}
+        ${initRightStyle}
+        ${initLeftStyle}
+        background: #FFFFFF;
+        color: #1C1B18;
+        border: 1px solid #E5E2DC;
+        padding: 12px 14px;
         border-radius: 12px;
         cursor: pointer;
-        z-index: 10000;
-        box-shadow: 0 4px 20px rgba(102, 126, 234, 0.5);
-        transition: all 0.3s ease;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        z-index: 2147483646;
+        box-shadow: 0 8px 24px rgba(28, 27, 24, 0.12), 0 2px 6px rgba(28, 27, 24, 0.04);
+        transition: box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.15s ease, transform 0.15s ease;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', sans-serif;
+        min-width: 210px;
+        max-width: 250px;
+        box-sizing: border-box;
+        user-select: none;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
     `;
 
+    // Card hover aesthetic
     indicator.addEventListener('mouseenter', () => {
-        indicator.style.transform = 'translateY(-2px)';
-        indicator.style.boxShadow = '0 6px 24px rgba(102, 126, 234, 0.6)';
+        if (!isDragging) {
+            indicator.style.boxShadow = '0 12px 28px rgba(28, 27, 24, 0.16), 0 3px 8px rgba(28, 27, 24, 0.06)';
+            indicator.style.borderColor = '#D97757';
+        }
     });
 
     indicator.addEventListener('mouseleave', () => {
-        indicator.style.transform = 'translateY(0)';
-        indicator.style.boxShadow = '0 4px 20px rgba(102, 126, 234, 0.5)';
+        if (!isDragging) {
+            indicator.style.boxShadow = '0 8px 24px rgba(28, 27, 24, 0.12), 0 2px 6px rgba(28, 27, 24, 0.04)';
+            indicator.style.borderColor = '#E5E2DC';
+        }
     });
 
-    indicator.addEventListener('click', (e) => {
-        if (!isExtensionContextValid()) {
-            console.warn('[Content] Extension context invalid, skipping');
-            return;
-        }
-        
-        // Handle "Mark as Applied" button click separately
-        if (e.target && e.target.id === 'rf-mark-applied-btn') {
+    // Close button interactions
+    const closeBtn = indicator.querySelector('#rf-close-btn');
+    if (closeBtn) {
+        closeBtn.addEventListener('mouseenter', () => {
+            closeBtn.style.color = '#1C1B18';
+            closeBtn.style.background = '#F0EEE9';
+        });
+        closeBtn.addEventListener('mouseleave', () => {
+            closeBtn.style.color = '#8C897E';
+            closeBtn.style.background = 'transparent';
+        });
+        closeBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            
-            const btn = e.target;
-            btn.innerText = '⏳ Saving...';
-            btn.style.opacity = '0.7';
-            
+            indicator.style.opacity = '0';
+            indicator.style.transform = 'scale(0.95)';
+            setTimeout(() => indicator.remove(), 150);
+        });
+    }
+
+    // Mark as Applied button interactions
+    const markBtn = indicator.querySelector('#rf-mark-applied-btn');
+    if (markBtn) {
+        markBtn.addEventListener('mouseenter', () => {
+            if (!markBtn.dataset.saved) {
+                markBtn.style.background = '#CC6B49';
+                markBtn.style.boxShadow = '0 3px 8px rgba(217, 119, 87, 0.35)';
+            }
+        });
+        markBtn.addEventListener('mouseleave', () => {
+            if (!markBtn.dataset.saved) {
+                markBtn.style.background = '#D97757';
+                markBtn.style.boxShadow = '0 2px 6px rgba(217, 119, 87, 0.25)';
+            }
+        });
+        markBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!isExtensionContextValid()) {
+                console.warn('[Content] Extension context invalid, skipping');
+                return;
+            }
+
+            markBtn.dataset.saved = 'true';
+            markBtn.innerHTML = `
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="spin">
+                    <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+                    <path d="M12 2a10 10 0 0 1 10 10"/>
+                </svg>
+                <span>Saving...</span>
+            `;
+            markBtn.style.background = '#FAF4EE';
+            markBtn.style.color = '#D97757';
+            markBtn.style.border = '1px solid #D97757';
+            markBtn.style.boxShadow = 'none';
+
             safeSendMessage({
                 type: 'TRACK_MANUAL_APPLICATION',
                 payload: detectedJob
             });
-            
+
             setTimeout(() => {
-                btn.innerText = '✅ Saved!';
-                btn.style.background = '#e6fffa';
-                btn.style.color = '#319795';
+                markBtn.innerHTML = `
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    <span>Saved to Tracker!</span>
+                `;
+                markBtn.style.background = '#EBF8F2';
+                markBtn.style.color = '#1B7F53';
+                markBtn.style.border = '1px solid rgba(27, 127, 83, 0.3)';
             }, 500);
+        });
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // MOVABLE / DRAGGABLE IMPLEMENTATION (Fluid Mouse & Touch with Boundary Clamping)
+    // ──────────────────────────────────────────────────────────────────────────
+    let isDragging = false;
+    let hasDragged = false;
+    let startX = 0, startY = 0;
+    let initialLeft = 0, initialTop = 0;
+
+    const onMouseDown = (e) => {
+        if (e.target.closest('#rf-mark-applied-btn') || e.target.closest('#rf-close-btn')) return;
+        isDragging = true;
+        hasDragged = false;
+        startX = e.clientX;
+        startY = e.clientY;
+
+        const rect = indicator.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        indicator.style.transition = 'none';
+        indicator.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+    };
+
+    const onMouseMove = (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        if (Math.hypot(dx, dy) > 4) {
+            hasDragged = true;
+        }
+
+        const rect = indicator.getBoundingClientRect();
+        const maxLeft = Math.max(10, window.innerWidth - rect.width - 10);
+        const maxTop = Math.max(10, window.innerHeight - rect.height - 10);
+
+        const newLeft = Math.min(Math.max(10, initialLeft + dx), maxLeft);
+        const newTop = Math.min(Math.max(10, initialTop + dy), maxTop);
+
+        indicator.style.left = `${newLeft}px`;
+        indicator.style.top = `${newTop}px`;
+        indicator.style.right = 'auto';
+        indicator.style.bottom = 'auto';
+
+        // Remember user's custom position across dynamic SPA updates
+        window.__rf_indicator_pos = { left: newLeft, top: newTop };
+    };
+
+    const onMouseUp = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        indicator.style.cursor = 'pointer';
+        indicator.style.transition = 'box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.15s ease, transform 0.15s ease';
+        document.body.style.userSelect = '';
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+
+        // Keep hasDragged flag active briefly to prevent triggering the card click handler
+        setTimeout(() => {
+            hasDragged = false;
+        }, 50);
+    };
+
+    const onTouchStart = (e) => {
+        if (e.target.closest('#rf-mark-applied-btn') || e.target.closest('#rf-close-btn')) return;
+        if (!e.touches || e.touches.length === 0) return;
+        isDragging = true;
+        hasDragged = false;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+
+        const rect = indicator.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
+
+        indicator.style.transition = 'none';
+        window.addEventListener('touchmove', onTouchMove, { passive: false });
+        window.addEventListener('touchend', onTouchEnd);
+    };
+
+    const onTouchMove = (e) => {
+        if (!isDragging || !e.touches || e.touches.length === 0) return;
+        const dx = e.touches[0].clientX - startX;
+        const dy = e.touches[0].clientY - startY;
+
+        if (Math.hypot(dx, dy) > 4) {
+            hasDragged = true;
+            e.preventDefault();
+        }
+
+        const rect = indicator.getBoundingClientRect();
+        const maxLeft = Math.max(10, window.innerWidth - rect.width - 10);
+        const maxTop = Math.max(10, window.innerHeight - rect.height - 10);
+
+        const newLeft = Math.min(Math.max(10, initialLeft + dx), maxLeft);
+        const newTop = Math.min(Math.max(10, initialTop + dy), maxTop);
+
+        indicator.style.left = `${newLeft}px`;
+        indicator.style.top = `${newTop}px`;
+        indicator.style.right = 'auto';
+        indicator.style.bottom = 'auto';
+
+        window.__rf_indicator_pos = { left: newLeft, top: newTop };
+    };
+
+    const onTouchEnd = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        indicator.style.transition = 'box-shadow 0.2s ease, border-color 0.2s ease, opacity 0.15s ease, transform 0.15s ease';
+        window.removeEventListener('touchmove', onTouchMove);
+        window.removeEventListener('touchend', onTouchEnd);
+        setTimeout(() => {
+            hasDragged = false;
+        }, 50);
+    };
+
+    indicator.addEventListener('mousedown', onMouseDown);
+    indicator.addEventListener('touchstart', onTouchStart, { passive: true });
+
+    // Card click: opens popup if not dragging or clicking buttons
+    indicator.addEventListener('click', (e) => {
+        if (hasDragged) {
+            return;
+        }
+        if (e.target.closest('#rf-mark-applied-btn') || e.target.closest('#rf-close-btn')) {
+            return;
+        }
+        if (!isExtensionContextValid()) {
+            console.warn('[Content] Extension context invalid, skipping');
             return;
         }
 
-        // Default action: open popup
         safeSendMessage({
             type: 'OPEN_POPUP',
             payload: detectedJob

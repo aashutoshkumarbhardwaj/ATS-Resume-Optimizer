@@ -17,8 +17,8 @@ class ResumeParserClient {
         if (clean.startsWith('%PDF-') || (/stream[\r\n]+[\s\S]{0,100}endstream/.test(clean) && clean.includes('/FlateDecode'))) {
             // Attempt to recover plain text strings if any, otherwise warn
             const textMatch = clean.match(/BT[\s\S]*?ET/g);
+            const recovered = [];
             if (textMatch && textMatch.length > 0) {
-                const recovered = [];
                 for (const block of textMatch) {
                     const tjRegex = /\(([^)]+)\)\s*Tj/g;
                     let m;
@@ -26,9 +26,17 @@ class ResumeParserClient {
                         recovered.push(m[1]);
                     }
                 }
-                if (recovered.length > 10) {
-                    clean = recovered.join(' ').replace(/\\([()\\])/g, '$1');
+            }
+            // Recover embedded /URI link annotations
+            const uriMatch = clean.match(/\/URI\s*\(([^)]+)\)/gi);
+            if (uriMatch) {
+                const extractedUris = uriMatch.map(u => u.replace(/^\/URI\s*\(/i, '').replace(/\)$/, '').replace(/\\([()\\])/g, '$1').trim());
+                if (extractedUris.length > 0) {
+                    recovered.push('\n--- Extracted Hyperlinks ---\n' + extractedUris.join('\n'));
                 }
+            }
+            if (recovered.length > 5) {
+                clean = recovered.join(' ').replace(/\\([()\\])/g, '$1');
             }
         }
 
@@ -79,6 +87,7 @@ class ResumeParserClient {
             linkedin: contact.linkedin || '',
             github: contact.github || '',
             portfolio: contact.portfolio || '',
+            twitter: contact.twitter || '',
 
             // Professional
             current_title: currentTitle,
@@ -126,13 +135,19 @@ class ResumeParserClient {
             zip: '',
             linkedin: '',
             github: '',
-            portfolio: ''
+            portfolio: '',
+            twitter: ''
         };
 
         // 1. EMAIL
         const emailMatch = text.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/);
         if (emailMatch) {
             contact.email = emailMatch[0].trim();
+        } else {
+            const mailtoMatch = text.match(/mailto:([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/i);
+            if (mailtoMatch) {
+                contact.email = mailtoMatch[1].trim();
+            }
         }
 
         // 2. PHONE & COUNTRY CODE
@@ -170,32 +185,58 @@ class ResumeParserClient {
             }
         }
 
-        // 3. SOCIALS (LinkedIn, GitHub, Portfolio)
-        // LinkedIn
-        const linkedinMatch = text.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/([a-zA-Z0-9_\-\.]+)/i);
-        if (linkedinMatch) {
-            const handle = linkedinMatch[1].replace(/[.,/]$/, '');
-            contact.linkedin = `https://linkedin.com/in/${handle}`;
+        if (!contact.phone) {
+            const telMatch = text.match(/tel:([+0-9\s.-]+)/i);
+            if (telMatch) {
+                contact.phone = telMatch[1].trim();
+            }
         }
 
-        // GitHub
-        const githubMatch = text.match(/(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_\-\.]+)/i);
+        // 3. SOCIALS (LinkedIn, GitHub, Twitter, Portfolio)
+        // LinkedIn (handles vanity URLs, subdomains like in.linkedin.com, query params)
+        const linkedinMatch = text.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?linkedin\.com\/in\/([a-zA-Z0-9_\-\/]+)/i);
+        if (linkedinMatch) {
+            const handle = linkedinMatch[1].split(/[?#]/)[0].replace(/[\/.,;]+$/, '');
+            if (handle) {
+                contact.linkedin = `https://www.linkedin.com/in/${handle}`;
+            }
+        }
+
+        // GitHub (handles profile links, excludes reserved navigation paths)
+        const githubMatch = text.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?github\.com\/([a-zA-Z0-9_\-\.]+)/i);
         if (githubMatch) {
-            const handle = githubMatch[1].replace(/[.,/]$/, '');
-            if (!['features', 'pricing', 'explore', 'topics', 'trending', 'collections'].includes(handle.toLowerCase())) {
+            const handle = githubMatch[1].split(/[?#]/)[0].replace(/[\/.,;]+$/, '');
+            const reserved = ['features', 'pricing', 'explore', 'topics', 'trending', 'collections', 'settings', 'about', 'blog', 'contact', 'login', 'signup', 'readme'];
+            if (handle && !reserved.includes(handle.toLowerCase())) {
                 contact.github = `https://github.com/${handle}`;
             }
         }
 
+        // Twitter / X
+        const twitterMatch = text.match(/(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/i);
+        if (twitterMatch) {
+            const handle = twitterMatch[1].split(/[?#]/)[0].replace(/[\/.,;]+$/, '');
+            const reserved = ['home', 'explore', 'notifications', 'messages', 'search', 'settings', 'i'];
+            if (handle && !reserved.includes(handle.toLowerCase())) {
+                contact.twitter = `https://x.com/${handle}`;
+            }
+        }
+
         // Portfolio / Personal Site
-        const portfolioExplicit = text.match(/(?:portfolio|website|site|web)[:\s]*(https?:\/\/[^\s,;]+)/i);
+        const portfolioExplicit = text.match(/(?:portfolio|website|site|web|blog)[:\s]*(https?:\/\/[^\s,;<>"\']+)/i);
         if (portfolioExplicit) {
             contact.portfolio = portfolioExplicit[1].trim().replace(/[.,/]$/, '');
         } else {
-            const allUrls = text.match(/https?:\/\/[^\s,;]+/gi) || [];
+            const allUrls = text.match(/https?:\/\/[^\s,;<>"\']+/gi) || [];
             const nonSocial = allUrls.find(u => {
                 const lower = u.toLowerCase();
-                return !lower.includes('linkedin.com') && !lower.includes('github.com') && !lower.includes('twitter.com') && !lower.includes('x.com');
+                return !lower.includes('linkedin.com') && 
+                       !lower.includes('github.com') && 
+                       !lower.includes('twitter.com') && 
+                       !lower.includes('x.com') &&
+                       !lower.includes('adobe.com') &&
+                       !lower.includes('w3.org') &&
+                       !lower.includes('schema.org');
             });
             if (nonSocial) {
                 contact.portfolio = nonSocial.trim().replace(/[.,/]$/, '');
@@ -253,7 +294,15 @@ class ResumeParserClient {
         }
 
         // 5. LOCATION (City, State, Country, Zip)
-        const indianCities = ['Bengaluru', 'Bangalore', 'Hyderabad', 'Mumbai', 'Pune', 'Delhi', 'New Delhi', 'Chennai', 'Noida', 'Gurgaon', 'Gurugram', 'Kolkata', 'Ahmedabad', 'Jaipur', 'Indore'];
+        const indianCities = [
+            'Bengaluru', 'Bangalore', 'Hyderabad', 'Mumbai', 'Pune', 'Delhi', 'New Delhi', 'Chennai', 
+            'Noida', 'Gurgaon', 'Gurugram', 'Ghaziabad', 'Faridabad', 'Kolkata', 'Ahmedabad', 'Jaipur', 
+            'Indore', 'Chandigarh', 'Lucknow', 'Kanpur', 'Nagpur', 'Bhopal', 'Patna', 'Vadodara', 
+            'Coimbatore', 'Kochi', 'Cochin', 'Thiruvananthapuram', 'Visakhapatnam', 'Surat', 'Agra', 
+            'Varanasi', 'Meerut', 'Rajkot', 'Nashik', 'Dehradun', 'Bhubaneswar', 'Mysuru', 'Mysore',
+            'Ranchi', 'Guwahati', 'Amritsar', 'Jalandhar', 'Ludhiana', 'Gwalior', 'Jabalpur', 'Prayagraj',
+            'Allahabad', 'Bareilly', 'Aligarh', 'Moradabad', 'Saharanpur', 'Gorakhpur'
+        ];
         const usStates = {
             'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
             'CO': 'Colorado', 'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia',
@@ -296,15 +345,24 @@ class ResumeParserClient {
             }
         }
 
-        // Generic City, Country pattern
+        // Generic City, Country pattern (strictly single-line, excluding degree/major keywords)
         if (!contact.city) {
-            const generalLoc = text.match(/\b([A-Z][a-zA-Z\s]{2,20}),\s*(United States|Canada|United Kingdom|Germany|France|Australia|India|Singapore|Japan)\b/i);
+            const generalLoc = text.match(/^[ \t]*([A-Z][a-zA-Z\s]{2,20}),\s*(United States|Canada|United Kingdom|Germany|France|Australia|India|Singapore|Japan)\b/im);
             if (generalLoc) {
-                contact.city = generalLoc[1].trim();
-                contact.country = generalLoc[2].trim();
-                if (/india/i.test(contact.country)) contact.country_code = '+91';
-                if (/united kingdom/i.test(contact.country)) contact.country_code = '+44';
+                let candidateCity = generalLoc[1].trim();
+                candidateCity = candidateCity.replace(/^(?:technology|engineering|bachelor|master|science|arts|university|college|school|institute)[\s\-_]*/i, '').trim();
+                if (candidateCity && candidateCity.length >= 2) {
+                    contact.city = candidateCity;
+                    contact.country = generalLoc[2].trim();
+                    if (/india/i.test(contact.country)) contact.country_code = '+91';
+                    if (/united kingdom/i.test(contact.country)) contact.country_code = '+44';
+                }
             }
+        }
+
+        // Final cleanup for city: strip any leading educational noise
+        if (contact.city) {
+            contact.city = contact.city.replace(/^(?:technology|engineering|bachelor|master|science|arts|university|college|school|institute)[\s\-_]*/i, '').trim();
         }
 
         // Zip code if not already found

@@ -13,22 +13,38 @@ class QuestionExtractionEngine {
      * Detect the ATS platform based on URL, meta tags, or DOM markers.
      */
     detectPlatform() {
-        const url = window.location.href.toLowerCase();
+        const url = (typeof window !== 'undefined' && window.location ? window.location.href : '').toLowerCase();
         
+        if (url.includes('docs.google.com/forms') || url.includes('forms.gle')) return 'Google Forms';
+        if (url.includes('typeform.com')) return 'Typeform';
+        if (url.includes('tally.so')) return 'Tally';
+        if (url.includes('jotform.com')) return 'Jotform';
         if (url.includes('greenhouse.io')) return 'Greenhouse';
-        if (url.includes('jobs.lever.co')) return 'Lever';
-        if (url.includes('jobs.ashbyhq.com')) return 'Ashby';
-        if (url.includes('myworkdayjobs.com')) return 'Workday';
+        if (url.includes('jobs.lever.co') || url.includes('lever.co')) return 'Lever';
+        if (url.includes('ashbyhq.com')) return 'Ashby';
+        if (url.includes('myworkdayjobs.com') || url.includes('workday.com')) return 'Workday';
         if (url.includes('smartrecruiters.com')) return 'SmartRecruiters';
         if (url.includes('taleo.net')) return 'Taleo';
         if (url.includes('successfactors.com')) return 'SuccessFactors';
+        if (url.includes('workable.com')) return 'Workable';
+        if (url.includes('bamboohr.com')) return 'BambooHR';
+        if (url.includes('breezy.hr')) return 'Breezy';
+        if (url.includes('rippling.com')) return 'Rippling';
+        if (url.includes('icims.com')) return 'iCIMS';
+        if (url.includes('linkedin.com')) return 'LinkedIn';
+        if (url.includes('indeed.com')) return 'Indeed';
+        if (url.includes('wellfound.com')) return 'Wellfound';
+        if (url.includes('internshala.com')) return 'Internshala';
         
-        // Additional DOM checks if URL is masked
-        if (document.getElementById('grnhse_app')) return 'Greenhouse';
-        if (document.querySelector('.lever-job-page')) return 'Lever';
-        if (document.querySelector('meta[property="og:site_name"][content="Ashby"]')) return 'Ashby';
-        if (document.querySelector('[data-automation-id="workday-logo"]')) return 'Workday';
-        if (document.querySelector('meta[name="apple-itunes-app"][content*="smartrecruiters"]')) return 'SmartRecruiters';
+        // Additional DOM checks if URL is masked / embedded iframe
+        if (typeof document !== 'undefined') {
+            if (document.querySelector('.freebirdFormviewerViewFormCard, [data-params*="entry."]')) return 'Google Forms';
+            if (document.getElementById('grnhse_app')) return 'Greenhouse';
+            if (document.querySelector('.lever-job-page')) return 'Lever';
+            if (document.querySelector('meta[property="og:site_name"][content="Ashby"]')) return 'Ashby';
+            if (document.querySelector('[data-automation-id="workday-logo"]')) return 'Workday';
+            if (document.querySelector('meta[name="apple-itunes-app"][content*="smartrecruiters"]')) return 'SmartRecruiters';
+        }
         
         return 'Generic';
     }
@@ -168,21 +184,53 @@ class QuestionExtractionEngine {
             }
         }
 
-        // 4.5. Surrounding container label (SmartRecruiters, Ashby, Workday, modern Web Components)
+        // 4.5. Shadow DOM host & Surrounding container label (SmartRecruiters <spl-input>, Ashby, Workday)
         if (!labelText) {
-            const container = el.closest('.form-group, .field, [class*="field"], [class*="input"], [class*="form"], [class*="control"], spl-input, custom-field, [data-qa*="field"]') || el.parentElement;
-            if (container) {
-                const candLabel = container.querySelector('label, [class*="label"], [class*="title"], [data-qa*="label"]');
-                if (candLabel && candLabel !== el && (typeof candLabel.contains === 'function' ? !candLabel.contains(el) : true)) {
-                    if (typeof candLabel.cloneNode === 'function') {
-                        const clone = candLabel.cloneNode(true);
-                        const reqMarks = typeof clone.querySelectorAll === 'function' ? clone.querySelectorAll('.asterisk, .required, [title="required"]') : [];
-                        Array.from(reqMarks).forEach(m => typeof m.remove === 'function' && m.remove());
-                        labelText = clone.textContent.trim();
-                    } else {
-                        labelText = (candLabel.textContent || '').trim();
+            const root = typeof el.getRootNode === 'function' ? el.getRootNode() : null;
+            if (root && root.host) {
+                const host = root.host;
+                const hostAttr = host.getAttribute('label') || host.getAttribute('aria-label');
+                if (hostAttr && hostAttr.trim().replace(/^\*+$/, '')) {
+                    labelText = hostAttr.trim();
+                } else if (typeof host.querySelector === 'function') {
+                    const slotted = host.querySelector('[slot="label"], label, .label, [class*="label" i], [class*="question" i]');
+                    if (slotted && slotted.textContent.trim().replace(/^\*+$/, '')) {
+                        labelText = slotted.textContent.trim();
                     }
                 }
+            }
+        }
+
+        if (!labelText) {
+            let cur = el;
+            for (let step = 0; step < 8 && cur; step++) {
+                if (typeof cur.matches === 'function' && cur.matches('.form-group, .field, [class*="field"], [class*="question" i], spl-input, spl-textarea, spl-select, spl-radio-group, custom-field, [data-qa*="field"]')) {
+                    const candLabels = cur.querySelectorAll('label, [class*="label" i], [class*="title" i], [class*="question" i], [data-qa*="label"]');
+                    for (const candLabel of candLabels) {
+                        if (candLabel === el || (typeof candLabel.contains === 'function' && candLabel.contains(el))) continue;
+                        let txt = '';
+                        if (typeof candLabel.cloneNode === 'function') {
+                            const clone = candLabel.cloneNode(true);
+                            const reqMarks = typeof clone.querySelectorAll === 'function' ? clone.querySelectorAll('.asterisk, .required, [title="required"]') : [];
+                            Array.from(reqMarks).forEach(m => typeof m.remove === 'function' && m.remove());
+                            txt = clone.textContent.trim();
+                        } else {
+                            txt = (candLabel.textContent || '').trim();
+                        }
+                        if (txt && !/^(\*+|\d+\s*\/\s*\d+)$/.test(txt)) {
+                            labelText = txt;
+                            break;
+                        }
+                    }
+                    if (!labelText && cur.previousElementSibling && (!cur.previousElementSibling.querySelector || !cur.previousElementSibling.querySelector('input, select, textarea'))) {
+                        const prevTxt = (cur.previousElementSibling.textContent || '').trim();
+                        if (prevTxt && prevTxt.length > 2 && prevTxt.length < 500 && !/^(\*+|\d+\s*\/\s*\d+)$/.test(prevTxt)) {
+                            labelText = prevTxt;
+                        }
+                    }
+                    if (labelText) break;
+                }
+                cur = cur.parentElement || (typeof cur.getRootNode === 'function' && cur.getRootNode().host ? cur.getRootNode().host : null);
             }
         }
 
@@ -191,8 +239,9 @@ class QuestionExtractionEngine {
             let current = el.previousElementSibling;
             for (let i = 0; i < 3 && current; i++) {
                 if (['LABEL', 'DIV', 'P', 'SPAN'].includes(current.tagName)) {
-                    if (current.textContent.trim().length > 3) {
-                        labelText = current.textContent.trim();
+                    const txt = current.textContent.trim();
+                    if (txt.length > 3 && !/^(\*+|\d+\s*\/\s*\d+)$/.test(txt)) {
+                        labelText = txt;
                         break;
                     }
                 }
@@ -215,7 +264,7 @@ class QuestionExtractionEngine {
                         el.id || '';
         }
 
-        return this.cleanText(labelText);
+        return this.cleanText(labelText).replace(/\s*\d+\s*\/\s*\d+\s*$/g, '').trim();
     }
 
     /**
@@ -393,6 +442,30 @@ class QuestionExtractionEngine {
             const isSensitive = this.isSensitiveField(el, label);
             const isCaptcha = this.isCaptchaElement(el);
 
+            let options = [];
+            try {
+                if (tag === 'select' && el.options) {
+                    options = Array.from(el.options).map(o => ({
+                        value: o.value,
+                        label: (o.text || o.label || o.value || '').trim()
+                    })).filter(o => o.label && !/^(?:select|choose|--|\bselect\s*an\s*option\b)/i.test(o.label));
+                } else if (role === 'combobox' || role === 'listbox') {
+                    const optEls = el.querySelectorAll('[role="option"], li');
+                    if (optEls && optEls.length > 0) {
+                        options = Array.from(optEls).map(o => ({
+                            value: o.getAttribute('data-value') || o.textContent.trim(),
+                            label: o.textContent.trim()
+                        })).filter(o => o.label);
+                    }
+                } else if (el.type === 'radio' && el.name) {
+                    const group = document.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`);
+                    options = Array.from(group).map(r => {
+                        const rLabel = this.extractQuestionText(r) || r.value;
+                        return { value: r.value, label: rLabel };
+                    });
+                }
+            } catch (optErr) {}
+
             return {
                 index,
                 id: this.generateFieldId(el),
@@ -402,6 +475,7 @@ class QuestionExtractionEngine {
                 label,
                 placeholder: el.placeholder || '',
                 helpText: this.extractHelpText(el),
+                options,
                 value: isSensitive ? '***MASKED***' : (el.value || el.textContent || ''),
                 required: this.extractRequiredStatus(el),
                 invalid: el.getAttribute('aria-invalid') === 'true' || !!(el.closest && el.closest('.has-error, .is-invalid')),

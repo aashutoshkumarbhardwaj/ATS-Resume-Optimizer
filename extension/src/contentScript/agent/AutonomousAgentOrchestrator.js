@@ -114,6 +114,17 @@ class AutonomousAgentOrchestrator {
                 }
             }
 
+            // LinkedIn Jobs Easy Apply Mode (auto-scans job cards & steps through Easy Apply modals)
+            const LinkedInAgentClass = (typeof window !== 'undefined' && window.LinkedInEasyApplyAgent) || (typeof LinkedInEasyApplyAgent !== 'undefined' ? LinkedInEasyApplyAgent : null);
+            if (LinkedInAgentClass && LinkedInAgentClass.isLinkedInJobsPage()) {
+                console.log('[AgentOrchestrator] 💼 LinkedIn Jobs detected — starting LinkedInEasyApplyAgent...');
+                const liAgent = new LinkedInAgentClass(this);
+                const liResult = await liAgent.run(options);
+                this.isRunning = false;
+                this.setState('COMPLETED', `LinkedIn Easy Apply complete (${liResult.applied} applied)`, '✅');
+                return liResult;
+            }
+
             // Extract Job Title and Company Context
             const pageContext = this.extractPageContext();
 
@@ -156,6 +167,7 @@ class AutonomousAgentOrchestrator {
 
                 let pageFields = (formStructure && formStructure.fields) ? formStructure.fields.filter(f => this.isJobApplicationField(f.element)) : [];
                 console.log(`[AgentOrchestrator] Page ${currentPage}: ${pageFields.length} application fields detected.`);
+                this.emitProgress('observe', `Page ${currentPage}: ${pageFields.length} fields detected`, { page: currentPage });
 
                 // If on Page 1 and no form fields are detected, scan for Apply button or Job card
                 if (pageFields.length === 0 && currentPage === 1) {
@@ -243,30 +255,54 @@ class AutonomousAgentOrchestrator {
                     this.cursor.setStatus(`Checking: ${field.label || 'Field'}...`, '👀', 'moving');
                     await this.cursor.moveTo(element);
 
-                    // Verify if field is already filled with a valid user choice
+                    // Verify if field is already filled — AND validate against Profile & Stale/Corrupted Data!
                     if (this.isFieldAlreadyFilled(field, element)) {
                         const currentVal = (element.value || element.textContent || '').trim();
-                        console.log(`[AgentOrchestrator] ✅ Field already filled & valid: "${field.label}" = "${currentVal}". Leaving as is.`);
-                        this.cursor.setStatus(`Verified: ${field.label || 'Field'} ✅`, '✅', 'idle');
-                        this.cursor.highlightElement(element);
-                        // Mark all radio buttons in this group as processed
-                        if (element.type === 'radio' && element.name) {
-                            const groupRadios = document.querySelectorAll(`input[name="${element.name}"]`);
-                            groupRadios.forEach(r => processedElements.add(r));
+                        const isCorrupted = this.isStaleOrCorruptedValue(field, currentVal);
+
+                        // Check if field has an authoritative Profile value that differs from what's currently in the DOM
+                        let profileExpected = null;
+                        if (this.brain && typeof this.brain.getDeterministicValue === 'function') {
+                            profileExpected = this.brain.getDeterministicValue(field.label, field.intent || field.semanticIntent?.intent, field);
                         }
-                        this.filledFieldsRecord.push({
-                            id: field.id || field.name || field.label,
-                            label: field.label,
-                            intent: field.intent || field.semanticIntent?.intent,
-                            type: field.type,
-                            value: currentVal,
-                            status: 'pre_filled'
-                        });
-                        if (currentVal.length > 0 && this.brain && typeof this.brain.saveToMemory === 'function') {
-                            this.brain.saveToMemory(field.label, currentVal, field);
+
+                        const differsFromProfile = (() => {
+                            if (!profileExpected || String(profileExpected).trim() === '') return false;
+                            const expStr = String(profileExpected).trim();
+                            const curStr = String(currentVal).trim();
+                            if (/phone|mobile|tel/i.test((field.label || '') + ' ' + (field.type || ''))) {
+                                const expDigits = expStr.replace(/\D/g, '').slice(-10);
+                                const curDigits = curStr.replace(/\D/g, '').slice(-10);
+                                return expDigits.length >= 7 && curDigits !== expDigits;
+                            }
+                            return curStr.toLowerCase() !== expStr.toLowerCase();
+                        })();
+
+                        if (!isCorrupted && !differsFromProfile) {
+                            console.log(`[AgentOrchestrator] ✅ Field already filled & matches profile: "${field.label}" = "${currentVal}". Leaving as is.`);
+                            this.cursor.setStatus(`Verified: ${field.label || 'Field'} ✅`, '✅', 'idle');
+                            this.cursor.highlightElement(element);
+                            // Mark all radio buttons in this group as processed
+                            if (element.type === 'radio' && element.name) {
+                                const groupRadios = document.querySelectorAll(`input[name="${element.name}"]`);
+                                groupRadios.forEach(r => processedElements.add(r));
+                            }
+                            this.filledFieldsRecord.push({
+                                id: field.id || field.name || field.label,
+                                label: field.label,
+                                intent: field.intent || field.semanticIntent?.intent,
+                                type: field.type,
+                                value: currentVal,
+                                status: 'pre_filled'
+                            });
+                            if (currentVal.length > 0 && this.brain && typeof this.brain.saveToMemory === 'function') {
+                                this.brain.saveToMemory(field.label, currentVal, field);
+                            }
+                            await this.cursor.sleep(150);
+                            continue;
                         }
-                        await this.cursor.sleep(180);
-                        continue;
+
+                        console.log(`[AgentOrchestrator] 🔄 Field "${field.label}" has ${isCorrupted ? 'stale/corrupted' : 'mismatched'} value "${currentVal}" (Profile expects "${profileExpected || 'AI answer'}"). Modifying to match profile...`);
                     }
 
                     // 2. Handle File / Resume Upload directly if element is file input
@@ -292,6 +328,7 @@ class AutonomousAgentOrchestrator {
 
                     // 3. Ask Personal Agent Brain to resolve answer from database & profile
                     this.cursor.setStatus(`Consulting Personal Agent...`, '🧠', 'thinking');
+                    this.emitProgress('plan', `Reasoning: "${(field.label || 'Field').slice(0, 40)}"`);
                     const context = {
                         jobTitle: pageContext.jobTitle,
                         company: pageContext.company,
@@ -301,17 +338,37 @@ class AutonomousAgentOrchestrator {
                     const resolution = await this.brain.resolveAnswer(field, context);
                     let answer = resolution ? resolution.value : null;
 
-                    // 4. Asterisk (*) & Required Field Guarantee:
-                    // If field has an asterisk or is required and not in database, prompt the user so it is NEVER skipped!
+                    // 4. Candidate Question Answering & No Question Left Behind Guarantee:
+                    // Every application question, screening prompt, textarea, or required field must be answered!
                     const isRequiredField = field.required || 
                                            (this.engine && typeof this.engine.isRequired === 'function' && this.engine.isRequired(element)) ||
                                            (field.label && (field.label.includes('*') || /\brequired\b/i.test(field.label))) || 
                                            (typeof element.hasAttribute === 'function' && (element.hasAttribute('required') || element.getAttribute('aria-required') === 'true'));
 
+                    const cleanLabel = (field.label || field.name || '').replace(/[\*:]+/g, '').trim();
+                    const isQuestionOrScreening = isRequiredField || 
+                                                 field.type === 'textarea' || 
+                                                 (element && element.tagName === 'TEXTAREA') ||
+                                                 cleanLabel.includes('?') || 
+                                                 /why|experience|describe|tell|about|salary|notice|sponsor|authoriz|github|linkedin|portfolio|project|cover.*letter|additional|role|position|challenge|achievement|strength|weakness|qualification|hear\s*about/i.test(cleanLabel);
+
                     if (answer === null || answer === undefined || answer === '') {
-                        if (isRequiredField) {
-                            console.log(`[AgentOrchestrator] ⚠️ Asterisk (*) / Required field "${field.label}" not in database. Prompting user...`);
-                            this.cursor.setStatus(`Required Question (*): "${field.label}"`, '⚠️', 'asking');
+                        // Level 5 fallback: Generate answer as the most deserving candidate
+                        if (this.brain && typeof this.brain.generateCandidateAnswer === 'function') {
+                            console.log(`[AgentOrchestrator] 🧠 Synthesizing answer as most deserving candidate for: "${cleanLabel}"...`);
+                            this.cursor.setStatus(`Reasoning: "${cleanLabel.slice(0, 30)}..."`, '🧠', 'thinking');
+                            const genRes = await this.brain.generateCandidateAnswer(field, cleanLabel, context);
+                            if (genRes && genRes.value) {
+                                answer = genRes.value;
+                            }
+                        }
+                    }
+
+                    if (answer === null || answer === undefined || answer === '') {
+                        // If still unresolved and it's a question or required field: prompt the user interactively
+                        if (isRequiredField || isQuestionOrScreening) {
+                            console.log(`[AgentOrchestrator] ⚠️ Question "${field.label}" not auto-resolved. Prompting user...`);
+                            this.cursor.setStatus(`Question: "${cleanLabel.slice(0, 35)}..."`, '❓', 'asking');
                             this.cursor.highlightElement(element);
 
                             let optionsList = (field.options || []).map(o => typeof o === 'string' ? o : (o.label || o.value)).filter(Boolean);
@@ -321,7 +378,7 @@ class AutonomousAgentOrchestrator {
                             optionsList = optionsList.slice(0, 8);
 
                             const userChoice = await this.cursor.askUser(
-                                `Required Field (*): ${field.label}`,
+                                `${cleanLabel}${isRequiredField ? ' (*)' : ''}`,
                                 optionsList
                             );
 
@@ -334,13 +391,19 @@ class AutonomousAgentOrchestrator {
                         }
 
                         if (answer === null || answer === undefined || answer === '') {
-                            console.log(`[AgentOrchestrator] Optional field "${field.label}" skipped.`);
+                            console.log(`[AgentOrchestrator] Secondary optional input "${field.label}" skipped.`);
                             this.stats.skipped++;
                             continue;
                         }
                     }
 
+                    // Auto-push and persist resolved answer across context graph, memory and storage
+                    if (answer && this.brain && typeof this.brain.saveToMemory === 'function') {
+                        this.brain.saveToMemory(field.label, answer, field);
+                    }
+
                     // 5. Execute Visual Action & Native Typing / Dropdown Selection (ACT phase)
+                    this.emitProgress('act', `Filling: "${(field.label || 'Field').slice(0, 40)}"`);
                     const success = await this.executeAction(field, answer, isRequiredField);
                     
                     // 5.5. Closed-Loop Verification & Self-Correction (VERIFY phase - Claude in Chrome pattern)
@@ -353,6 +416,7 @@ class AutonomousAgentOrchestrator {
                     if (isVerified) {
                         this.stats.filled++;
                         pageFilledCount++;
+                        this.emitProgress('verify', `Verified: "${(field.label || 'Field').slice(0, 35)}" ✅`);
                         this.cursor.setStatus(`Verified: ${field.label || 'Field'} ✅`, '✅', 'idle');
                         this.filledFieldsRecord.push({
                             id: field.id || field.name || field.label,
@@ -381,7 +445,7 @@ class AutonomousAgentOrchestrator {
                         pageFields = [...pageFields.slice(0, i + 1), ...mergedRemaining];
                     }
 
-                    await this.cursor.sleep(250);
+                    await this.cursor.sleep(60);
                 }
 
                 // Step 5: Check for Next / Progression Button to advance to Page N+1
@@ -401,7 +465,7 @@ class AutonomousAgentOrchestrator {
             } else {
                 this.cursor.setStatus(`Completed scan: ${this.stats.total} fields inspected`, 'ℹ️', 'idle');
             }
-            await this.cursor.sleep(3500);
+            await this.cursor.sleep(600);
 
             return { status: 'COMPLETED', stats: this.stats };
         } catch (error) {
@@ -430,9 +494,9 @@ class AutonomousAgentOrchestrator {
         // 2. Select & Custom Dropdowns
         if (fieldType === 'select' || fieldType === 'custom-select') {
             return await this.selectFromDropdown(field, answer, isRequiredField);
-        } else if (fieldType === 'radio' || element.type === 'radio') {
+        } else if (fieldType === 'radio' || element.type === 'radio' || (element.getAttribute && element.getAttribute('role') === 'radio')) {
             return await this.selectRadioButton(field, answer, isRequiredField);
-        } else if (fieldType === 'checkbox' || element.type === 'checkbox') {
+        } else if (fieldType === 'checkbox' || element.type === 'checkbox' || (element.getAttribute && element.getAttribute('role') === 'checkbox')) {
             this.cursor.setStatus(`Clicking: ${field.label}`, '🖱️', 'moving');
             await this.cursor.moveTo(element);
             this.cursor.highlightElement(element);
@@ -442,11 +506,49 @@ class AutonomousAgentOrchestrator {
             element.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
         } else {
-            // Text inputs, textareas, search inputs, dates
+            // Text inputs, textareas, search inputs, dates, and phone numbers
+            const fieldLabel = (field.label || '').toLowerCase();
+            const isPhoneField = fieldType === 'tel' || /phone|mobile/i.test(fieldLabel) || field.intent === 'phone';
+            const isCountryCodeField = field.intent === 'country_code' || /country\s*code|dial\s*code/i.test(fieldLabel);
+
+            // 2.1. Dedicated Country Code Selection for Phone Numbers
+            if (isCountryCodeField || isPhoneField) {
+                const userCountryCode = this.brain?.profile?.country_code || '+91';
+                const userCountry = this.brain?.profile?.country || 'India';
+                await this.handlePhoneCountryCode(element, userCountryCode, userCountry);
+                if (isCountryCodeField) return true;
+            }
+
+            // 2.2. Value Preparation & Cleansing
+            let typeVal = String(answer || '');
+            if (/city|town|residing/i.test(fieldLabel)) {
+                // Strip degree/technology prefix noise if ever present
+                typeVal = typeVal.replace(/^(?:technology|engineering|bachelor|master|science|arts|university|college|school|institute)[\s\-_]*/i, '').trim();
+            } else if (isPhoneField) {
+                // Strip leading international prefix if country selector handles it
+                const digits = typeVal.replace(/\D/g, '');
+                if (digits.length > 10 && digits.startsWith('91')) {
+                    typeVal = digits.slice(-10);
+                } else if (digits.length > 10 && digits.startsWith('1')) {
+                    typeVal = digits.slice(-10);
+                }
+            }
+
             this.cursor.setStatus(`Typing: ${field.label}...`, '✍️', 'typing');
             await this.cursor.moveTo(element);
             await this.cursor.click(element);
-            await this.cursor.type(element, answer, { humanSpeed: true });
+
+            // Clear element completely before typing
+            try {
+                if (this.cursor && typeof this.cursor.setNativeValue === 'function') {
+                    this.cursor.setNativeValue(element, '');
+                } else {
+                    element.value = '';
+                }
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+            } catch (e) {}
+
+            await this.cursor.type(element, typeVal, { humanSpeed: true });
 
             // Enforce React/Vue/Angular native prototype descriptor sync
             try {
@@ -455,111 +557,352 @@ class AutonomousAgentOrchestrator {
                     || (typeof window !== 'undefined' && window.HTMLInputElement && Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set)
                     || (typeof window !== 'undefined' && window.HTMLTextAreaElement && Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set);
                 if (nativeSetter) {
-                    nativeSetter.call(element, String(answer));
+                    nativeSetter.call(element, String(typeVal));
                 } else {
-                    element.value = String(answer);
+                    element.value = String(typeVal);
                 }
                 element.dispatchEvent(new Event('input', { bubbles: true }));
                 element.dispatchEvent(new Event('change', { bubbles: true }));
-                element.dispatchEvent(new Event('blur', { bubbles: true }));
+                // NOTICE: We do NOT dispatch blur here, because premature blur causes autocomplete dropdowns to unmount!
             } catch (e) {}
 
-            // Inspect and click on any autocomplete suggestion popoff appearing after typing (e.g. City on SmartRecruiters, Lever, Workday)
-            await this.handleAutocompletePopoff(element, answer, field);
+            // CRITICAL: Inspect and actively select from any dropdown / popoff appearing after typing
+            // The agent MUST select from that dropdown before moving to the next field!
+            await this.ensureDropdownSelectionAndDismiss(element, typeVal, field, isRequiredField);
+
+            // Now that dropdown selection has been made and committed, safely blur the element
+            try {
+                element.dispatchEvent(new Event('blur', { bubbles: true }));
+            } catch (e) {}
 
             return true;
         }
     }
 
     /**
-     * Inspect and handle any autocomplete suggestions / popoff list appearing after typing
-     * (e.g. City autocomplete on SmartRecruiters, Google Places, Lever, Workday)
+     * Inspect and actively select country code for phone number inputs across ATS platforms
+     * (e.g. SmartRecruiters .c-phone-input__country-select, Greenhouse, Lever, Workday, intl-tel-input)
      */
-    async handleAutocompletePopoff(element, answer, field = {}) {
-        if (!element) return;
+    async handlePhoneCountryCode(phoneElement, targetCode = '+91', targetCountry = 'India') {
+        if (!phoneElement) return false;
 
-        // Give dynamic autocomplete dropdown 300ms to mount/render suggestions
-        await this.cursor.sleep(300);
+        const rawCode = String(targetCode || '+91').trim();
+        const countryName = String(targetCountry || 'India').trim();
+        const cleanDigitsCode = rawCode.replace(/\D/g, '') || '91';
+        const withPlusCode = `+${cleanDigitsCode}`;
 
-        const targetText = String(answer || '').trim().toLowerCase();
+        // 1. Check parent/container for a country code <select> or custom button trigger
+        const container = phoneElement.closest('.c-phone-input, .phone-input, .intl-tel-input, .iti, [class*="phone" i], .form-group, .field') || phoneElement.parentElement;
+        if (!container) return false;
 
-        // Common autocomplete suggestions container & item selectors
-        const suggestionSelectors = [
-            // SmartRecruiters & custom ATS listboxes
+        // Check A: Native <select> country code dropdown
+        const selectEl = container.querySelector('select[name*="country" i], select[id*="country" i], select[name*="dial" i], select[name*="prefix" i], select[class*="country" i]');
+        if (selectEl && this.isElementVisible(selectEl)) {
+            const options = Array.from(selectEl.options);
+            const matched = options.find(o => {
+                const text = (o.text + ' ' + o.value).toLowerCase();
+                return text.includes(withPlusCode) || text.includes(countryName.toLowerCase()) || text.includes(`(${cleanDigitsCode})`);
+            });
+            if (matched) {
+                selectEl.value = matched.value;
+                matched.selected = true;
+                selectEl.dispatchEvent(new Event('input', { bubbles: true }));
+                selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+        }
+
+        // Check B: Custom button trigger (e.g. SmartRecruiters .c-phone-input__country-select, .iti__selected-flag)
+        const triggerBtn = container.querySelector(
+            '.c-phone-input__country-select, .iti__selected-flag, [class*="country-select" i], [class*="dial-code" i], [aria-haspopup="listbox"], button[data-testid*="country" i], [class*="country-picker" i]'
+        );
+
+        if (!triggerBtn || !this.isElementVisible(triggerBtn)) {
+            return false;
+        }
+
+        // Check if the trigger already displays the correct country code
+        const currentTriggerText = (triggerBtn.textContent || triggerBtn.innerText || '').trim();
+        if (currentTriggerText.includes(withPlusCode) || currentTriggerText.includes(countryName)) {
+            console.log(`[AgentOrchestrator] ✅ Country code "${withPlusCode}" is already selected on phone input.`);
+            return true;
+        }
+
+        console.log(`[AgentOrchestrator] 🌐 Opening country code selector for "${withPlusCode}" (${countryName})...`);
+        this.cursor.setStatus(`Selecting Country Code: ${withPlusCode}...`, '🌐', 'moving');
+
+        // Click trigger button to open the country dropdown popover
+        await this.cursor.moveTo(triggerBtn);
+        this.cursor.highlightElement(triggerBtn);
+        await this.cursor.click(triggerBtn);
+        if (typeof triggerBtn.click === 'function') triggerBtn.click();
+        await this.cursor.sleep(400);
+
+        // Check if there is an open search bar inside the popover
+        const searchInput = document.querySelector(
+            '.c-country-select__search-input, input[placeholder*="country" i], input[placeholder*="search" i], input[type="search"], [role="listbox"] input, input[aria-label*="search" i]'
+        );
+
+        if (searchInput && this.isElementVisible(searchInput)) {
+            await this.cursor.moveTo(searchInput);
+            await this.cursor.click(searchInput);
+            // Type the country name to filter list
+            await this.cursor.type(searchInput, countryName, { humanSpeed: true });
+            await this.cursor.sleep(350);
+        }
+
+        // Locate country items in the open popover
+        const countryItemSelectors = [
+            '.c-country-select__list li',
+            '.c-country-select__item',
+            '.iti__country',
             '[role="listbox"] [role="option"]',
             '[role="listbox"] li',
+            'li[data-country-code]',
+            'li[data-dial-code]',
+            '.country-list li',
+            'ul[class*="country"] li'
+        ];
+
+        let visibleItems = [];
+        for (const sel of countryItemSelectors) {
+            const found = Array.from(document.querySelectorAll(sel)).filter(el => this.isElementVisible(el));
+            if (found.length > 0) {
+                visibleItems = found;
+                break;
+            }
+        }
+
+        let bestItem = null;
+        if (visibleItems.length > 0) {
+            // Priority 1: Contains both country name and code (e.g. "India +91")
+            bestItem = visibleItems.find(el => {
+                const txt = (el.textContent || el.innerText || '').toLowerCase();
+                return txt.includes(countryName.toLowerCase()) && (txt.includes(withPlusCode) || txt.includes(cleanDigitsCode));
+            });
+
+            // Priority 2: Contains withPlusCode (e.g. "+91")
+            if (!bestItem) {
+                bestItem = visibleItems.find(el => {
+                    const txt = (el.textContent || el.innerText || '').toLowerCase();
+                    return txt.includes(withPlusCode);
+                });
+            }
+
+            // Priority 3: Contains country name (e.g. "India")
+            if (!bestItem) {
+                bestItem = visibleItems.find(el => {
+                    const txt = (el.textContent || el.innerText || '').toLowerCase();
+                    return txt.includes(countryName.toLowerCase());
+                });
+            }
+
+            // Interactive Fallback: If not found or ambiguous, ask user!
+            if (!bestItem && this.cursor && typeof this.cursor.askUser === 'function') {
+                const choices = visibleItems
+                    .map(el => (el.textContent || el.innerText || '').trim())
+                    .filter(t => t.length > 0)
+                    .slice(0, 8);
+                if (choices.length > 0) {
+                    this.cursor.setStatus(`Select your Country Code:`, '❓', 'asking');
+                    const picked = await this.cursor.askUser(`Select your Country Code:`, choices);
+                    if (picked) {
+                        bestItem = visibleItems.find(el => (el.textContent || el.innerText || '').trim().toLowerCase() === picked.toLowerCase().trim());
+                    }
+                }
+            }
+
+            if (bestItem) {
+                const itemText = (bestItem.textContent || bestItem.innerText || '').trim();
+                console.log(`[AgentOrchestrator] ✅ Selecting country code item: "${itemText}"`);
+                await this.cursor.moveTo(bestItem);
+                this.cursor.highlightElement(bestItem);
+                await this.cursor.click(bestItem);
+                bestItem.click();
+                if (typeof MouseEvent !== 'undefined') {
+                    bestItem.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                    bestItem.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+                    bestItem.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                }
+                await this.cursor.sleep(300);
+            }
+        }
+
+        // Ensure popover is dismissed cleanly
+        await this.dismissLingeringPopoffs();
+        return !!bestItem;
+    }
+
+    /**
+     * Inspect and actively select from any dropdown / popoff appearing after typing
+     * (e.g. City autocomplete on SmartRecruiters, Google Places, Lever, Workday)
+     * The agent MUST select from that dropdown before moving to the next field!
+     */
+    async ensureDropdownSelectionAndDismiss(element, answer, field = {}, isRequiredField = false) {
+        if (!element) return;
+
+        const targetText = String(answer || '').trim().toLowerCase();
+        const fieldLabel = (field.label || '').toLowerCase();
+        
+        // Detect if this field is known to show an autocomplete dropdown
+        const isLikelyDropdownField = 
+            (typeof element.getAttribute === 'function' && (
+                element.getAttribute('role') === 'combobox' ||
+                element.getAttribute('aria-autocomplete') ||
+                element.getAttribute('aria-haspopup') === 'listbox'
+            )) ||
+            /city|location|country|state|province|school|university|hear\s*about/i.test(fieldLabel);
+
+        const maxWaitMs = isLikelyDropdownField ? 700 : 80;
+        const pollInterval = 80;
+        const startTime = Date.now();
+
+        // Common autocomplete suggestions container & item selectors across ATS platforms
+        const suggestionSelectors = [
+            // Standard ARIA listbox & option
+            '[role="listbox"] [role="option"]',
+            '[role="listbox"] li',
+            '[role="listbox"] > div[tabindex]',
+            // SmartRecruiters specific (.oneclick-ui, spl-autocomplete, c-autocomplete)
             '.c-autocomplete__list li',
             '.c-autocomplete__item',
+            '.c-autocomplete__menu li',
+            '.c-autocomplete__menu > div',
             '.spl-select-options li',
             '.spl-autocomplete-item',
+            '.spl-autocomplete__option',
             // Google Places & Typeahead
             '.pac-container .pac-item',
             '.typeahead-dropdown .item',
+            '.typeahead .dropdown-item',
             '.suggestions-list li',
             '.suggestions-list [class*="item"]',
             'ul[class*="suggestion"] li',
             'div[class*="suggestion-item"]',
             'ul[class*="autocomplete"] li',
             'div[class*="autocomplete-item"]',
-            '[class*="option-item"]',
+            'ul[class*="options"] li',
+            'div[class*="option-item"]',
             // Generic active dropdown menus
             '.dropdown-menu.show li',
+            '.dropdown-menu.show a',
             '.dropdown-menu.visible li',
             '[aria-expanded="true"] + [role="listbox"] [role="option"]'
         ];
 
         let visibleOptions = [];
-        for (const sel of suggestionSelectors) {
-            try {
-                const found = Array.from(document.querySelectorAll(sel)).filter(el => this.isElementVisible(el));
-                if (found.length > 0) {
-                    visibleOptions = found;
-                    break;
-                }
-            } catch (e) {}
-        }
+
+        // Actively watch via MutationObserver + fast poll until suggestions dropdown appears
+        visibleOptions = await this.waitForPopupOptions(suggestionSelectors, maxWaitMs, pollInterval);
 
         if (visibleOptions.length > 0) {
-            console.log(`[AgentOrchestrator] 🎯 Detected ${visibleOptions.length} autocomplete popoff suggestions after typing into "${field.label || 'field'}".`);
-            
-            // Priority 1: Option matching the answer or part of the answer (e.g. city name)
+            console.log(`[AgentOrchestrator] 🎯 Dropdown detected for "${field.label || 'field'}" with ${visibleOptions.length} options! Must select option before moving to next field...`);
+            this.cursor.setStatus(`Selecting from dropdown for "${field.label || 'field'}"...`, '🎯', 'moving');
+
+            // Priority 1: Exact text match
             let bestOption = visibleOptions.find(opt => {
                 const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
-                return text === targetText || text.includes(targetText) || (targetText.length > 3 && targetText.includes(text));
+                return text === targetText;
             });
 
-            // Priority 2: If no exact substring match, pick the top/first visible suggestion
+            // Priority 2: Option text includes target answer (e.g. "Ghaziabad, Uttar Pradesh, India" includes "ghaziabad")
+            if (!bestOption) {
+                bestOption = visibleOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return text.includes(targetText);
+                });
+            }
+
+            // Priority 3: Token overlap match
+            if (!bestOption && targetText.length > 2) {
+                const targetTokens = targetText.split(/[\s,]+/).filter(w => w.length > 2);
+                bestOption = visibleOptions.find(opt => {
+                    const text = (opt.textContent || opt.innerText || '').trim().toLowerCase();
+                    return targetTokens.some(tok => text.includes(tok));
+                });
+            }
+
+            // Priority 4: Scroll inside scrollable pop-up container if option wasn't in initial visible slice
+            if (!bestOption && visibleOptions.length > 0) {
+                bestOption = await this.scrollPopupForMatchingOption(visibleOptions[0], targetText);
+            }
+
+            // Priority 5: Vision AI Set-of-Mark Fallback if DOM matching was ambiguous
+            if (!bestOption && visibleOptions.length > 1) {
+                const visionPick = await this.locateTargetViaVision(
+                    `Select the option that best matches "${answer}" for "${field.label || 'field'}"`,
+                    visibleOptions.slice(0, 12)
+                );
+                if (visionPick && visionPick.element) {
+                    bestOption = visionPick.element;
+                }
+            }
+
+            // Priority 6: Interactive selection if required and match is still ambiguous
+            if (!bestOption && isRequiredField && this.cursor && typeof this.cursor.askUser === 'function') {
+                const choices = visibleOptions
+                    .map(opt => (opt.textContent || opt.innerText || '').trim())
+                    .filter(t => t.length > 0)
+                    .slice(0, 8);
+                if (choices.length > 0) {
+                    this.cursor.setStatus(`Select your ${field.label || 'Choice'}:`, '❓', 'asking');
+                    const picked = await this.cursor.askUser(`Select option for: ${field.label}`, choices);
+                    if (picked) {
+                        bestOption = visibleOptions.find(opt => 
+                            (opt.textContent || opt.innerText || '').trim().toLowerCase() === picked.toLowerCase().trim()
+                        );
+                        if (bestOption && this.brain && typeof this.brain.saveToMemory === 'function') {
+                            this.brain.saveToMemory(field.label, picked, field);
+                        }
+                    }
+                }
+            }
+
+            // Priority 7: Fallback selection — pick the top suggestion provided by the ATS
             if (!bestOption) {
                 bestOption = visibleOptions[0];
             }
 
             if (bestOption) {
                 const optText = (bestOption.textContent || bestOption.innerText || '').trim();
-                this.cursor.setStatus(`Selecting suggestion: "${optText}"...`, '🎯', 'moving');
+                console.log(`[AgentOrchestrator] ✅ Selecting dropdown item: "${optText}"`);
+                this.cursor.setStatus(`Selected: "${optText}"`, '🎯', 'moving');
 
-                // Move cursor to suggestion item and click
-                await this.cursor.moveTo(bestOption);
-                this.cursor.highlightElement(bestOption);
-                await this.cursor.click(bestOption);
-
-                if (this.automation && typeof this.automation.clickHumanLike === 'function') {
-                    await this.automation.clickHumanLike(bestOption);
-                } else {
-                    bestOption.click();
+                if (typeof bestOption.scrollIntoView === 'function') {
+                    bestOption.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    await this.cursor.sleep(40);
                 }
 
-                // Dispatch pointer events to ensure framework commits selection
-                if (typeof MouseEvent !== 'undefined') {
-                    bestOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                    bestOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                    bestOption.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                }
+                await this.trustedClick(bestOption);
 
-                await this.cursor.sleep(300);
+                await this.cursor.sleep(150);
+
+                // Commit check: Press Enter if element is still focused and dropdown needs confirmation
+                try {
+                    element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                    element.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                } catch (e) {}
+
+                await this.cursor.sleep(100);
+            }
+        } else {
+            // Check if there is a manual entry link (e.g. "Cannot find your city? Click here to fill in manually")
+            if (/city|location/i.test(fieldLabel)) {
+                try {
+                    const manualLinks = Array.from(document.querySelectorAll('a, button, [role="button"], span')).filter(el => {
+                        const txt = (el.textContent || '').trim().toLowerCase();
+                        return /cannot\s*find.*city|fill\s*in\s*manually|enter\s*manually/i.test(txt);
+                    });
+                    if (manualLinks.length > 0 && this.isElementVisible(manualLinks[0])) {
+                        console.log('[AgentOrchestrator] ℹ️ Found "fill in manually" link for city. Clicking...');
+                        manualLinks[0].click();
+                        await this.cursor.sleep(300);
+                    }
+                } catch (e) {}
             }
         }
 
-        // Final check: If any popup / listbox / country dropdown is STILL open, dismiss it cleanly
+        // Final check: Ensure no popoff or listbox remains open before moving to the next field
         await this.dismissLingeringPopoffs();
     }
 
@@ -568,15 +911,22 @@ class AutonomousAgentOrchestrator {
      */
     async dismissLingeringPopoffs() {
         try {
-            // Check if open listboxes or country code menus are still visible
+            // Check if open listboxes, country code menus, or typeahead suggestions are still visible
             const openMenus = Array.from(document.querySelectorAll(
-                '[role="listbox"]:not([aria-hidden="true"]), .dropdown-menu.show, .c-autocomplete__list, .spl-select-options'
+                '[role="listbox"]:not([aria-hidden="true"]), .dropdown-menu.show, .c-autocomplete__list, .c-autocomplete__menu, .spl-select-options, .c-country-select, .c-country-select__menu, .iti__country-list'
             )).filter(el => this.isElementVisible(el));
 
             if (openMenus.length > 0) {
                 // Press Escape to dismiss
                 document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
                 document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                
+                // Dispatch click on document body to clear focus
+                if (document.body) {
+                    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    document.body.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                }
                 await this.cursor.sleep(120);
             }
         } catch (e) {}
@@ -596,8 +946,20 @@ class AutonomousAgentOrchestrator {
         if (element.tagName === 'SELECT') {
             const opt = element.options ? element.options[element.selectedIndex] : null;
             actualStr = opt ? (opt.value || opt.text || '').trim().toLowerCase() : '';
-        } else if (type === 'radio' || type === 'checkbox') {
-            actualStr = element.checked ? 'true' : 'false';
+        } else if (type === 'radio' || (element.getAttribute && element.getAttribute('role') === 'radio')) {
+            const group = this.getRadioGroup(element);
+            const anySelected = group.some(r => {
+                if (r.checked || (r.getAttribute && r.getAttribute('aria-checked') === 'true')) return true;
+                if (r.shadowRoot && typeof r.shadowRoot.querySelector === 'function') {
+                    const inner = r.shadowRoot.querySelector('input[type="radio"], [role="radio"]');
+                    if (inner && (inner.checked || (inner.getAttribute && inner.getAttribute('aria-checked') === 'true'))) return true;
+                }
+                return false;
+            });
+            return { verified: anySelected, actual: anySelected ? 'selected' : 'unselected' };
+        } else if (type === 'checkbox' || (element.getAttribute && element.getAttribute('role') === 'checkbox')) {
+            const isChecked = !!(element.checked || (element.getAttribute && element.getAttribute('aria-checked') === 'true'));
+            return { verified: isChecked, actual: isChecked ? 'checked' : 'unchecked' };
         } else {
             actualStr = (element.value || element.textContent || '').trim().toLowerCase();
         }
@@ -663,41 +1025,76 @@ class AutonomousAgentOrchestrator {
     }
 
     /**
-     * Accurately select the matching radio button from an option group
+     * Collect all radio options in a group (supports native, ARIA role="radio", and Shadow DOM)
      */
-    async selectRadioButton(field, answer, isRequiredField = false) {
-        const element = field.element || (field.id ? document.getElementById(field.id) : null);
-        if (!element) return false;
-
+    getRadioGroup(element) {
+        if (!element) return [];
         const name = element.name;
         let radioGroup = [];
         if (name) {
             radioGroup = Array.from(document.querySelectorAll(`input[type="radio"][name="${name}"]`));
         }
-        if (radioGroup.length === 0) {
-            const container = (typeof element.closest === 'function' ? element.closest('fieldset, [role="radiogroup"], .form-group, .question, .field') : null) || element.parentElement;
-            if (container) {
-                radioGroup = Array.from(container.querySelectorAll('input[type="radio"]'));
+        if (radioGroup.length <= 1) {
+            let cur = element;
+            let container = null;
+            for (let s = 0; s < 8 && cur; s++) {
+                if (typeof cur.matches === 'function' && cur.matches('fieldset, [role="radiogroup"], spl-radio-group, [role="listitem"], .form-group, .question, .field, [class*="question" i]')) {
+                    container = cur;
+                    break;
+                }
+                cur = cur.parentElement || (typeof cur.getRootNode === 'function' && cur.getRootNode().host ? cur.getRootNode().host : null);
+            }
+            if (!container) container = element.parentElement;
+            if (container && typeof container.querySelectorAll === 'function') {
+                const found = Array.from(container.querySelectorAll('input[type="radio"], [role="radio"], spl-radio'));
+                if (found.length > 0) radioGroup = found;
             }
         }
         if (radioGroup.length === 0) {
             radioGroup = [element];
         }
+        return radioGroup;
+    }
 
+    /**
+     * Select radio button matching target value (supports native, Google Forms ARIA, and Shadow DOM)
+     */
+    async selectRadioButton(field, answer, isRequiredField = false) {
+        const element = field.element;
+        if (!element) return false;
+
+        const radioGroup = this.getRadioGroup(element);
         const ansLower = String(answer || '').trim().toLowerCase();
 
         // Helper to extract label text associated with a radio button
         const getRadioLabel = (r) => {
+            if (!r) return '';
+            const aria = r.getAttribute && (r.getAttribute('aria-label') || r.getAttribute('label'));
+            if (aria) return aria.trim().toLowerCase();
+            const dataVal = r.getAttribute && r.getAttribute('data-value');
+            if (dataVal) return dataVal.trim().toLowerCase();
+
+            // Check Shadow DOM host label (SmartRecruiters <spl-radio label="Yes">)
+            const root = typeof r.getRootNode === 'function' ? r.getRootNode() : null;
+            if (root && root.host) {
+                const hostLbl = root.host.getAttribute('label') || root.host.getAttribute('aria-label') || root.host.textContent;
+                if (hostLbl && hostLbl.trim()) return hostLbl.trim().toLowerCase();
+            }
+
             let labelText = '';
             if (r.id) {
                 const l = document.querySelector(`label[for="${r.id}"]`);
                 if (l) labelText = l.textContent || '';
             }
-            if (!labelText && r.parentElement) {
-                labelText = r.parentElement.textContent || '';
+            if (!labelText && typeof r.closest === 'function') {
+                const wrapLabel = r.closest('label');
+                if (wrapLabel) labelText = wrapLabel.textContent || '';
             }
             if (!labelText && r.nextElementSibling && r.nextElementSibling.tagName === 'LABEL') {
                 labelText = r.nextElementSibling.textContent || '';
+            }
+            if (!labelText && r.textContent && r.textContent.trim().length > 0 && r.textContent.trim().length < 80) {
+                labelText = r.textContent;
             }
             return (labelText || r.value || '').trim().toLowerCase();
         };
@@ -773,7 +1170,25 @@ class AutonomousAgentOrchestrator {
                 this.cursor.highlightElement(targetRadio);
                 await this.cursor.click(targetRadio);
             }
-            targetRadio.checked = true;
+            const isAriaRadio = targetRadio.getAttribute && targetRadio.getAttribute('role') === 'radio';
+            if (targetRadio.tagName === 'INPUT') {
+                targetRadio.checked = true;
+            } else if (targetRadio.shadowRoot && typeof targetRadio.shadowRoot.querySelector === 'function') {
+                const innerRadio = targetRadio.shadowRoot.querySelector('input[type="radio"], [role="radio"]');
+                if (innerRadio) {
+                    if (innerRadio.tagName === 'INPUT') innerRadio.checked = true;
+                    if (typeof innerRadio.click === 'function') innerRadio.click();
+                    innerRadio.dispatchEvent(new Event('input', { bubbles: true }));
+                    innerRadio.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            }
+            if (isAriaRadio) {
+                targetRadio.setAttribute('aria-checked', 'true');
+            }
+            if (typeof MouseEvent !== 'undefined') {
+                targetRadio.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+                targetRadio.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            }
             if (typeof targetRadio.click === 'function') targetRadio.click();
             targetRadio.dispatchEvent(new Event('input', { bubbles: true }));
             targetRadio.dispatchEvent(new Event('change', { bubbles: true }));
@@ -794,13 +1209,21 @@ class AutonomousAgentOrchestrator {
             return !!(element.files && element.files.length > 0);
         }
 
-        // 2. Radio & Checkbox
-        if (field.type === 'radio' || field.type === 'checkbox' || element.type === 'radio' || element.type === 'checkbox') {
-            if (element.type === 'radio' && element.name) {
-                const checkedRadio = document.querySelector(`input[name="${element.name}"]:checked`);
-                return !!checkedRadio;
-            }
-            return !!element.checked;
+        // 2. Radio & Checkbox (supports native inputs and ARIA role="radio" / role="checkbox")
+        const role = element.getAttribute ? element.getAttribute('role') : '';
+        if (field.type === 'radio' || element.type === 'radio' || role === 'radio') {
+            const group = this.getRadioGroup(element);
+            return group.some(r => {
+                if (r.checked || (r.getAttribute && r.getAttribute('aria-checked') === 'true')) return true;
+                if (r.shadowRoot && typeof r.shadowRoot.querySelector === 'function') {
+                    const inner = r.shadowRoot.querySelector('input[type="radio"], [role="radio"]');
+                    if (inner && (inner.checked || (inner.getAttribute && inner.getAttribute('aria-checked') === 'true'))) return true;
+                }
+                return false;
+            });
+        }
+        if (field.type === 'checkbox' || element.type === 'checkbox' || role === 'checkbox') {
+            return !!(element.checked || (element.getAttribute && element.getAttribute('aria-checked') === 'true'));
         }
 
         // 3. HTML <select> Element
@@ -1034,6 +1457,16 @@ class AutonomousAgentOrchestrator {
         // Collect candidate options from open dropdown or portal
         const optionSelectors = [
             '[role="option"]',
+            '.c-country-select__item',
+            '.c-country-select__list li',
+            '.c-autocomplete__item',
+            '.c-autocomplete__list li',
+            '.c-autocomplete__menu li',
+            '.spl-select-options li',
+            '.spl-autocomplete-item',
+            '.iti__country',
+            '.country-list li',
+            'li[data-country-code]',
             '.office-form-theme-dropdown-item',
             '.office-form-question-dropdown-item',
             '.ms-Dropdown-item',
@@ -1659,34 +2092,78 @@ class AutonomousAgentOrchestrator {
     }
 
     /**
+     * Detect stale, corrupted, or format-mismatched values already inside form fields
+     */
+    isStaleOrCorruptedValue(field, val) {
+        if (!val) return false;
+        const v = String(val).trim();
+        const label = (field.label || field.name || '').toLowerCase();
+
+        // 1. PDF/LaTeX metadata artifacts (e.g. "This is pdfTeX", "Version")
+        if (/\b(?:pdftex|xetex|luatex|latex|overleaf|endobj|flatedecode)\b/i.test(v) || /^version$/i.test(v)) {
+            return true;
+        }
+        // 2. Phone number field containing only a bare dial code like "+1" or "+91"
+        if ((field.type === 'tel' || /phone|mobile|contact\s*number/i.test(label)) && v.replace(/\D/g, '').length < 7) {
+            return true;
+        }
+        // 3. Short numeric/academic fields containing essays or wrong formats
+        if (/\b(cgpa|gpa|percentage)\b/i.test(label) && (v.split(/\s+/).length > 3 || !/\d/.test(v))) {
+            return true;
+        }
+        if (/\b(year\s*of\s*completion|graduation\s*year|passing\s*year)\b/i.test(label) && !/^(?:19|20)\d{2}$/.test(v)) {
+            return true;
+        }
+        if (/\b(branch|speciali[sz]ation)\b/i.test(label) && v.split(/\s+/).length > 8) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
      * Extract Job Title and Company from DOM
      */
     extractPageContext() {
         let jobTitle = '';
         let company = '';
 
-        // Try h1
-        const h1 = document.querySelector('h1');
+        // Try h1 or Google Forms title heading
+        const h1 = document.querySelector('h1, [role="heading"][aria-level="1"], .F9yp7e');
         if (h1) jobTitle = h1.textContent.trim();
 
-        // Try meta tags
+        // Try meta tags (excluding generic form hosting names like "Google Docs", "Typeform")
         const ogTitle = document.querySelector('meta[property="og:title"]');
         if (ogTitle && ogTitle.content) {
             jobTitle = jobTitle || ogTitle.content;
         }
 
+        // Parse "Role Application – Company" or "Role at Company"
+        if (jobTitle) {
+            const sepMatch = jobTitle.match(/^(.+?)\s+(?:application\s*[-–—|@]\s*|[-–—|@]\s*|at\s+)(.+)$/i);
+            if (sepMatch) {
+                jobTitle = sepMatch[1].replace(/\bapplication\b/i, '').trim();
+                company = sepMatch[2].trim();
+            }
+        }
+
         const ogSite = document.querySelector('meta[property="og:site_name"]');
-        if (ogSite && ogSite.content) {
-            company = ogSite.content;
+        if (!company && ogSite && ogSite.content) {
+            const siteName = ogSite.content.trim();
+            if (!/^(?:google\s*docs|google\s*forms|typeform|tally|jotform|greenhouse|lever|workday|smartrecruiters|ashby)$/i.test(siteName)) {
+                company = siteName;
+            }
         }
 
         // Hostname fallback
         if (!company) {
             const hostParts = (typeof window !== 'undefined' && window.location && window.location.hostname) ? window.location.hostname.split('.') : [];
-            company = hostParts[hostParts.length - 2] || 'the employer';
+            const hostBase = hostParts[hostParts.length - 2] || '';
+            if (!/^(?:google|typeform|tally|jotform)$/i.test(hostBase)) {
+                company = hostBase || 'the employer';
+            }
         }
 
-        return { jobTitle: jobTitle || 'Target Position', company: company };
+        return { jobTitle: jobTitle || 'Target Position', company: company || 'your organization' };
     }
 
     isElementVisible(element) {
@@ -1957,9 +2434,217 @@ class AutonomousAgentOrchestrator {
         }
     }
 
+    /**
+     * Broadcast live execution progress to SidePanel & Extension UI
+     */
+    emitProgress(step, desc, extra = {}) {
+        try {
+            const total = this.stats.total || 0;
+            const processed = (this.stats.filled || 0) + (this.stats.skipped || 0) + (this.stats.failed || 0);
+            const percent = extra.percent !== undefined
+                ? extra.percent
+                : (total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0);
+
+            if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+                chrome.runtime.sendMessage({
+                    type: 'AGENT_PROGRESS',
+                    step,
+                    desc,
+                    stats: { ...this.stats },
+                    percent,
+                    isRunning: this.isRunning,
+                    ...extra
+                }).catch(() => {});
+            }
+        } catch (e) {}
+    }
+
+    /**
+     * Phase 2: Real-Time MutationObserver + Poll Pop-up Detector
+     * Reacts immediately (< 20ms) when a pop-up/portal/dropdown mounts onto the DOM.
+     */
+    async waitForPopupOptions(selectors = [], maxWaitMs = 700, pollInterval = 80) {
+        const scan = () => {
+            for (const sel of selectors) {
+                try {
+                    const found = Array.from(document.querySelectorAll(sel)).filter(el => this.isElementVisible(el));
+                    if (found.length > 0) return found;
+                } catch (e) {}
+            }
+            return [];
+        };
+
+        const immediate = scan();
+        if (immediate.length > 0) return immediate;
+
+        if (typeof MutationObserver === 'undefined' || !document.body) {
+            const start = Date.now();
+            while (Date.now() - start < maxWaitMs) {
+                await this.cursor.sleep(pollInterval);
+                const found = scan();
+                if (found.length > 0) return found;
+            }
+            return [];
+        }
+
+        return new Promise((resolve) => {
+            let resolved = false;
+            const finish = (res) => {
+                if (resolved) return;
+                resolved = true;
+                try { observer.disconnect(); } catch (e) {}
+                clearTimeout(timer);
+                clearInterval(poller);
+                resolve(res);
+            };
+
+            const observer = new MutationObserver(() => {
+                const found = scan();
+                if (found.length > 0) finish(found);
+            });
+            try {
+                observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'aria-expanded'] });
+            } catch (e) {}
+
+            const poller = setInterval(() => {
+                const found = scan();
+                if (found.length > 0) finish(found);
+            }, pollInterval);
+
+            const timer = setTimeout(() => {
+                finish(scan());
+            }, maxWaitMs);
+        });
+    }
+
+    /**
+     * Phase 2: Scroll inside a scrollable pop-up / dropdown container to find hidden options
+     */
+    async scrollPopupForMatchingOption(sampleOptionEl, targetText) {
+        if (!sampleOptionEl || !targetText) return null;
+        const container = typeof sampleOptionEl.closest === 'function'
+            ? sampleOptionEl.closest('[role="listbox"], [role="menu"], ul, .c-country-select__list, .c-autocomplete__menu, [class*="menu" i], [class*="list" i]') || sampleOptionEl.parentElement
+            : sampleOptionEl.parentElement;
+        if (!container) return null;
+
+        const tokens = targetText.split(/[\s,]+/).filter(w => w.length > 2);
+        for (let step = 0; step < 6; step++) {
+            const items = Array.from(container.querySelectorAll('[role="option"], li, [data-value], div[tabindex]'));
+            const match = items.find(el => {
+                const txt = (el.textContent || '').trim().toLowerCase();
+                return txt === targetText || txt.includes(targetText) || (tokens.length > 0 && tokens.some(t => txt.includes(t)));
+            });
+            if (match) {
+                if (typeof match.scrollIntoView === 'function') match.scrollIntoView({ block: 'center' });
+                return match;
+            }
+            if (typeof container.scrollTop === 'number') {
+                container.scrollTop += 180;
+                await this.cursor.sleep(50);
+            } else {
+                break;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Phase 3: Set-of-Mark (SoM) Screenshot + Vision AI Grounding
+     * Overlays temporary numbered badges [1..N], captures screenshot, asks Vision AI, removes badges.
+     */
+    async locateTargetViaVision(goalDescription, candidateElements = []) {
+        if (!candidateElements || candidateElements.length === 0) return null;
+        if (!this.brain?.llmClient || typeof this.brain.llmClient.completeWithVision !== 'function') return null;
+        if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) return null;
+
+        const overlays = [];
+        const markMap = new Map();
+        try {
+            candidateElements.forEach((el, idx) => {
+                if (!el || typeof el.getBoundingClientRect !== 'function') return;
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return;
+                const id = idx + 1;
+                markMap.set(id, { element: el, rect, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+
+                if (typeof document !== 'undefined' && document.body && typeof document.createElement === 'function') {
+                    const badge = document.createElement('div');
+                    badge.textContent = `[${id}]`;
+                    badge.style.cssText = `position:fixed;left:${Math.max(2, rect.left)}px;top:${Math.max(2, rect.top)}px;z-index:2147483647;background:#D97757;color:#fff;font:bold 11px monospace;padding:1px 4px;border-radius:4px;pointer-events:none;box-shadow:0 1px 4px rgba(0,0,0,0.4);`;
+                    document.body.appendChild(badge);
+                    overlays.push(badge);
+                }
+            });
+
+            if (markMap.size === 0) return null;
+
+            const capRes = await new Promise((resolve) => {
+                chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' }, (res) => resolve(res || null));
+            });
+
+            // Immediately remove SoM badges
+            overlays.forEach(b => b.remove());
+            overlays.length = 0;
+
+            if (!capRes || !capRes.success || !capRes.dataUrl) return null;
+
+            const visionRes = await this.brain.llmClient.completeWithVision(
+                'You are a visual UI grounding agent. Look at the numbered orange [N] badges in the screenshot. Reply ONLY with the integer N of the element that satisfies the goal, or 0 if none match.',
+                `Goal: ${goalDescription}`,
+                capRes.dataUrl
+            );
+
+            const matchNum = visionRes ? parseInt(String(visionRes).replace(/[^\d]/g, ''), 10) : 0;
+            if (matchNum && markMap.has(matchNum)) {
+                return markMap.get(matchNum);
+            }
+        } catch (e) {
+            overlays.forEach(b => { try { b.remove(); } catch (_) {} });
+        }
+        return null;
+    }
+
+    /**
+     * Phase 4: Trusted Hardware-Level Click (CDP Input.dispatchMouseEvent with smooth DOM fallback)
+     */
+    async trustedClick(element) {
+        if (!element) return false;
+        await this.cursor.moveTo(element);
+        this.cursor.highlightElement(element);
+        await this.cursor.click(element);
+
+        const coords = this.cursor?.lastTargetCoords;
+        if (coords && typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            try {
+                const cdpRes = await new Promise((resolve) => {
+                    chrome.runtime.sendMessage({ type: 'CDP_CLICK', x: coords.x, y: coords.y }, (r) => resolve(r));
+                });
+                if (cdpRes && cdpRes.success && cdpRes.trusted) {
+                    return true;
+                }
+            } catch (e) {}
+        }
+
+        if (this.automation && typeof this.automation.clickHumanLike === 'function') {
+            await this.automation.clickHumanLike(element);
+        } else if (typeof element.click === 'function') {
+            element.click();
+        }
+        if (typeof MouseEvent !== 'undefined') {
+            element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+            element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        }
+        return true;
+    }
+
     async stop(clearSession = true) {
         this.isRunning = false;
         this.setState('STOPPED');
+        this.emitProgress('stopped', 'Agent stopped.', { isRunning: false, done: true });
+        if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+            chrome.runtime.sendMessage({ type: 'CDP_DETACH' }).catch(() => {});
+        }
         if (this.beforeUnloadHandler && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
             window.removeEventListener('beforeunload', this.beforeUnloadHandler);
             this.beforeUnloadHandler = null;

@@ -236,43 +236,121 @@ class ApplicationUnderstandingEngine {
     }
 
     /**
-     * Check if extracted label is a useless generic framework placeholder
+     * Check if extracted label is a useless generic framework placeholder or counter
      */
     isGenericLabel(text) {
         if (!text) return true;
         const norm = text.trim().toLowerCase();
-        return /^(?:single\s*line\s*text|multi\s*line\s*text|text\s*box|text\s*input|text|input|text\s*question|choice\s*question|rating|date|please\s*enter\s*your\s*answer|enter\s*your\s*answer|please\s*enter\s*a\s*url|enter\s*a\s*url|required|\*)$/i.test(norm);
+        if (/^\d+\s*\/\s*\d+$/.test(norm)) return true; // Character counters like "0/200"
+        if (/^(?:spl[\s_-]*(?:input|textarea|select)|question|input|field)[\s_-]*\d*$/i.test(norm)) return true;
+        return /^(?:single\s*line\s*text|multi\s*line\s*text|text\s*box|text\s*input|text|input|text\s*question|choice\s*question|rating|date|please\s*enter\s*your\s*answer|enter\s*your\s*answer|please\s*enter\s*a\s*url|enter\s*a\s*url|required|\*+)$/i.test(norm);
     }
 
     /**
-     * Extract label text for a field (comprehensive approach)
+     * Get parent element, seamlessly crossing Shadow DOM boundaries via rootNode.host
+     */
+    getParentCrossingShadow(node) {
+        if (!node) return null;
+        if (node.parentElement) return node.parentElement;
+        const root = typeof node.getRootNode === 'function' ? node.getRootNode() : null;
+        if (root && root.host) return root.host;
+        return null;
+    }
+
+    /**
+     * Equivalent to element.closest(selector) that crosses Shadow DOM boundaries
+     */
+    closestCrossingShadow(node, selector) {
+        let cur = node;
+        while (cur) {
+            if (typeof cur.matches === 'function') {
+                try {
+                    if (cur.matches(selector)) return cur;
+                } catch (e) {}
+            }
+            cur = this.getParentCrossingShadow(cur);
+        }
+        return null;
+    }
+
+    /**
+     * Clean trailing character counters (e.g. "0/200") and excess whitespace from extracted question text
+     */
+    stripQuestionNoise(text) {
+        if (!text) return '';
+        return this.cleanText(text)
+            .replace(/\s*\d+\s*\/\s*\d+\s*$/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    /**
+     * Extract label text for a field (comprehensive approach, including Shadow DOM & SmartRecruiters)
      */
     extractLabel(element) {
-        // 1. First, check dedicated question containers (Microsoft Forms, Google Forms, Greenhouse, Lever, Workday)
-        const questionContainer = element.closest('[data-automation-id="questionItem"], [data-item-id], .office-form-question, .freebirdFormviewerViewNumberedItemContainer, [role="listitem"], .form-group, .field, [class*="questionItem"], [class*="form-group"]');
-        if (questionContainer) {
-            const titleEl = questionContainer.querySelector('[data-automation-id="questionTitle"], [role="heading"], h1, h2, h3, h4, .office-form-question-title, [class*="questionTitle"], [class*="title"], [class*="label"], [class*="Label"]');
-            if (titleEl) {
-                const titleText = this.cleanText(titleEl.textContent);
-                if (titleText && !this.isGenericLabel(titleText)) return titleText;
+        if (!element) return '';
+
+        // 0. Check Shadow DOM host (e.g. SmartRecruiters <spl-input label="...">, <spl-textarea>)
+        const root = typeof element.getRootNode === 'function' ? element.getRootNode() : null;
+        if (root && root.host) {
+            const host = root.host;
+            const hostLabel = host.getAttribute('label') || host.getAttribute('aria-label');
+            if (hostLabel) {
+                const cleaned = this.stripQuestionNoise(hostLabel);
+                if (cleaned && !this.isGenericLabel(cleaned)) return cleaned;
             }
-            const containerText = this.cleanText(questionContainer.textContent.replace(element.textContent || '', ''));
-            if (containerText && containerText.length < 200 && !this.isGenericLabel(containerText)) return containerText;
+            // Check light DOM children of the host (e.g. <label slot="label"> or <span slot="label">)
+            if (typeof host.querySelector === 'function') {
+                const slottedLabel = host.querySelector('[slot="label"], label, .label, [class*="label" i], [class*="question" i]');
+                if (slottedLabel) {
+                    const cleaned = this.stripQuestionNoise(slottedLabel.textContent);
+                    if (cleaned && !this.isGenericLabel(cleaned)) return cleaned;
+                }
+            }
         }
 
-        // 2. Try associated HTML label
+        // 1. Check dedicated question containers across Shadow DOM boundaries
+        const questionContainer = this.closestCrossingShadow(
+            element,
+            '[data-automation-id="questionItem"], [data-item-id], .office-form-question, .freebirdFormviewerViewNumberedItemContainer, [role="listitem"], .form-group, .field, [class*="questionItem"], [class*="question" i], [data-test*="question" i], [data-qa*="question" i], spl-input, spl-textarea, spl-select, spl-radio-group'
+        );
+        if (questionContainer) {
+            const titleEls = questionContainer.querySelectorAll('[data-automation-id="questionTitle"], [role="heading"], h1, h2, h3, h4, label, .office-form-question-title, [class*="questionTitle"], [class*="question-text" i], [class*="title" i], [class*="label" i]');
+            for (const titleEl of titleEls) {
+                if (titleEl === element || (typeof titleEl.contains === 'function' && titleEl.contains(element))) continue;
+                const titleText = this.stripQuestionNoise(titleEl.textContent);
+                if (titleText && !this.isGenericLabel(titleText)) return titleText;
+            }
+            // Check previous sibling of the custom element / container if title wasn't inside
+            let prev = questionContainer.previousElementSibling;
+            for (let s = 0; s < 2 && prev; s++) {
+                if (!prev.querySelector || !prev.querySelector('input, select, textarea')) {
+                    const prevText = this.stripQuestionNoise(prev.textContent);
+                    if (prevText && prevText.length < 500 && !this.isGenericLabel(prevText)) return prevText;
+                }
+                prev = prev.previousElementSibling;
+            }
+            const containerText = this.stripQuestionNoise((questionContainer.textContent || '').replace(element.textContent || '', ''));
+            if (containerText && containerText.length < 500 && !this.isGenericLabel(containerText)) return containerText;
+        }
+
+        // 2. Try associated HTML label (within root node or document)
         if (element.id) {
-            const label = document.querySelector(`label[for="${element.id}"]`);
+            const searchRoot = root && typeof root.querySelector === 'function' ? root : document;
+            let label = searchRoot.querySelector(`label[for="${element.id}"]`);
+            if (!label && searchRoot !== document) {
+                label = document.querySelector(`label[for="${element.id}"]`);
+            }
             if (label) {
-                const text = this.cleanText(label.textContent);
+                const text = this.stripQuestionNoise(label.textContent);
                 if (text && !this.isGenericLabel(text)) return text;
             }
         }
 
-        // 3. Try parent label
-        const parentLabel = element.closest('label');
+        // 3. Try parent label (crossing Shadow DOM)
+        const parentLabel = this.closestCrossingShadow(element, 'label');
         if (parentLabel) {
-            const text = this.cleanText(parentLabel.textContent.replace(element.textContent || '', ''));
+            const text = this.stripQuestionNoise(parentLabel.textContent.replace(element.textContent || '', ''));
             if (text && !this.isGenericLabel(text)) return text;
         }
 
@@ -281,60 +359,74 @@ class ApplicationUnderstandingEngine {
         if (labelledBy) {
             const ids = labelledBy.split(/\s+/).filter(Boolean);
             const textParts = ids.map(id => {
-                const el = document.getElementById(id);
-                return el ? this.cleanText(el.textContent) : '';
-            }).filter(t => t && !this.isGenericLabel(t) && !/^(?:please\s*enter|required|\*)/i.test(t));
+                const el = (root && typeof root.getElementById === 'function' ? root.getElementById(id) : null) || document.getElementById(id);
+                return el ? this.stripQuestionNoise(el.textContent) : '';
+            }).filter(t => t && !this.isGenericLabel(t) && !/^(?:please\s*enter|required|\*+)$/i.test(t));
             if (textParts.length > 0) return textParts.join(' ');
         }
 
         // 5. Try aria-label (skip generic screen-reader types like "Single line text")
         const ariaLabel = element.getAttribute('aria-label');
         if (ariaLabel) {
-            const cleanAria = this.cleanText(ariaLabel);
+            const cleanAria = this.stripQuestionNoise(ariaLabel);
             if (cleanAria && !this.isGenericLabel(cleanAria)) return cleanAria;
         }
 
-        // 6. Try placeholder (if non-generic)
+        // 6. Look for nearby text across Shadow DOM BEFORE falling back to placeholder/name/id
+        const nearby = this.extractNearbyText(element);
+        if (nearby && !this.isGenericLabel(nearby)) return nearby;
+
+        // 7. Try placeholder (if non-generic)
         if (element.placeholder) {
-            const cleanPlaceholder = this.cleanText(element.placeholder);
+            const cleanPlaceholder = this.stripQuestionNoise(element.placeholder);
             if (cleanPlaceholder && !this.isGenericLabel(cleanPlaceholder)) return cleanPlaceholder;
         }
 
-        // 7. Try name attribute (convert to human-readable)
+        // 8. Try name attribute (convert to human-readable)
         if (element.name) {
-            const cleanName = this.cleanText(element.name.replace(/[_-]/g, ' '));
+            const cleanName = this.stripQuestionNoise(element.name.replace(/[_-]/g, ' '));
             if (cleanName && !this.isGenericLabel(cleanName)) return cleanName;
         }
 
-        // 8. Look for nearby text (previous sibling, parent text, etc.)
-        return this.extractNearbyText(element);
+        return '';
     }
 
     /**
-     * Extract nearby text to determine field label
+     * Extract nearby text to determine field label (crosses Shadow DOM + 2D visual proximity)
      */
     extractNearbyText(element) {
-        // Walk up parents (up to 5 levels) to look for question text
-        let parent = element.parentElement;
-        for (let i = 0; i < 5 && parent; i++) {
+        // Walk up parents (up to 6 levels, crossing Shadow DOM) to look for question text
+        let parent = this.getParentCrossingShadow(element);
+        for (let i = 0; i < 6 && parent; i++) {
             if (parent.tagName === 'BODY' || parent.tagName === 'HTML' || parent.tagName === 'FORM') break;
-            const titleEl = parent.querySelector('[role="heading"], h1, h2, h3, h4, [class*="title"], [class*="label"]');
-            if (titleEl && titleEl !== element) {
-                const titleText = this.cleanText(titleEl.textContent);
-                if (titleText && titleText.length < 250) return titleText;
+            if (typeof parent.querySelectorAll === 'function') {
+                const titleEls = parent.querySelectorAll('[role="heading"], h1, h2, h3, h4, label, p, [class*="title" i], [class*="label" i], [class*="question" i]');
+                for (const titleEl of titleEls) {
+                    if (titleEl === element || (typeof titleEl.contains === 'function' && titleEl.contains(element))) continue;
+                    const titleText = this.stripQuestionNoise(titleEl.textContent);
+                    if (titleText && titleText.length < 500 && !this.isGenericLabel(titleText)) return titleText;
+                }
             }
-            const text = this.cleanText(parent.innerText || parent.textContent);
-            if (text && text.length > 0 && text.length < 250) {
+            // Check previous sibling of parent (very common when label/question sits above <spl-input> wrapper)
+            let prev = parent.previousElementSibling;
+            if (prev && (!prev.querySelector || !prev.querySelector('input, select, textarea'))) {
+                const prevText = this.stripQuestionNoise(prev.textContent);
+                if (prevText && prevText.length > 0 && prevText.length < 500 && !this.isGenericLabel(prevText)) {
+                    return prevText;
+                }
+            }
+            const text = this.stripQuestionNoise(parent.innerText || parent.textContent);
+            if (text && text.length > 0 && text.length < 500 && !this.isGenericLabel(text)) {
                 return text;
             }
-            parent = parent.parentElement;
+            parent = this.getParentCrossingShadow(parent);
         }
 
-        // Check previous sibling
+        // Check previous sibling directly
         let sibling = element.previousElementSibling;
         while (sibling && sibling.tagName !== 'FORM') {
-            const text = this.cleanText(sibling.textContent);
-            if (text && text.length < 200) {
+            const text = this.stripQuestionNoise(sibling.textContent);
+            if (text && text.length < 500 && !this.isGenericLabel(text)) {
                 return text;
             }
             sibling = sibling.previousElementSibling;
@@ -362,15 +454,25 @@ class ApplicationUnderstandingEngine {
                 }
             }
         } else if (fieldType === 'radio' || fieldType === 'checkbox') {
-            // Radio/checkbox group
+            // Radio/checkbox group (supports native inputs, ARIA role="radio", and Shadow DOM spl-radio)
             const name = element.name;
-            const group = document.querySelectorAll(`input[name="${name}"]`);
+            let group = [];
+            if (name) {
+                group = Array.from(document.querySelectorAll(`input[name="${name}"]`));
+            }
+            if (group.length === 0) {
+                const container = this.closestCrossingShadow(element, 'fieldset, [role="radiogroup"], spl-radio-group, [role="listitem"], .form-group, .field');
+                if (container) {
+                    group = this.collectElementsDeep(container, 'input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], spl-radio');
+                }
+            }
             for (const input of group) {
-                const label = this.extractLabel(input);
+                const optLabel = (input.getAttribute && (input.getAttribute('aria-label') || input.getAttribute('data-value') || input.getAttribute('label'))) ||
+                                 this.extractLabel(input) || input.value || '';
                 options.push({
-                    value: input.value,
-                    label: label,
-                    checked: input.checked
+                    value: (input.getAttribute && input.getAttribute('data-value')) || input.value || optLabel,
+                    label: this.cleanText(optLabel),
+                    checked: !!(input.checked || (input.getAttribute && input.getAttribute('aria-checked') === 'true'))
                 });
             }
         } else if (fieldType === 'custom-select') {
@@ -603,10 +705,22 @@ class ApplicationUnderstandingEngine {
     }
 
     /**
-     * Check if field is duplicate
+     * Check if field is duplicate (also deduplicates radio buttons in the same group)
      */
     isDuplicate(element, existingFields) {
-        return existingFields.some(f => f.element === element);
+        if (existingFields.some(f => f.element === element)) return true;
+
+        const isRadio = element.type === 'radio' || (element.getAttribute && element.getAttribute('role') === 'radio');
+        if (isRadio) {
+            if (element.name && existingFields.some(f => f.element && f.element.type === 'radio' && f.element.name === element.name)) {
+                return true;
+            }
+            const groupContainer = this.closestCrossingShadow(element, '[role="radiogroup"], spl-radio-group, fieldset');
+            if (groupContainer) {
+                return existingFields.some(f => f.element && (f.element.type === 'radio' || (f.element.getAttribute && f.element.getAttribute('role') === 'radio')) && this.closestCrossingShadow(f.element, '[role="radiogroup"], spl-radio-group, fieldset') === groupContainer);
+            }
+        }
+        return false;
     }
 
     /**
@@ -925,10 +1039,10 @@ class FieldClassifier {
             
             full_name: {
                 patterns: [
-                    'full name', 'name', 'full legal name', 'complete name', 'legal name',
+                    'full name', 'full legal name', 'complete name', 'legal name',
                     'your name', 'applicant name', 'candidate name', 'your full name',
                     'name as per records', 'official name', 'name in full', 'entire name',
-                    'person name', 'individual name', 'preferred name'
+                    'person name', 'individual name', 'preferred name', 'name of applicant'
                 ],
                 confidence: 0.90
             },

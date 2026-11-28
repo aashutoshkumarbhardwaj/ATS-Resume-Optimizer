@@ -625,8 +625,21 @@ function setupEventListeners() {
     
     const autofillForm = document.getElementById('autofillForm');
     if (autofillForm) {
-        console.log('[Popup] Setting up autofill form submit');
+        console.log('[Popup] Setting up autofill form submit & auto-save');
         autofillForm.addEventListener('submit', handleSaveProfile);
+
+        // Auto-save on any manual profile input edit
+        let popupAutoSaveTimer = null;
+        autofillForm.addEventListener('input', () => {
+            clearTimeout(popupAutoSaveTimer);
+            popupAutoSaveTimer = setTimeout(() => {
+                handleSaveProfile(null, true);
+            }, 400);
+        });
+        autofillForm.addEventListener('change', () => {
+            clearTimeout(popupAutoSaveTimer);
+            handleSaveProfile(null, true);
+        });
     } else {
         console.warn('[Popup] ⚠️ Autofill form not found');
     }
@@ -2084,17 +2097,17 @@ function addCustomFieldRow(key = '', value = '') {
 }
 
 /**
- * Handle save profile form submit
+ * Handle save profile form submit & automatic background saving
  * Saves to BOTH sync and local storage for redundancy
  */
-async function handleSaveProfile(e) {
+async function handleSaveProfile(e, isAutoSave = false) {
     if (e) e.preventDefault();
     
     const messageEl = document.getElementById('autofillMessage');
-    messageEl.className = 'autofill-status-message hidden';
+    if (messageEl && !isAutoSave) messageEl.className = 'autofill-status-message hidden';
     
     try {
-        showLoading('Saving profile...');
+        if (!isAutoSave) showLoading('Saving profile...');
         
         // Collect custom fields
         const customFields = [];
@@ -2215,10 +2228,17 @@ async function handleSaveProfile(e) {
 
         console.log('[Popup] ✅ Profile verified in storage with', verifyRead.keys, 'fields');
 
-        hideLoading();
-        showNotification('✅ Profile saved successfully!', 'success');
-        messageEl.innerHTML = '✅ Profile saved successfully!';
-        messageEl.className = 'autofill-status-message success';
+        if (!isAutoSave) {
+            hideLoading();
+            showNotification('✅ Profile saved successfully!', 'success');
+            if (messageEl) {
+                messageEl.innerHTML = '✅ Profile saved successfully!';
+                messageEl.className = 'autofill-status-message success';
+                setTimeout(() => {
+                    messageEl.className = 'autofill-status-message hidden';
+                }, 3000);
+            }
+        }
         
         // Also sync to backend if authenticated (but don't fail if it does)
         try {
@@ -2228,24 +2248,22 @@ async function handleSaveProfile(e) {
                 const syncResult = await ProfileSyncManager.uploadProfile(token, profileData);
                 if (syncResult.success) {
                     console.log('[Popup] ✅ Profile synced to backend');
-                    showNotification('✅ Profile synced to Job Orbit!', 'success');
+                    if (!isAutoSave) showNotification('✅ Profile synced to Job Orbit!', 'success');
                 }
             }
         } catch (backendError) {
             console.warn('[Popup] ⚠️  Backend sync error (local save still succeeded):', backendError);
         }
-        
-        // Hide message after 3 seconds
-        setTimeout(() => {
-            messageEl.className = 'autofill-status-message hidden';
-        }, 3000);
-        
     } catch (error) {
         console.error('[Popup] ❌ Error saving profile:', error);
-        hideLoading();
-        showNotification('❌ Error saving profile: ' + error.message, 'error');
-        messageEl.innerHTML = '❌ ' + error.message;
-        messageEl.className = 'autofill-status-message error';
+        if (!isAutoSave) {
+            hideLoading();
+            showNotification('❌ Error saving profile: ' + error.message, 'error');
+            if (messageEl) {
+                messageEl.innerHTML = '❌ ' + error.message;
+                messageEl.className = 'autofill-status-message error';
+            }
+        }
     }
 }
 

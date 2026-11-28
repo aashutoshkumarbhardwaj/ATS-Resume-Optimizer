@@ -1,24 +1,34 @@
 /**
  * Free LLM Client
- * Connects to 100% free AI model providers:
- * 1. Google Gemini 1.5 Flash (Google AI Studio Free Tier: 15 RPM, 1M TPM, 1500 RPD)
- * 2. Groq Cloud (LLaMA 3.3 70B / 8B Free Tier: 30 RPM, 14.4k RPD, 800 tokens/sec)
- * 3. Chrome Built-in AI (window.ai / Gemini Nano: 100% local, $0 cost, zero API keys)
+ * Connects to high-precision AI model providers:
+ * 1. Cloudflare Workers AI / Custom Cloudflare AI Worker (@cf/meta/llama-3.3-70b-instruct)
+ * 2. Chrome Built-in AI (window.ai / Gemini Nano: 100% local, $0 cost, zero API keys)
+ * 3. Groq Cloud (LLaMA 3.3 70B / 8B Free Tier: 30 RPM, 14.4k RPD, 800 tokens/sec)
+ * 4. Google Gemini 1.5 Flash / 2.0 Flash (Google AI Studio Free Tier)
  */
 
 class FreeLLMClient {
     constructor(config = {}) {
-        this.provider = config.provider || 'gemini'; // 'gemini' | 'groq' | 'window_ai' | 'offline'
+        this.provider = config.provider || 'cloudflare'; // 'cloudflare' | 'groq' | 'gemini' | 'window_ai' | 'offline'
+        this.cfWorkerUrl = config.cfWorkerUrl || config.cloudflareWorkerUrl || '';
+        this.cfAccountId = config.cfAccountId || config.cloudflareAccountId || '';
+        this.cfApiToken = config.cfApiToken || config.cloudflareApiToken || '';
+        this.cfModel = config.cfModel || '@cf/meta/llama-3.3-70b-instruct'; // Flagship reasoning & precision model
         this.geminiApiKey = config.geminiApiKey || '';
         this.groqApiKey = config.groqApiKey || '';
-        this.timeoutMs = config.timeoutMs || 7000;
+        this.backendProxyUrl = config.backendProxyUrl || (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id ? 'https://ats-resume-optimizer-359j.onrender.com/api/ai/generate' : '');
+        this.timeoutMs = config.timeoutMs || 8000;
     }
 
     /**
      * Set active provider and API keys
      */
-    configure({ provider, geminiApiKey, groqApiKey }) {
+    configure({ provider, cfWorkerUrl, cfAccountId, cfApiToken, cfModel, geminiApiKey, groqApiKey }) {
         if (provider) this.provider = provider;
+        if (cfWorkerUrl !== undefined) this.cfWorkerUrl = cfWorkerUrl;
+        if (cfAccountId !== undefined) this.cfAccountId = cfAccountId;
+        if (cfApiToken !== undefined) this.cfApiToken = cfApiToken;
+        if (cfModel) this.cfModel = cfModel;
         if (geminiApiKey !== undefined) this.geminiApiKey = geminiApiKey;
         if (groqApiKey !== undefined) this.groqApiKey = groqApiKey;
     }
@@ -39,12 +49,24 @@ class FreeLLMClient {
     }
 
     /**
-     * Main prompt completion method
+     * Main prompt completion method with high precision
      */
     async complete(systemPrompt, userPrompt) {
-        // Try active provider
         try {
-            if (this.provider === 'window_ai' || (!this.geminiApiKey && !this.groqApiKey)) {
+            // Priority 1: Cloudflare AI Worker (User specified or configured)
+            if (this.provider === 'cloudflare' || this.cfWorkerUrl || (this.cfAccountId && this.cfApiToken)) {
+                try {
+                    const cfRes = await this.callCloudflareWorker(systemPrompt, userPrompt);
+                    if (cfRes && cfRes.trim().length > 0) {
+                        return cfRes.trim();
+                    }
+                } catch (cfErr) {
+                    console.warn('[FreeLLMClient] ⚠️ Cloudflare Worker failed, checking fallbacks:', cfErr.message);
+                }
+            }
+
+            // Priority 2: Chrome Built-in AI (Gemini Nano)
+            if (this.provider === 'window_ai' || (!this.geminiApiKey && !this.groqApiKey && !this.cfWorkerUrl && !this.cfApiToken)) {
                 const canUseLocal = await this.hasChromeBuiltInAI();
                 if (canUseLocal) {
                     console.log('[FreeLLMClient] 💻 Using Chrome Built-in AI (Gemini Nano)');
@@ -52,25 +74,173 @@ class FreeLLMClient {
                 }
             }
 
-            if (this.provider === 'groq' && this.groqApiKey) {
-                console.log('[FreeLLMClient] ⚡ Using Groq LLaMA 3.3 (Free Tier)');
+            // Priority 3: Groq LLaMA 3.3 70B
+            if (this.groqApiKey) {
+                console.log('[FreeLLMClient] ⚡ Using Groq LLaMA 3.3 (High Precision)');
                 return await this.callGroq(systemPrompt, userPrompt);
             }
 
+            // Priority 4: Google Gemini 1.5/2.0 Flash
             if (this.geminiApiKey) {
-                console.log('[FreeLLMClient] 🌐 Using Google Gemini 1.5 Flash (Free Tier)');
+                console.log('[FreeLLMClient] 🌐 Using Google Gemini Flash');
                 return await this.callGemini(systemPrompt, userPrompt);
             }
 
-            if (this.groqApiKey) {
-                console.log('[FreeLLMClient] ⚡ Fallback to Groq LLaMA');
-                return await this.callGroq(systemPrompt, userPrompt);
+            // Priority 5: Backend Cloudflare AI Worker Proxy (/api/ai/generate)
+            if (this.backendProxyUrl) {
+                try {
+                    const proxyRes = await this.callBackendProxy(systemPrompt, userPrompt);
+                    if (proxyRes && proxyRes.trim().length > 0) {
+                        return proxyRes.trim();
+                    }
+                } catch (proxyErr) {
+                    console.warn('[FreeLLMClient] ⚠️ Backend AI proxy unavailable:', proxyErr.message);
+                }
             }
 
-            console.warn('[FreeLLMClient] ⚠️ No API key or local model available. Operating in rule-based offline mode.');
+            console.warn('[FreeLLMClient] ⚠️ No AI provider configured or responsive. Falling back to dynamic candidate synthesizer.');
             return null;
         } catch (error) {
             console.error('[FreeLLMClient] ❌ Generation error:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Call Cloudflare AI Worker or Cloudflare Workers AI Gateway
+     */
+    async callCloudflareWorker(systemPrompt, userPrompt) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+        try {
+            // Option 1: Custom Cloudflare AI Worker URL (e.g. https://my-worker.subdomain.workers.dev)
+            if (this.cfWorkerUrl) {
+                console.log(`[FreeLLMClient] ☁️ Calling Cloudflare AI Worker: ${this.cfWorkerUrl}`);
+                const payload = {
+                    prompt: userPrompt,
+                    systemPrompt: systemPrompt,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    model: this.cfModel,
+                    temperature: 0.1, // Maximum precision, minimal hallucination
+                    max_tokens: 500
+                };
+
+                const headers = { 'Content-Type': 'application/json' };
+                if (this.cfApiToken) {
+                    headers['Authorization'] = `Bearer ${this.cfApiToken}`;
+                }
+
+                const res = await fetch(this.cfWorkerUrl, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeout);
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    throw new Error(`Cloudflare Worker HTTP ${res.status}: ${err}`);
+                }
+
+                const contentType = res.headers.get('content-type') || '';
+                if (contentType.includes('application/json')) {
+                    const data = await res.json();
+                    const text = data?.response || 
+                                 data?.result?.response || 
+                                 data?.result || 
+                                 data?.output || 
+                                 data?.choices?.[0]?.message?.content || 
+                                 data?.text;
+                    if (text && typeof text === 'string' && text.trim().length > 0) {
+                        return text.trim();
+                    }
+                } else {
+                    const rawText = await res.text();
+                    if (rawText && rawText.trim().length > 0) {
+                        return rawText.trim();
+                    }
+                }
+            }
+
+            // Option 2: Cloudflare Workers AI Direct API
+            if (this.cfAccountId && this.cfApiToken) {
+                const model = this.cfModel || '@cf/meta/llama-3.3-70b-instruct';
+                console.log(`[FreeLLMClient] ☁️ Calling Cloudflare Workers AI API (${model})...`);
+                const url = `https://api.cloudflare.com/client/v4/accounts/${this.cfAccountId}/ai/run/${model}`;
+
+                const payload = {
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: userPrompt }
+                    ],
+                    temperature: 0.1,
+                    max_tokens: 500
+                };
+
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.cfApiToken}`
+                    },
+                    body: JSON.stringify(payload),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeout);
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    throw new Error(`Cloudflare Workers AI HTTP ${res.status}: ${err}`);
+                }
+
+                const data = await res.json();
+                const text = data?.result?.response || data?.response;
+                if (text && typeof text === 'string' && text.trim().length > 0) {
+                    return text.trim();
+                }
+            }
+
+            return null;
+        } catch (e) {
+            clearTimeout(timeout);
+            console.warn('[FreeLLMClient] ⚠️ Cloudflare AI Worker invocation failed:', e.message);
+            throw e;
+        }
+    }
+
+    /**
+     * Call Backend Cloudflare AI Worker Proxy (/api/ai/generate)
+     */
+    async callBackendProxy(systemPrompt, userPrompt) {
+        if (!this.backendProxyUrl) return null;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4500);
+        try {
+            const res = await fetch(this.backendProxyUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    systemPrompt,
+                    userPrompt,
+                    model: this.cfModel,
+                    temperature: 0.1,
+                    max_tokens: 500
+                }),
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data?.response ? String(data.response).trim() : null;
+        } catch (e) {
+            clearTimeout(timeout);
             return null;
         }
     }
@@ -218,6 +388,93 @@ class FreeLLMClient {
             console.error('[FreeLLMClient] Chrome Built-in AI prompt failed:', err);
             return null;
         }
+    }
+
+    /**
+     * Multimodal Vision Completion (Set-of-Mark screenshot + goal)
+     * Uses Cloudflare Vision AI (@cf/llama-3.2-11b-vision-instruct), Backend Vision Proxy, or Gemini Vision.
+     */
+    async completeWithVision(systemPrompt, userPrompt, imageBase64) {
+        if (!imageBase64) return null;
+        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+
+        // 1. Custom Cloudflare AI Worker with Vision
+        if (this.cfWorkerUrl) {
+            try {
+                const res = await fetch(this.cfWorkerUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(this.cfApiToken ? { 'Authorization': `Bearer ${this.cfApiToken}` } : {})
+                    },
+                    body: JSON.stringify({
+                        prompt: userPrompt,
+                        systemPrompt,
+                        imageBase64: cleanBase64,
+                        model: '@cf/llama-3.2-11b-vision-instruct',
+                        temperature: 0.1,
+                        max_tokens: 150
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const text = data?.response || data?.result?.response || data?.result;
+                    if (text && typeof text === 'string') return text.trim();
+                }
+            } catch (e) {
+                console.warn('[FreeLLMClient] Vision worker call failed:', e.message);
+            }
+        }
+
+        // 2. Backend Cloudflare Vision Proxy
+        if (this.backendProxyUrl) {
+            try {
+                const res = await fetch(this.backendProxyUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        systemPrompt,
+                        userPrompt,
+                        imageBase64: cleanBase64,
+                        model: '@cf/llama-3.2-11b-vision-instruct',
+                        temperature: 0.1,
+                        max_tokens: 150
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data?.response) return String(data.response).trim();
+                }
+            } catch (e) {}
+        }
+
+        // 3. Google Gemini Flash Vision fallback
+        if (this.geminiApiKey) {
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.geminiApiKey}`;
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            role: 'user',
+                            parts: [
+                                { text: `${systemPrompt}\n\n${userPrompt}` },
+                                { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } }
+                            ]
+                        }],
+                        generationConfig: { temperature: 0.1, maxOutputTokens: 150 }
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const t = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                    if (t) return t.trim();
+                }
+            } catch (e) {}
+        }
+
+        return null;
     }
 }
 

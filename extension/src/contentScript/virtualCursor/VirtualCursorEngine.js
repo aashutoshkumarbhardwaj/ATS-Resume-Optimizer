@@ -57,7 +57,7 @@ class VirtualCursorEngine {
             <div class="virtual-cursor" id="virtual-cursor" data-state="moving">
                 <div class="cursor-halo"></div>
                 <svg class="cursor-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path class="cursor-fill" d="M3 2L10.5 21L13.5 13.5L21 10.5L3 2Z" fill="#10b981" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path class="cursor-fill" d="M3 2L10.5 21L13.5 13.5L21 10.5L3 2Z" fill="#d97757" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
                 </svg>
 
                 <!-- Floating Thought HUD -->
@@ -124,42 +124,78 @@ class VirtualCursorEngine {
     }
 
     /**
-     * Calmly and smoothly ensure an element is visible in the viewport.
-     * Prevents micro-jitter and massive overshooting by scrolling in minimal, comfortable
-     * steps so form fields remain completely stable while being inspected and filled.
+     * Calmly and smoothly ensure an element is comfortably visible inside the safe viewport band
+     * (avoiding sticky top headers [0..90px] and floating bottom bars [vh-100..vh]).
      */
     async ensureElementInView(target) {
         if (!target || typeof target.getBoundingClientRect !== 'function') return;
 
         const vh = (typeof window !== 'undefined' ? window.innerHeight : 800) || 800;
+        const safeTop = 90;
+        const safeBottom = Math.max(safeTop + 120, vh - 100);
         const rect = target.getBoundingClientRect();
 
-        // 1. If element is comfortably visible in the viewport, DO NOT SCROLL AT ALL!
-        // We use gentle margins (top 70px, bottom vh - 90px) to prevent unnecessary scrolling.
-        if (rect.top >= 70 && rect.bottom <= vh - 90) {
+        // 1. If element is comfortably inside the safe viewport band, DO NOT SCROLL AT ALL
+        if (rect.top >= safeTop && rect.bottom <= safeBottom) {
             return;
         }
 
-        // 2. Perform minimal, smooth scroll using standard native block: 'nearest'
-        // This only scrolls the exact necessary pixels to bring the element into view without jumping.
+        // 2. Center element cleanly inside the safe viewport band
         if (typeof target.scrollIntoView === 'function') {
-            target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
-            await this.sleep(250);
+            target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            await this.sleep(220);
         } else if (typeof window !== 'undefined' && typeof window.scrollBy === 'function') {
-            if (rect.bottom > vh - 90) {
-                const delta = rect.bottom - (vh - 120);
-                window.scrollBy({ top: delta, behavior: 'smooth' });
-            } else if (rect.top < 70) {
-                const delta = rect.top - 90;
-                window.scrollBy({ top: delta, behavior: 'smooth' });
-            }
-            await this.sleep(250);
+            const targetCenter = rect.top + rect.height / 2;
+            const viewportCenter = vh / 2;
+            window.scrollBy({ top: targetCenter - viewportCenter, behavior: 'smooth' });
+            await this.sleep(220);
         }
     }
 
     /**
+     * Hit-test exact (x, y) viewport coordinates via document.elementFromPoint
+     * to verify target is clickable and not obscured by a sticky header or overlay.
+     */
+    async verifyAndResolveHitTarget(targetElement, x, y) {
+        if (!targetElement || typeof document === 'undefined' || typeof document.elementFromPoint !== 'function') {
+            return { x, y, unobstructed: true };
+        }
+
+        const isSameOrRelated = (hit) => {
+            if (!hit) return false;
+            if (hit === targetElement) return true;
+            if (typeof targetElement.contains === 'function' && targetElement.contains(hit)) return true;
+            if (typeof hit.contains === 'function' && hit.contains(targetElement)) return true;
+            // Also check Shadow DOM host relationship
+            const root = typeof targetElement.getRootNode === 'function' ? targetElement.getRootNode() : null;
+            if (root && root.host && (hit === root.host || (typeof root.host.contains === 'function' && root.host.contains(hit)))) return true;
+            return false;
+        };
+
+        let hitEl = document.elementFromPoint(x, y);
+        if (isSameOrRelated(hitEl)) {
+            return { x, y, unobstructed: true, hitEl };
+        }
+
+        // Obscured (likely by sticky header or floating bar) — nudge scroll and re-test
+        if (typeof window !== 'undefined' && typeof window.scrollBy === 'function') {
+            const vh = window.innerHeight || 800;
+            const nudge = y < 120 ? -120 : (y > vh - 120 ? 120 : -80);
+            window.scrollBy({ top: nudge, behavior: 'instant' });
+            await this.sleep(60);
+            const rect = targetElement.getBoundingClientRect();
+            const nx = rect.left + Math.max(8, Math.min(rect.width / 2, rect.width - 8));
+            const ny = rect.top + Math.max(6, Math.min(rect.height / 2, rect.height - 6));
+            hitEl = document.elementFromPoint(nx, ny);
+            return { x: nx, y: ny, unobstructed: isSameOrRelated(hitEl), hitEl };
+        }
+
+        return { x, y, unobstructed: false, hitEl };
+    }
+
+    /**
      * Smoothly move the virtual cursor along a humanized cubic Bezier trajectory
-     * to a target element or coordinates.
+     * to a target element or coordinates, with safe-zone scroll & elementFromPoint hit-test.
      */
     async moveTo(target, options = {}) {
         if (!this.isMounted) this.mount();
@@ -168,17 +204,23 @@ class VirtualCursorEngine {
         let targetY = 0;
         let targetElement = null;
 
-        if (target instanceof HTMLElement || (target && typeof target.getBoundingClientRect === 'function')) {
+        if ((typeof HTMLElement !== 'undefined' && target instanceof HTMLElement) || (target && typeof target.getBoundingClientRect === 'function')) {
             targetElement = target;
             await this.ensureElementInView(target);
 
             const rect = target.getBoundingClientRect();
-            targetX = rect.left + Math.max(10, Math.min(rect.width / 2, rect.width - 10));
-            targetY = rect.top + Math.max(8, Math.min(rect.height / 2, rect.height - 8));
+            targetX = rect.left + Math.max(8, Math.min(rect.width / 2, rect.width - 8));
+            targetY = rect.top + Math.max(6, Math.min(rect.height / 2, rect.height - 6));
+
+            const hitCheck = await this.verifyAndResolveHitTarget(targetElement, targetX, targetY);
+            targetX = hitCheck.x;
+            targetY = hitCheck.y;
         } else if (typeof target.x === 'number' && typeof target.y === 'number') {
             targetX = target.x;
             targetY = target.y;
         }
+
+        this.lastTargetCoords = { x: targetX, y: targetY };
 
         const startX = this.currentX;
         const startY = this.currentY;
@@ -323,11 +365,11 @@ class VirtualCursorEngine {
         const isHumanSpeed = options.humanSpeed !== false;
         const stringVal = String(text || '');
 
-        if (!isHumanSpeed || stringVal.length > 120) {
-            // Fast mode for very long text (e.g. cover letters)
+        if (!isHumanSpeed || stringVal.length > 25) {
+            // Fast mode for longer inputs & paragraphs
             this.setNativeValue(element, stringVal);
             this.triggerInputEvents(element);
-            await this.sleep(150);
+            await this.sleep(40);
             return;
         }
 
@@ -335,7 +377,7 @@ class VirtualCursorEngine {
         this.setNativeValue(element, '');
         this.triggerInputEvents(element);
 
-        // Type character-by-character with slight jitter
+        // Type character-by-character with crisp responsive cadence
         let accumulated = '';
         for (let i = 0; i < stringVal.length; i++) {
             if (this.isAborted) break;
@@ -344,11 +386,10 @@ class VirtualCursorEngine {
             this.setNativeValue(element, accumulated);
             this.triggerInputEvents(element);
 
-            // Natural human typing cadence (20ms - 55ms, longer for spaces/punctuation)
             const char = stringVal[i];
-            let delay = 22 + Math.random() * 25;
+            let delay = 8 + Math.random() * 10;
             if (char === ' ' || char === '.' || char === ',') {
-                delay += 40;
+                delay += 12;
             }
 
             // Subtle cursor typing wobble
@@ -446,20 +487,40 @@ class VirtualCursorEngine {
             const card = document.createElement('div');
             card.className = 'agent-dialogue-card';
 
+            // Clamp position so the card stays inside viewport bounds
+            if (this.currentX + 350 > (window.innerWidth || 1280)) {
+                card.style.left = '-336px';
+            }
+            if (this.currentY + 230 > (window.innerHeight || 800)) {
+                card.style.top = '-200px';
+            }
+
+            const escapeHtml = (str) => String(str || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+
+            const rawQ = String(questionText || '').trim();
+            const displayQ = (!rawQ || /^[\(\)\*\s:]+$/.test(rawQ))
+                ? 'Please provide your answer for this required field:'
+                : rawQ;
+
             let chipsHtml = '';
             if (options && options.length > 0) {
                 chipsHtml = `
                     <div class="agent-dialogue-chips">
-                        ${options.map(opt => `<button type="button" class="agent-dialogue-chip" data-val="${opt}">${opt}</button>`).join('')}
+                        ${options.map(opt => `<button type="button" class="agent-dialogue-chip" data-val="${escapeHtml(opt)}">${escapeHtml(opt)}</button>`).join('')}
                     </div>
                 `;
             }
 
             card.innerHTML = `
                 <div class="agent-dialogue-title">
-                    <span>🤖</span> Personal Agent Question
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+                    <span>Job Orbit • Question</span>
                 </div>
-                <div class="agent-dialogue-question">${questionText}</div>
+                <div class="agent-dialogue-question">${escapeHtml(displayQ)}</div>
                 ${chipsHtml}
                 <input type="text" class="agent-dialogue-input" placeholder="Type your answer..." />
                 <div class="agent-dialogue-actions">
@@ -599,7 +660,6 @@ class VirtualCursorEngine {
         try {
             element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
             element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
-            element.dispatchEvent(new Event('blur', { bubbles: true, cancelable: true }));
         } catch (e) {}
     }
 

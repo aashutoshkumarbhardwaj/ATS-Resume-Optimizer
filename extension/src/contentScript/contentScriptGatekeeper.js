@@ -11,10 +11,11 @@
 (function() {
     'use strict';
 
-    // Known job boards, applicant tracking systems (ATS), and career portal patterns
+    // Known job boards, applicant tracking systems (ATS), form builders, and career portal patterns
     const JOB_DOMAIN_PATTERNS = [
         /(?:apply|job|career|workday|greenhouse|lever|smartrecruiters|taleo|icims|bamboohr|ashbyhq|workable|breezy|rippling|jazzhr|recruitee|successfactors|bullhorn)/i,
-        /(?:linkedin\.com\/jobs|indeed\.com|glassdoor\.com|monster\.com|ziprecruiter\.com|dice\.com|wellfound\.com|builtin\.com)/i
+        /(?:linkedin\.com\/jobs|indeed\.com|glassdoor\.com|monster\.com|ziprecruiter\.com|dice\.com|wellfound\.com|builtin\.com|internshala\.com|naukri\.com|instahyre\.com|foundit\.in)/i,
+        /(?:docs\.google\.com\/forms|forms\.gle|typeform\.com|tally\.so|jotform\.com|airtable\.com\/shr|airtable\.com\/app)/i
     ];
 
     const FORM_INPUT_SELECTORS = [
@@ -23,7 +24,10 @@
         'form[id*="applicant"]',
         'input[type="file"][accept*="pdf"]',
         '[data-automation-id*="application"]',
-        '.jobs-easy-apply-modal'
+        '.jobs-easy-apply-modal',
+        '.freebirdFormviewerViewFormCard',
+        'form [role="listitem"]',
+        'form input, form textarea, form select'
     ];
 
     class ContentScriptGatekeeper {

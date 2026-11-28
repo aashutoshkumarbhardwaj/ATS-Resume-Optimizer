@@ -1199,3 +1199,83 @@ async function analyzeResume(payload, sendResponse) {
         sendResponse({ success: false, error: errorMessage });
     }
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// VISION CAPTURE & TRUSTED CDP INPUT DRIVER (Phases 3 & 4)
+// ──────────────────────────────────────────────────────────────────────────────
+const cdpAttachedTabs = new Set();
+
+async function ensureDebuggerAttached(tabId) {
+    if (!chrome.debugger || !tabId) return false;
+    if (cdpAttachedTabs.has(tabId)) return true;
+    return new Promise((resolve) => {
+        chrome.debugger.attach({ tabId }, '1.3', () => {
+            if (chrome.runtime.lastError) {
+                console.warn('[ServiceWorker] CDP attach skipped:', chrome.runtime.lastError.message);
+                resolve(false);
+            } else {
+                cdpAttachedTabs.add(tabId);
+                resolve(true);
+            }
+        });
+    });
+}
+
+if (chrome.debugger && chrome.debugger.onDetach) {
+    chrome.debugger.onDetach.addListener((source) => {
+        if (source && source.tabId) cdpAttachedTabs.delete(source.tabId);
+    });
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (!request || !request.type) return false;
+
+    if (request.type === 'CAPTURE_VISIBLE_TAB') {
+        const winId = sender?.tab?.windowId || chrome.windows.WINDOW_ID_CURRENT;
+        chrome.tabs.captureVisibleTab(winId, { format: 'jpeg', quality: 75 }, (dataUrl) => {
+            if (chrome.runtime.lastError || !dataUrl) {
+                sendResponse({ success: false, error: chrome.runtime.lastError?.message || 'Capture failed' });
+            } else {
+                sendResponse({ success: true, dataUrl });
+            }
+        });
+        return true;
+    }
+
+    if (request.type === 'CDP_CLICK') {
+        const tabId = sender?.tab?.id;
+        if (!tabId || typeof request.x !== 'number' || typeof request.y !== 'number') {
+            sendResponse({ success: false, error: 'Missing tabId or coordinates' });
+            return false;
+        }
+        (async () => {
+            const ok = await ensureDebuggerAttached(tabId);
+            if (!ok) return sendResponse({ success: false, fallback: true });
+            const x = Math.round(request.x);
+            const y = Math.round(request.y);
+            chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y }, () => {
+                chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, () => {
+                    chrome.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, () => {
+                        sendResponse({ success: !chrome.runtime.lastError, trusted: true });
+                    });
+                });
+            });
+        })();
+        return true;
+    }
+
+    if (request.type === 'CDP_DETACH') {
+        const tabId = sender?.tab?.id || request.tabId;
+        if (tabId && cdpAttachedTabs.has(tabId) && chrome.debugger) {
+            chrome.debugger.detach({ tabId }, () => {
+                cdpAttachedTabs.delete(tabId);
+                sendResponse({ success: true });
+            });
+            return true;
+        }
+        sendResponse({ success: true });
+        return false;
+    }
+
+    return false;
+});

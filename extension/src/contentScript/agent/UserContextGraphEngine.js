@@ -381,74 +381,100 @@
         findBestAnswer(questionOrLabel, intent = null) {
             if (!questionOrLabel && !intent) return null;
             const cleanQ = this.normalizeText(questionOrLabel || '');
+            const genericIntents = new Set(['unknown', 'text', 'textarea', 'short_text', 'long_text', 'number', 'date', 'academic', 'education', 'personal', 'custom', 'custom_question', 'open_question', 'screening', 'general', 'other', '']);
+            const isSpecificIntent = intent && !genericIntents.has(String(intent).toLowerCase().trim());
 
-            // 1. Direct Intent Match from Q&A Graph
-            if (intent) {
-                const intentMatch = this.graph.nodes.qaGraph.find(n => n.canonicalIntent === intent);
+            const isNonPersonFieldQ = /\b(university|college|school|institution|company|employer|organization|org|project|manager|referrer|reference|branch|degree|cgpa|gpa|year|stipend|salary)\b/i.test(cleanQ);
+            const identFullName = (this.graph?.nodes?.identity?.fullName || '').trim().toLowerCase();
+
+            const isNarrativeQ = /\b(why|describe|explain|tell\s+(?:us|me)|elaborate|what\s+makes|how\s+(?:did|do|would|have)|share\s+(?:an?|your)|experience\s+with|project|challenge|achievement|cover\s*letter|additional\s+(?:info|information|comments|notes))\b/i.test(cleanQ);
+            const isValidForQuestion = (ans) => {
+                if (!ans || String(ans).trim() === '') return false;
+                const str = String(ans).trim();
+                if (isNonPersonFieldQ && identFullName && str.toLowerCase() === identFullName) return false;
+                if (!/\b(user\s*name|handle|password|passcode|pin|secret|referral|promo)\b/i.test(cleanQ) && /^[a-z0-9_.-]+@\d{1,4}$/i.test(str)) return false;
+                if (isNarrativeQ && str.split(/\s+/).length < 3) return false;
+                return true;
+            };
+
+            // 1. Direct Intent Match from Q&A Graph (ONLY for specific non-generic intents)
+            if (isSpecificIntent) {
+                const intentMatch = this.graph.nodes.qaGraph.find(n => n.canonicalIntent === intent && isValidForQuestion(n.answer));
                 if (intentMatch) {
                     return { answer: intentMatch.answer, confidence: intentMatch.confidence || 0.9, source: 'qa_graph_intent' };
                 }
             }
 
-            // 2. Exact or Substring Question Match from Q&A Graph
+            // 2. Exact or High-Confidence Semantic Question Match from Q&A Graph
             if (cleanQ) {
-                const qTokens = cleanQ.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|are|you|for|with|this|that|your|what|how)$/.test(w));
+                const qTokens = cleanQ.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|are|you|for|with|this|that|your|what|how|from|about|have|will)$/.test(w));
                 let bestNode = null;
                 let highestOverlap = 0;
 
                 for (const node of this.graph.nodes.qaGraph) {
+                    if (!isValidForQuestion(node.answer)) continue;
                     const nodeQ = this.normalizeText(node.question);
-                    if (nodeQ === cleanQ || nodeQ.includes(cleanQ) || cleanQ.includes(nodeQ)) {
-                        return { answer: node.answer, confidence: 0.95, source: 'qa_graph_exact_or_substring' };
+                    if (!nodeQ) continue;
+
+                    if (nodeQ === cleanQ) {
+                        return { answer: node.answer, confidence: 0.98, source: 'qa_graph_exact' };
+                    }
+                    if (nodeQ.length >= 8 && cleanQ.length >= 8 && (nodeQ.includes(cleanQ) || cleanQ.includes(nodeQ))) {
+                        const lenRatio = Math.min(nodeQ.length, cleanQ.length) / Math.max(nodeQ.length, cleanQ.length);
+                        if (lenRatio >= 0.8) {
+                            return { answer: node.answer, confidence: 0.92, source: 'qa_graph_substring' };
+                        }
                     }
 
-                    // Semantic token overlap (Jaccard similarity)
-                    const nodeTokens = new Set(nodeQ.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|are|you|for|with|this|that|your|what|how)$/.test(w)));
+                    // Semantic token overlap (Jaccard similarity >= 0.85)
+                    const nodeTokens = new Set(nodeQ.split(/\s+/).filter(w => w.length > 2 && !/^(the|and|are|you|for|with|this|that|your|what|how|from|about|have|will)$/.test(w)));
                     if (qTokens.length > 0 && nodeTokens.size > 0) {
                         const common = qTokens.filter(t => nodeTokens.has(t));
                         const score = common.length / Math.max(qTokens.length, nodeTokens.size);
-                        if (score > highestOverlap && score >= 0.3) {
+                        if (score > highestOverlap && score >= 0.85) {
                             highestOverlap = score;
                             bestNode = node;
                         }
                     }
                 }
 
-                if (bestNode && highestOverlap >= 0.3) {
+                if (bestNode && highestOverlap >= 0.85) {
                     return { answer: bestNode.answer, confidence: 0.85 + (highestOverlap * 0.1), source: 'qa_graph_semantic_overlap' };
                 }
             }
 
-            // 3. Identity and Professional Node Fallbacks
-            const ident = this.graph.nodes.identity;
-            const prof = this.graph.nodes.professional;
+            // 3. Identity and Professional Node Fallbacks (only for specific non-narrative intents)
+            if (isSpecificIntent && !isNarrativeQ) {
+                const ident = this.graph.nodes.identity;
+                const prof = this.graph.nodes.professional;
 
-            if (intent === 'first_name' && ident.firstName) return { answer: ident.firstName, confidence: 1.0, source: 'identity' };
-            if (intent === 'last_name' && ident.lastName) return { answer: ident.lastName, confidence: 1.0, source: 'identity' };
-            if (intent === 'full_name' && ident.fullName) return { answer: ident.fullName, confidence: 1.0, source: 'identity' };
-            if (intent === 'email' && ident.email) return { answer: ident.email, confidence: 1.0, source: 'identity' };
-            if (intent === 'phone' && ident.phone) return { answer: ident.phone, confidence: 1.0, source: 'identity' };
-            if (intent === 'city' && ident.address.city) return { answer: ident.address.city, confidence: 1.0, source: 'identity' };
-            if (intent === 'state' && ident.address.state) return { answer: ident.address.state, confidence: 1.0, source: 'identity' };
-            if (intent === 'zip' && ident.address.zip) return { answer: ident.address.zip, confidence: 1.0, source: 'identity' };
-            if (intent === 'country' && ident.address.country) return { answer: ident.address.country, confidence: 1.0, source: 'identity' };
-            if (intent === 'linkedin' && ident.socials.linkedin) return { answer: ident.socials.linkedin, confidence: 1.0, source: 'identity' };
-            if (intent === 'github' && ident.socials.github) return { answer: ident.socials.github, confidence: 1.0, source: 'identity' };
-            if (intent === 'portfolio' && ident.socials.portfolio) return { answer: ident.socials.portfolio, confidence: 1.0, source: 'identity' };
+                if (intent === 'first_name' && ident.firstName) return { answer: ident.firstName, confidence: 1.0, source: 'identity' };
+                if (intent === 'last_name' && ident.lastName) return { answer: ident.lastName, confidence: 1.0, source: 'identity' };
+                if (intent === 'full_name' && ident.fullName) return { answer: ident.fullName, confidence: 1.0, source: 'identity' };
+                if (intent === 'email' && ident.email) return { answer: ident.email, confidence: 1.0, source: 'identity' };
+                if (intent === 'phone' && ident.phone) return { answer: ident.phone, confidence: 1.0, source: 'identity' };
+                if (intent === 'city' && ident.address.city) return { answer: ident.address.city, confidence: 1.0, source: 'identity' };
+                if (intent === 'state' && ident.address.state) return { answer: ident.address.state, confidence: 1.0, source: 'identity' };
+                if (intent === 'zip' && ident.address.zip) return { answer: ident.address.zip, confidence: 1.0, source: 'identity' };
+                if (intent === 'country' && ident.address.country) return { answer: ident.address.country, confidence: 1.0, source: 'identity' };
+                if (intent === 'linkedin' && ident.socials.linkedin) return { answer: ident.socials.linkedin, confidence: 1.0, source: 'identity' };
+                if (intent === 'github' && ident.socials.github) return { answer: ident.socials.github, confidence: 1.0, source: 'identity' };
+                if (intent === 'portfolio' && ident.socials.portfolio) return { answer: ident.socials.portfolio, confidence: 1.0, source: 'identity' };
 
-            if (intent === 'current_company' && prof.currentCompany) return { answer: prof.currentCompany, confidence: 1.0, source: 'professional' };
-            if (intent === 'current_title' && prof.currentTitle) return { answer: prof.currentTitle, confidence: 1.0, source: 'professional' };
-            if (intent === 'years_experience' && prof.yearsOfExperience) return { answer: prof.yearsOfExperience, confidence: 1.0, source: 'professional' };
-            if (intent === 'notice_period' && prof.noticePeriod) return { answer: prof.noticePeriod, confidence: 1.0, source: 'professional' };
-            if (intent === 'expected_salary' && prof.expectedSalary) return { answer: prof.expectedSalary, confidence: 1.0, source: 'professional' };
-            if (intent === 'work_authorization' && prof.workAuthorization) return { answer: prof.workAuthorization, confidence: 1.0, source: 'professional' };
+                if (intent === 'current_company' && prof.currentCompany) return { answer: prof.currentCompany, confidence: 1.0, source: 'professional' };
+                if (intent === 'current_title' && prof.currentTitle) return { answer: prof.currentTitle, confidence: 1.0, source: 'professional' };
+                if (intent === 'years_experience' && prof.yearsOfExperience) return { answer: prof.yearsOfExperience, confidence: 1.0, source: 'professional' };
+                if (intent === 'notice_period' && prof.noticePeriod) return { answer: prof.noticePeriod, confidence: 1.0, source: 'professional' };
+                if (intent === 'expected_salary' && prof.expectedSalary) return { answer: prof.expectedSalary, confidence: 1.0, source: 'professional' };
+                if (intent === 'work_authorization' && prof.workAuthorization) return { answer: prof.workAuthorization, confidence: 1.0, source: 'professional' };
+            }
 
             // 4. Past Application Forms Match (check if same question was answered in recent applications)
             for (const app of this.graph.applicationHistory) {
                 if (Array.isArray(app.formData)) {
                     for (const field of app.formData) {
-                        if (field && field.value) {
-                            if ((intent && field.intent === intent) || (cleanQ && this.normalizeText(field.label || '') === cleanQ)) {
+                        if (field && field.value && isValidForQuestion(field.value)) {
+                            if ((isSpecificIntent && field.intent === intent) || (cleanQ && this.normalizeText(field.label || '') === cleanQ)) {
                                 return { answer: field.value, confidence: 0.85, source: 'application_history' };
                             }
                         }
